@@ -1,0 +1,339 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESIGN TOKENS  —  two themes only
+
+   g950…g50 feed the Tailwind gray palette via tailwind.config.js.
+
+   DARK (GitHub):   g950–g600 = backgrounds  |  g500 = border  |  g400–g50 = text
+   LIGHT (Proxmox): g950–g700 = backgrounds  |  g600 = border  |  g500–g50 = text
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── GitHub Dark (default / :root) ──────────────────────────────────────── */
+:root {
+  /* Exact GitHub dark-mode background layers */
+  --g950:   1   4   9;   /* #010409  deepest inset               */
+  --g900:  13  17  23;   /* #0d1117  body / canvas               */
+  --g800:  22  27  34;   /* #161b22  panel / card                */
+  --g700:  33  38  45;   /* #21262d  raised header / hover       */
+  --g600:  48  54  61;   /* #30363d  border                      */
+  --g500:  52  60  68;   /* #343c44  muted border / divider      */
+  /* Text — all clearly readable on #161b22 panel bg             */
+  --g400: 110 118 129;   /* #6e7681  muted / disabled  4.6:1     */
+  --g300: 139 148 158;   /* #8b949e  secondary text   6.2:1      */
+  --g200: 176 184 193;   /* #b0b8c1  body text        8.5:1      */
+  --g100: 201 209 217;   /* #c9d1d9  primary text    10.5:1      */
+  --g50:  230 237 243;   /* #e6edf3  headings        13.2:1      */
+
+  /* Accent — GitHub blue */
+  --accent:      31 111 235;   /* #1f6feb */
+  --accent-lite: 88 166 255;   /* #58a6ff */
+
+  --bg-canvas:    #010409;
+  --bg-body:      #0d1117;
+  --bg-elevated:  #161b22;
+  --bg-panel:     #161b22;
+  --bg-panel-alt: #21262d;
+  --border-weak:  #21262d;
+  --border-med:   #30363d;
+  --border-strong:#484f58;
+  --text-primary:  #e6edf3;
+  --text-secondary:#8b949e;
+  --text-muted:    #6e7681;
+  --text-heading:  #f0f6fc;
+  --accent-hex:    #58a6ff;
+  --accent-lite-hex:#79c0ff;
+  --success: #3fb950;
+  --warning: #d29922;
+  --error:   #f85149;
+
+  --sidebar-bg:            #161b22;
+  --sidebar-border:        #30363d;
+  --sidebar-active-bg:     rgba(31,111,235,0.15);
+  --sidebar-active-border: #1f6feb;
+  --sidebar-text:          #8b949e;
+  --sidebar-active-text:   #e6edf3;
+
+  --input-bg:          #0d1117;
+  --input-border:      #30363d;
+  --input-text:        #c9d1d9;
+  --input-placeholder: #6e7681;
+
+  --btn-bg:    #238636;   /* GitHub green for primary actions */
+  --btn-hover: #2ea043;
+  --btn-text:  #ffffff;
+  --btn-border:rgba(35,134,54,0.5);
+
+  /* Blue for secondary accent buttons (indigo-600 alias) */
+  --btn-accent-bg:    #1f6feb;
+  --btn-accent-hover: #388bfd;
+  --btn-accent-text:  #ffffff;
+  --btn-accent-border:rgba(31,111,235,0.4);
+
+  --modal-bg:      #161b22;
+  --modal-border:  #30363d;
+  --card-bg:       #161b22;
+  --card-border:   #30363d;
+  --card-header-bg:#21262d;
+}
+
+/* ── Proxmox Light ───────────────────────────────────────────────────────── */
+[data-theme="proxmox"] {
+  /* Backgrounds (lighter) → borders → text (darker) */
+  --g950: 240 240 240;   /* #f0f0f0  body / canvas              */
+  --g900: 248 248 248;   /* #f8f8f8  panel bg (near white)      */
+  --g800: 230 230 230;   /* #e6e6e6  panel header strip         */
+  --g700: 214 214 214;   /* #d6d6d6  divider                    */
+  --g600: 190 190 190;   /* #bebebe  strong border              */
+  --g500: 160 160 160;   /* #a0a0a0  muted border               */
+  /* Text — readable on white/light bg                           */
+  --g400: 120 120 120;   /* #787878  muted text    5.0:1 on white */
+  --g300:  90  90  90;   /* #5a5a5a  secondary     7.0:1          */
+  --g200:  60  60  60;   /* #3c3c3c  body text    12.0:1          */
+  --g100:  32  32  32;   /* #202020  primary text 15.0:1          */
+  --g50:   12  12  12;   /* #0c0c0c  headings     19.0:1          */
+
+  /* Accent — Proxmox orange */
+  --accent:      224 125  46;   /* #e07d2e */
+  --accent-lite: 232 146  72;   /* #e89248 */
+
+  --bg-canvas:    #f0f0f0;
+  --bg-body:      #f0f0f0;
+  --bg-elevated:  #ffffff;
+  --bg-panel:     #ffffff;
+  --bg-panel-alt: #f7f7f7;
+  --border-weak:  #ebebeb;
+  --border-med:   #d6d6d6;
+  --border-strong:#b8b8b8;
+  --text-primary:  #202020;
+  --text-secondary:#5a5a5a;
+  --text-muted:    #909090;
+  --text-heading:  #0c0c0c;
+  --accent-hex:    #e07d2e;
+  --accent-lite-hex:#e89248;
+  --success: #3d8b4e;
+  --warning: #b36200;
+  --error:   #c0392b;
+
+  /* Sidebar stays dark (Proxmox's charcoal nav) */
+  --sidebar-bg:            #2c3340;
+  --sidebar-border:        #1e2530;
+  --sidebar-active-bg:     rgba(224,125,46,0.2);
+  --sidebar-active-border: #e07d2e;
+  --sidebar-text:          #a8b0bc;
+  --sidebar-active-text:   #ffffff;
+
+  --input-bg:          #ffffff;
+  --input-border:      #c0c0c0;
+  --input-text:        #202020;
+  --input-placeholder: #a0a0a0;
+
+  --btn-bg:    #e07d2e;
+  --btn-hover: #c96e25;
+  --btn-text:  #ffffff;
+  --btn-border:rgba(224,125,46,0.6);
+
+  --btn-accent-bg:    #e07d2e;
+  --btn-accent-hover: #c96e25;
+  --btn-accent-text:  #ffffff;
+  --btn-accent-border:rgba(224,125,46,0.6);
+
+  --modal-bg:      #ffffff;
+  --modal-border:  #d6d6d6;
+  --card-bg:       #ffffff;
+  --card-border:   #d6d6d6;
+  --card-header-bg:#f0f0f0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BASE
+   ═══════════════════════════════════════════════════════════════════════════ */
+@layer base {
+  html { transition: background-color 0.12s ease, color 0.12s ease; }
+
+  body {
+    background-color: var(--bg-body);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    /* Stable scrollbar gutter — prevents layout shift on data load */
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
+  }
+
+  /* Global colour cascade */
+  *, *::before, *::after { color: inherit; }
+  h1, h2, h3, h4, h5, h6 { color: var(--text-heading); }
+
+  ::selection { background: rgba(var(--accent) / 0.3); color: var(--text-primary); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar        { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track  { background: transparent; }
+  ::-webkit-scrollbar-thumb  { background: var(--border-strong); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  /* ── All inputs use theme vars ─────────────────────────────────────────── */
+  input, select, textarea {
+    background-color: var(--input-bg);
+    border-color: var(--input-border);
+    color: var(--input-text);
+  }
+  input::placeholder, textarea::placeholder { color: var(--input-placeholder); }
+  option { background: var(--bg-elevated); color: var(--input-text); }
+
+  /* ── Proxmox: flip hardcoded "text-white/gray-*" to dark text ──────────── */
+  [data-theme="proxmox"] .text-white,
+  [data-theme="proxmox"] .text-gray-50  { color: var(--text-heading)   !important; }
+  [data-theme="proxmox"] .text-gray-100 { color: var(--text-primary)   !important; }
+  [data-theme="proxmox"] .text-gray-200,
+  [data-theme="proxmox"] .text-gray-300 { color: var(--text-secondary) !important; }
+
+  /* ── Proxmox: gray panel surfaces ──────────────────────────────────────── */
+  [data-theme="proxmox"] .bg-gray-800 {
+    background-color: var(--bg-panel-alt) !important;
+    border: 1px solid var(--border-weak);
+  }
+  [data-theme="proxmox"] .bg-gray-900 { background-color: var(--bg-panel) !important; }
+
+  /* ── Proxmox: borders & dividers ───────────────────────────────────────── */
+  [data-theme="proxmox"] .divide-gray-800 > * + *,
+  [data-theme="proxmox"] .divide-gray-700 > * + * { border-color: var(--border-med) !important; }
+  [data-theme="proxmox"] .border-gray-700,
+  [data-theme="proxmox"] .border-gray-800 { border-color: var(--border-med) !important; }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     BUTTON VISIBILITY
+     ══════════════════════════════════════════════════════════════════════════ */
+  button { color: var(--text-primary); }
+
+  /* Primary/accent buttons — always use theme accent colours */
+  button.bg-indigo-600, button.bg-indigo-500 {
+    background-color: var(--btn-accent-bg) !important;
+    border: 1px solid var(--btn-accent-border) !important;
+    color: var(--btn-accent-text) !important;
+  }
+  button.bg-indigo-600:hover:not(:disabled),
+  button.bg-indigo-500:hover:not(:disabled) {
+    background-color: var(--btn-accent-hover) !important;
+  }
+
+  /* Dark theme (GitHub): gray buttons blend into panel — lift them */
+  :root button.bg-gray-700,
+  :root button.bg-gray-800,
+  :root button.bg-gray-900 {
+    background-color: var(--bg-panel-alt) !important;
+    border: 1px solid var(--border-strong) !important;
+    color: var(--text-primary) !important;
+  }
+  :root button.bg-gray-700:hover:not(:disabled),
+  :root button.bg-gray-800:hover:not(:disabled),
+  :root button.bg-gray-900:hover:not(:disabled) {
+    background-color: var(--border-med) !important;
+  }
+
+  /* Proxmox: all button text must be readable (no white-on-light) */
+  [data-theme="proxmox"] button { color: var(--text-primary); }
+  [data-theme="proxmox"] button.text-white,
+  [data-theme="proxmox"] button.text-gray-300,
+  [data-theme="proxmox"] button.text-gray-400 { color: var(--text-primary) !important; }
+  [data-theme="proxmox"] button.bg-indigo-600,
+  [data-theme="proxmox"] button.bg-indigo-500 { color: var(--btn-accent-text) !important; }
+  [data-theme="proxmox"] button.bg-gray-700,
+  [data-theme="proxmox"] button.bg-gray-800 {
+    background-color: var(--bg-panel-alt) !important;
+    border: 1px solid var(--border-strong) !important;
+    color: var(--text-primary) !important;
+  }
+
+  /* Semantic status text on buttons — readable in both themes */
+  button.text-red-400    { color: var(--error)           !important; }
+  button.text-green-300,
+  button.text-green-400  { color: var(--success)         !important; }
+  button.text-yellow-400 { color: var(--warning)         !important; }
+  button.text-indigo-300,
+  button.text-indigo-400 { color: var(--accent-lite-hex) !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COMPONENTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+@layer components {
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent-hex) !important;
+    box-shadow: 0 0 0 3px rgba(var(--accent) / 0.2) !important;
+  }
+
+  .btn-primary, .btn-cyber {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    background: var(--btn-bg);
+    color: var(--btn-text) !important;
+    border: 1px solid var(--btn-border);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn-primary:hover:not(:disabled), .btn-cyber:hover:not(:disabled) {
+    background: var(--btn-hover);
+  }
+  .btn-primary:disabled, .btn-cyber:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-med);
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: rgba(var(--accent) / 0.08);
+    border-color: var(--border-strong);
+  }
+  .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .cyber-table tbody tr:hover td { background: rgba(var(--accent) / 0.05); }
+
+  /* Proxmox only: no scanlines */
+  [data-theme="proxmox"] .scanlines::after { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UTILITIES
+   ═══════════════════════════════════════════════════════════════════════════ */
+@layer utilities {
+  .accent-text { color: var(--accent-hex); }
+}
+
+/* Spinner keyframe used by App.tsx loading state */
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   XTERM
+   ═══════════════════════════════════════════════════════════════════════════ */
+.xterm { height: 100%; }
+.xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }

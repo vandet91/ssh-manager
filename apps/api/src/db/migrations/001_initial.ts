@@ -1,0 +1,163 @@
+import { Kysely, sql } from 'kysely'
+
+export async function up(db: Kysely<unknown>): Promise<void> {
+  await sql`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`.execute(db)
+
+  await db.schema
+    .createTable('users')
+    .addColumn('id', 'uuid', (c) => c.primaryKey().defaultTo(sql`gen_random_uuid()`))
+    .addColumn('email', 'varchar(255)', (c) => c.notNull().unique())
+    .addColumn('display_name', 'varchar(255)')
+    .addColumn('provider', 'varchar(20)', (c) => c.notNull())
+    .addColumn('provider_id', 'varchar(255)', (c) => c.notNull())
+    .addColumn('provider_groups', 'jsonb', (c) => c.defaultTo(sql`'[]'::jsonb`))
+    .addColumn('role', 'varchar(20)', (c) => c.notNull().defaultTo('viewer'))
+    .addColumn('mfa_secret', 'text')
+    .addColumn('mfa_enabled', 'boolean', (c) => c.defaultTo(false))
+    .addColumn('mfa_backup_codes', 'jsonb', (c) => c.defaultTo(sql`'[]'::jsonb`))
+    .addColumn('is_active', 'boolean', (c) => c.defaultTo(true))
+    .addColumn('last_login_at', 'timestamptz')
+    .addColumn('created_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .addColumn('updated_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .execute()
+
+  await sql`ALTER TABLE users ADD CONSTRAINT users_provider_provider_id_unique UNIQUE (provider, provider_id)`.execute(db)
+  await sql`ALTER TABLE users ADD CONSTRAINT users_provider_check CHECK (provider IN ('microsoft', 'google'))`.execute(db)
+  await sql`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'operator', 'developer', 'viewer'))`.execute(db)
+
+  await db.schema
+    .createTable('ssh_keys')
+    .addColumn('id', 'uuid', (c) => c.primaryKey().defaultTo(sql`gen_random_uuid()`))
+    .addColumn('name', 'varchar(100)', (c) => c.notNull())
+    .addColumn('description', 'text')
+    .addColumn('key_type', 'varchar(10)', (c) => c.notNull().defaultTo('ed25519'))
+    .addColumn('public_key', 'text', (c) => c.notNull())
+    .addColumn('private_key_enc', 'text', (c) => c.notNull())
+    .addColumn('fingerprint', 'varchar(200)', (c) => c.notNull())
+    .addColumn('rotation_policy', 'varchar(20)', (c) => c.defaultTo('manual'))
+    .addColumn('last_rotated_at', 'timestamptz')
+    .addColumn('next_rotation_at', 'timestamptz')
+    .addColumn('is_active', 'boolean', (c) => c.defaultTo(true))
+    .addColumn('created_by', 'uuid', (c) => c.references('users.id'))
+    .addColumn('created_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .addColumn('updated_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .execute()
+
+  await sql`ALTER TABLE ssh_keys ADD CONSTRAINT ssh_keys_type_check CHECK (key_type IN ('ed25519', 'rsa4096'))`.execute(db)
+  await sql`ALTER TABLE ssh_keys ADD CONSTRAINT ssh_keys_rotation_policy_check CHECK (rotation_policy IN ('manual', '7d', '30d', '90d'))`.execute(db)
+
+  await db.schema
+    .createTable('servers')
+    .addColumn('id', 'uuid', (c) => c.primaryKey().defaultTo(sql`gen_random_uuid()`))
+    .addColumn('name', 'varchar(100)', (c) => c.notNull().unique())
+    .addColumn('hostname', 'varchar(255)', (c) => c.notNull())
+    .addColumn('ssh_port', 'integer', (c) => c.notNull().defaultTo(22))
+    .addColumn('environment', 'varchar(20)', (c) => c.notNull())
+    .addColumn('tags', 'jsonb', (c) => c.defaultTo(sql`'{}'::jsonb`))
+    .addColumn('host_key_fingerprint', 'varchar(200)')
+    .addColumn('host_key_verified', 'boolean', (c) => c.defaultTo(false))
+    .addColumn('host_key_last_seen', 'timestamptz')
+    .addColumn('management_key_id', 'uuid', (c) => c.references('ssh_keys.id'))
+    .addColumn('management_linux_user', 'varchar(100)', (c) => c.notNull().defaultTo('root'))
+    .addColumn('is_active', 'boolean', (c) => c.defaultTo(true))
+    .addColumn('last_connected_at', 'timestamptz')
+    .addColumn('added_by', 'uuid', (c) => c.references('users.id'))
+    .addColumn('created_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .addColumn('updated_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .execute()
+
+  await sql`ALTER TABLE servers ADD CONSTRAINT servers_environment_check CHECK (environment IN ('production', 'staging', 'development', 'other'))`.execute(db)
+
+  await db.schema
+    .createTable('key_assignments')
+    .addColumn('id', 'uuid', (c) => c.primaryKey().defaultTo(sql`gen_random_uuid()`))
+    .addColumn('user_id', 'uuid', (c) => c.notNull().references('users.id').onDelete('cascade'))
+    .addColumn('key_id', 'uuid', (c) => c.notNull().references('ssh_keys.id').onDelete('cascade'))
+    .addColumn('server_id', 'uuid', (c) => c.notNull().references('servers.id').onDelete('cascade'))
+    .addColumn('linux_user', 'varchar(100)', (c) => c.notNull())
+    .addColumn('can_terminal', 'boolean', (c) => c.defaultTo(true))
+    .addColumn('is_active', 'boolean', (c) => c.defaultTo(true))
+    .addColumn('expires_at', 'timestamptz')
+    .addColumn('granted_by', 'uuid', (c) => c.references('users.id'))
+    .addColumn('created_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .execute()
+
+  await sql`ALTER TABLE key_assignments ADD CONSTRAINT key_assignments_unique UNIQUE (user_id, key_id, server_id, linux_user)`.execute(db)
+
+  await db.schema
+    .createTable('audit_logs')
+    .addColumn('id', 'bigserial', (c) => c.primaryKey())
+    .addColumn('user_id', 'uuid', (c) => c.references('users.id'))
+    .addColumn('user_email', 'varchar(255)')
+    .addColumn('action', 'varchar(100)', (c) => c.notNull())
+    .addColumn('resource', 'varchar(100)')
+    .addColumn('resource_id', 'uuid')
+    .addColumn('server_id', 'uuid', (c) => c.references('servers.id'))
+    .addColumn('details', 'jsonb', (c) => c.defaultTo(sql`'{}'::jsonb`))
+    .addColumn('ip_address', sql`inet`)
+    .addColumn('user_agent', 'text')
+    .addColumn('created_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .execute()
+
+  await db.schema
+    .createTable('session_recordings')
+    .addColumn('id', 'uuid', (c) => c.primaryKey().defaultTo(sql`gen_random_uuid()`))
+    .addColumn('user_id', 'uuid', (c) => c.references('users.id'))
+    .addColumn('server_id', 'uuid', (c) => c.references('servers.id'))
+    .addColumn('linux_user', 'varchar(100)')
+    .addColumn('started_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .addColumn('ended_at', 'timestamptz')
+    .addColumn('duration_s', 'integer')
+    .addColumn('cast_file_path', 'text')
+    .addColumn('cast_size_bytes', 'integer')
+    .addColumn('created_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .execute()
+
+  await db.schema
+    .createTable('security_scans')
+    .addColumn('id', 'uuid', (c) => c.primaryKey().defaultTo(sql`gen_random_uuid()`))
+    .addColumn('server_id', 'uuid', (c) => c.references('servers.id'))
+    .addColumn('scanned_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .addColumn('findings', 'jsonb', (c) => c.defaultTo(sql`'[]'::jsonb`))
+    .addColumn('severity', 'varchar(10)')
+    .addColumn('scan_type', 'varchar(50)')
+    .execute()
+
+  await sql`ALTER TABLE security_scans ADD CONSTRAINT security_scans_severity_check CHECK (severity IN ('ok', 'low', 'medium', 'high', 'critical'))`.execute(db)
+
+  await db.schema
+    .createTable('rotation_jobs')
+    .addColumn('id', 'uuid', (c) => c.primaryKey().defaultTo(sql`gen_random_uuid()`))
+    .addColumn('key_id', 'uuid', (c) => c.references('ssh_keys.id'))
+    .addColumn('status', 'varchar(20)', (c) => c.defaultTo('pending'))
+    .addColumn('triggered_by', 'uuid', (c) => c.references('users.id'))
+    .addColumn('started_at', 'timestamptz')
+    .addColumn('completed_at', 'timestamptz')
+    .addColumn('error_message', 'text')
+    .addColumn('affected_servers', 'jsonb', (c) => c.defaultTo(sql`'[]'::jsonb`))
+    .addColumn('created_at', 'timestamptz', (c) => c.defaultTo(sql`now()`))
+    .execute()
+
+  await sql`ALTER TABLE rotation_jobs ADD CONSTRAINT rotation_jobs_status_check CHECK (status IN ('pending', 'running', 'success', 'failed', 'rolled_back'))`.execute(db)
+
+  // Indexes
+  await db.schema.createIndex('idx_key_assignments_user').on('key_assignments').column('user_id').execute()
+  await db.schema.createIndex('idx_key_assignments_server').on('key_assignments').column('server_id').execute()
+  await db.schema.createIndex('idx_key_assignments_key').on('key_assignments').column('key_id').execute()
+  await db.schema.createIndex('idx_audit_logs_user').on('audit_logs').column('user_id').execute()
+  await db.schema.createIndex('idx_audit_logs_server').on('audit_logs').column('server_id').execute()
+  await db.schema.createIndex('idx_audit_logs_created').on('audit_logs').column('created_at').execute()
+  await db.schema.createIndex('idx_servers_env').on('servers').column('environment').execute()
+  await sql`CREATE INDEX idx_ssh_keys_rotation ON ssh_keys (next_rotation_at) WHERE is_active = true`.execute(db)
+}
+
+export async function down(db: Kysely<unknown>): Promise<void> {
+  await db.schema.dropTable('rotation_jobs').execute()
+  await db.schema.dropTable('security_scans').execute()
+  await db.schema.dropTable('session_recordings').execute()
+  await db.schema.dropTable('audit_logs').execute()
+  await db.schema.dropTable('key_assignments').execute()
+  await db.schema.dropTable('servers').execute()
+  await db.schema.dropTable('ssh_keys').execute()
+  await db.schema.dropTable('users').execute()
+}
