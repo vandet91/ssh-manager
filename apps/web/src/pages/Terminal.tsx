@@ -60,6 +60,15 @@ export default function Terminal() {
   const [assignments, setAssignments] = useState<Assignment[]>([])
   const [tabs, setTabs] = useState<TabState[]>(() => [makeTab()])
   const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id)
+  const [showCmdPanel, setShowCmdPanel] = useState(false)
+  const [linuxCmds, setLinuxCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
+  const [winCmds, setWinCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
+  const [cmdCat, setCmdCat] = useState('All')
+  const [cmdSearch, setCmdSearch] = useState('')
+  const [linuxNotes, setLinuxNotes] = useState<{id:string,type:string,device_type?:string,name:string,content?:string}[]>([])
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]
+  const activeServerOs = servers.find(s => s.id === activeTab?.selectedServer)?.os_type
 
   // Per-tab refs
   const termRefs    = useRef<Record<string, HTMLDivElement | null>>({})
@@ -74,6 +83,16 @@ export default function Terminal() {
     api.get<Server[]>('/servers').then(setServers).catch(() => {})
     api.get<Assignment[]>('/assignments').then(setAssignments).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!showCmdPanel) return
+    if (activeServerOs === 'windows') {
+      if (winCmds.length === 0) api.get<typeof winCmds>('/commands?os=windows').then(setWinCmds).catch(() => {})
+    } else {
+      if (linuxCmds.length === 0) api.get<typeof linuxCmds>('/commands?os=linux').then(setLinuxCmds).catch(() => {})
+    }
+    api.get<typeof linuxNotes>('/share/list').then(all => setLinuxNotes(all.filter((x: any) => x.type === 'text' && x.device_type === (activeServerOs === 'windows' ? 'windows' : 'linux')))).catch(() => {})
+  }, [showCmdPanel, activeServerOs])
 
   // Fit active terminal when switching tabs
   useEffect(() => {
@@ -146,12 +165,31 @@ export default function Terminal() {
   // ── Per-tab helpers ─────────────────────────────────────────────────────────
   function serverAssignmentsFor(tab: TabState) {
     const seen = new Set<string>()
-    return assignments.filter((a) => {
+    const result = assignments.filter((a) => {
       if (a.server_id !== tab.selectedServer || !a.can_terminal || !a.is_active) return false
       if (seen.has(a.linux_user)) return false
       seen.add(a.linux_user)
       return true
     })
+
+    // Always ensure the management user appears, even when other assignments exist
+    // (handles servers set up before the key_assignment was auto-created)
+    if (tab.selectedServer) {
+      const srv = servers.find((s) => s.id === tab.selectedServer)
+      if (srv?.management_linux_user && srv.management_key_id && !seen.has(srv.management_linux_user)) {
+        result.unshift({
+          id: '__mgmt__',
+          server_id: srv.id,
+          key_id: srv.management_key_id,
+          linux_user: srv.management_linux_user,
+          can_terminal: true,
+          is_active: true,
+          user_id: '',
+        } as Assignment)
+      }
+    }
+
+    return result
   }
 
   function tabLabel(tab: TabState) {
@@ -352,10 +390,8 @@ export default function Terminal() {
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
-  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]
-
   return (
-    <div className="flex flex-col h-screen bg-gray-950">
+    <div className="flex flex-col h-full bg-gray-950">
 
       {/* ── Tab bar ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center bg-gray-900 border-b border-gray-800 overflow-x-auto shrink-0">
@@ -456,6 +492,12 @@ export default function Terminal() {
                   title="Search (Ctrl+F)">
                   🔍 Search
                 </button>
+                <button
+                  onClick={() => setShowCmdPanel(p => !p)}
+                  className={`px-2.5 py-1 text-xs rounded transition-colors ${showCmdPanel ? 'bg-indigo-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white'}`}
+                  title="Linux command library">
+                  📚 Commands
+                </button>
               </>
             )}
 
@@ -528,7 +570,8 @@ export default function Terminal() {
       )}
 
       {/* ── Terminal canvases (all rendered, only active visible) ─────────────── */}
-      <div className="flex-1 relative overflow-hidden">
+      <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 relative overflow-hidden">
         {tabs.map((tab) => (
           <div
             key={tab.id}
@@ -573,6 +616,82 @@ export default function Terminal() {
             />
           </div>
         ))}
+
+        </div>
+        {/* ── Commands sidebar ── */}
+        {showCmdPanel && activeTab?.connected && (() => {
+          const isWin = activeServerOs === 'windows'
+          const cmds = isWin ? winCmds : linuxCmds
+          const cats = ['All', ...Array.from(new Set(cmds.map(c => c.category))).sort()]
+          const filtered = cmds.filter(c =>
+            (cmdCat === 'All' || c.category === cmdCat) &&
+            (!cmdSearch || c.label.toLowerCase().includes(cmdSearch.toLowerCase()) || c.command.toLowerCase().includes(cmdSearch.toLowerCase()))
+          )
+          const sendCmd = (cmd: string) => {
+            const ws = wsRefs.current[activeTabId]
+            if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: cmd + '\n' }))
+          }
+          return (
+            <div style={{ width: 300, background: '#111827', borderLeft: '1px solid #1f2937', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '8px 10px', borderBottom: '1px solid #1f2937', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <input value={cmdSearch} onChange={e => setCmdSearch(e.target.value)} placeholder="Search…"
+                  style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: '1px solid #374151', background: '#1f2937', color: '#e5e7eb', fontSize: 11, boxSizing: 'border-box' as const }} />
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' as const }}>
+                  {cats.map(cat => (
+                    <button key={cat} onClick={() => setCmdCat(cat)} style={{
+                      padding: '2px 7px', borderRadius: 999, border: '1px solid', fontSize: 10, cursor: 'pointer',
+                      borderColor: cmdCat === cat ? '#6366f1' : '#374151',
+                      background: cmdCat === cat ? '#6366f122' : 'transparent',
+                      color: cmdCat === cat ? '#a5b4fc' : '#9ca3af',
+                    }}>{cat}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {/* Linux sticky notes */}
+                {linuxNotes.length > 0 && (
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: isWin ? '#0078d4' : '#e95420', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      {isWin ? '🪟 Windows Notes' : '🐧 Linux Notes'} ({linuxNotes.length})
+                    </div>
+                    {linuxNotes.map(note => (
+                      <div key={note.id} style={{ background: '#fff9e6', border: `2px solid ${isWin ? '#0078d4' : '#e95420'}`, borderRadius: 6, padding: 8, marginBottom: 5 }}>
+                        {note.name && note.name !== 'Note' && (
+                          <div style={{ fontSize: 10, fontWeight: 700, color: '#c04400', marginBottom: 3 }}>{note.name}</div>
+                        )}
+                        <code style={{ display: 'block', fontSize: 10, color: '#333', fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 5 }}>{note.content}</code>
+                        <button onClick={() => sendCmd(note.content || '')} style={{
+                          width: '100%', padding: '4px', borderRadius: 4, border: 'none',
+                          background: activeTab?.connected ? '#4f46e5' : '#374151',
+                          color: activeTab?.connected ? '#fff' : '#6b7280',
+                          fontSize: 10, fontWeight: 600, cursor: activeTab?.connected ? 'pointer' : 'not-allowed',
+                        }}>
+                          {activeTab?.connected ? '▶ Run' : 'Connect first'}
+                        </button>
+                      </div>
+                    ))}
+                    <div style={{ height: 1, background: '#1f2937', margin: '8px 0' }} />
+                  </div>
+                )}
+                {filtered.map(c => (
+                  <div key={c.id} style={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6, padding: '7px 9px' }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: '#e5e7eb', marginBottom: 2 }}>{c.label}</div>
+                    <code style={{ display: 'block', fontSize: 10, color: '#93c5fd', fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 5 }}>{c.command}</code>
+                    {c.description && <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 5 }}>{c.description}</div>}
+                    <button onClick={() => sendCmd(c.command)} style={{
+                      width: '100%', padding: '4px', borderRadius: 4, border: 'none',
+                      background: activeTab?.connected ? '#4f46e5' : '#374151',
+                      color: activeTab?.connected ? '#fff' : '#6b7280',
+                      fontSize: 10, fontWeight: 600, cursor: activeTab?.connected ? 'pointer' : 'not-allowed',
+                    }}>
+                      {activeTab?.connected ? '▶ Run' : 'Connect first'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })()}
       </div>
 
       {/* ── Hint bar ─────────────────────────────────────────────────────────── */}

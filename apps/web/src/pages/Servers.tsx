@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { api, Server, ServerInfo, SshKey, ServerCredential, CredentialCategory, SoftwareItem, Recommendation, RecSeverity, HostType } from '../api/client'
+import { useEffect, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { api, Server, ServerInfo, SshKey, ServerCredential, CredentialCategory, SoftwareItem, Recommendation, RecSeverity, HostType, BenchmarkResult, BenchmarkCheck, CheckStatus, CheckCategory, RdpCredential } from '../api/client'
 import Modal from '../components/Modal'
 import Badge from '../components/Badge'
 
@@ -38,15 +39,56 @@ function HostBadge({ type, detail }: { type: HostType | null | undefined; detail
   )
 }
 
+type AiIssue = { severity: 'critical'|'warning'|'info'; title: string; description: string; service?: string|null; timestamp?: string|null; root_cause?: string|null; fix_commands?: string[]; prevention?: string|null }
+type AiResult = { summary: string; health_score: number; issues: AiIssue[]; security_alerts: AiIssue[]; recommendations: string[]; raw_provider: string; raw_model: string; analysed_at: string }
+
+const AI_PROVIDERS = [
+  { id: 'claude',   label: '🟠 Claude',   models: ['claude-sonnet-4-6','claude-haiku-4-5-20251001','claude-opus-4-8'] },
+  { id: 'openai',   label: '🟢 GPT',      models: ['gpt-4o','gpt-4o-mini','gpt-4-turbo'] },
+  { id: 'gemini',   label: '🔵 Gemini',   models: ['gemini-1.5-pro','gemini-1.5-flash','gemini-2.0-flash'] },
+  { id: 'deepseek', label: '🔴 DeepSeek', models: ['deepseek-chat','deepseek-reasoner'] },
+] as const
+
+const ANALYSIS_FOCUS_INFO: Record<string, { icon: string; label: string; desc: string }> = {
+  health:      { icon: '🏥', label: 'General Health Check',      desc: 'Scans everything — errors, warnings, crashes, resource issues, anomalies. Best starting point.' },
+  security:    { icon: '🔒', label: 'Security & Intrusion',      desc: 'Failed logins, brute force, privilege escalation, suspicious IPs, cron changes, unusual processes.' },
+  performance: { icon: '⚡', label: 'Performance Issues',        desc: 'High CPU/memory/disk, OOM kills, slow queries, timeouts, swap usage, I/O bottlenecks.' },
+  errors:      { icon: '💥', label: 'Errors & Service Failures', desc: 'Crashes, panics, segfaults, failed systemd units, application exceptions, database errors.' },
+  custom:      { icon: '💬', label: 'Custom Question',           desc: 'Ask anything specific, e.g. "Why did nginx crash at 3am?" or "Why is disk usage growing?"' },
+}
+
+const LOG_SOURCES = [
+  { label: 'System Journal (warnings+)',  cmd: 'journalctl -n {lines} --no-pager -p warning..emerg', focus: 'health',      hint: 'System-wide warnings/errors from all services — good first check' },
+  { label: 'System Journal (all)',         cmd: 'journalctl -n {lines} --no-pager',                  focus: 'health',      hint: 'Full system log — use fewer lines (100–200) to avoid noise' },
+  { label: 'Auth log (SSH logins)',        cmd: 'sudo tail -n {lines} /var/log/auth.log 2>/dev/null || sudo journalctl -n {lines} -u ssh --no-pager', focus: 'security', hint: 'SSH logins, sudo usage, failed auth attempts — use Security focus' },
+  { label: 'Syslog',                       cmd: 'sudo tail -n {lines} /var/log/syslog 2>/dev/null',  focus: 'health',      hint: 'General system messages from kernel and daemons' },
+  { label: 'Nginx error log',              cmd: 'sudo tail -n {lines} /var/log/nginx/error.log 2>/dev/null',  focus: 'errors', hint: '4xx/5xx errors, upstream failures, config issues' },
+  { label: 'Apache error log',             cmd: 'sudo tail -n {lines} /var/log/apache2/error.log 2>/dev/null', focus: 'errors', hint: 'Request errors, module failures, permission issues' },
+  { label: 'MySQL error log',              cmd: 'sudo tail -n {lines} /var/log/mysql/error.log 2>/dev/null',  focus: 'performance', hint: 'Slow queries, deadlocks, crash recovery, InnoDB errors' },
+  { label: 'PostgreSQL log',               cmd: 'sudo tail -n {lines} /var/log/postgresql/*.log 2>/dev/null', focus: 'performance', hint: 'Slow queries, lock waits, connection limits, crashes' },
+  { label: 'Docker daemon log',            cmd: 'sudo journalctl -n {lines} -u docker --no-pager',   focus: 'errors',      hint: 'Container failures, image pull errors, daemon issues' },
+  { label: 'Kernel / dmesg (errors)',      cmd: 'sudo dmesg --level=err,warn -T 2>/dev/null | tail -n {lines}', focus: 'performance', hint: 'OOM kills, hardware errors, driver issues, disk failures' },
+  { label: 'Fail2ban log',                 cmd: 'sudo tail -n {lines} /var/log/fail2ban.log 2>/dev/null',      focus: 'security', hint: 'Banned IPs, brute force detection — always use Security focus' },
+  { label: 'UFW / iptables firewall',      cmd: 'sudo tail -n {lines} /var/log/ufw.log 2>/dev/null || sudo journalctl -n {lines} -k --no-pager | grep -i "ufw\\|iptables"', focus: 'security', hint: 'Blocked/allowed connections, port scans, firewall rule hits' },
+  { label: 'Cron log',                     cmd: 'sudo grep -i cron /var/log/syslog 2>/dev/null | tail -n {lines} || sudo journalctl -n {lines} -u cron --no-pager', focus: 'errors', hint: 'Scheduled job failures, missed runs, permission errors' },
+  { label: 'Custom command…',              cmd: '', focus: 'health', hint: 'Run any shell command and analyse its output' },
+]
+
+const OS_OPTS = [
+  { value: 'linux',   label: '🐧 Linux' },
+  { value: 'windows', label: '🪟 Windows' },
+]
+
 export default function Servers() {
   const [servers, setServers] = useState<Server[]>([])
   const [allKeys, setAllKeys] = useState<SshKey[]>([])
   const [showAdd, setShowAdd] = useState(false)
-  const [addForm, setAddForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production' })
+  type OsType = 'linux' | 'windows'
+  const [addForm, setAddForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType })
   const [addError, setAddError] = useState('')
 
   const [editServer, setEditServer] = useState<Server | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production' })
+  const [editForm, setEditForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType })
   const [editError, setEditError] = useState('')
 
   const [setupServerId, setSetupServerId] = useState<string | null>(null)
@@ -59,17 +101,59 @@ export default function Servers() {
   const [testKeyInfo, setTestKeyInfo] = useState<Record<string, { key_name: string; is_fallback: boolean }>>({})
   const [verifyResults, setVerifyResults] = useState<Record<string, 'ok' | 'failed' | 'mismatch' | 'verifying'>>({})
 
+  const navigate = useNavigate()
+  const openRdpTab = useCallback((s: Server) => {
+    navigate(`/remote-desktop?rdp=${s.id}`)
+  }, [navigate])
+  const [rdpCheckResults, setRdpCheckResults] = useState<Record<string, 'checking' | 'up' | 'down'>>({})
+
+  const checkRdpPort = async (s: Server) => {
+    setRdpCheckResults(r => ({ ...r, [s.id]: 'checking' }))
+    try {
+      const res = await api.get<{ reachable: boolean }>(`/servers/${s.id}/rdp-check`)
+      setRdpCheckResults(r => ({ ...r, [s.id]: res.reachable ? 'up' : 'down' }))
+    } catch {
+      setRdpCheckResults(r => ({ ...r, [s.id]: 'down' }))
+    }
+  }
+
+  // Windows RDP setup modal
+  const [winSetupServer, setWinSetupServer] = useState<Server | null>(null)
+  const [winSetupForm, setWinSetupForm] = useState({ username: 'Administrator', password: '', domain: '', rdp_port: 3389, show_pw: false })
+  const [winSetupWorking, setWinSetupWorking] = useState(false)
+  const [winSetupError, setWinSetupError] = useState('')
+  const [winSetupDone, setWinSetupDone] = useState(false)
+
+  // Windows RDP credential management (in Info modal)
+  const [winCreds, setWinCreds] = useState<RdpCredential[]>([])
+  const [winCredsLoading, setWinCredsLoading] = useState(false)
+  const [showAddWinCred, setShowAddWinCred] = useState(false)
+  const [addWinCredForm, setAddWinCredForm] = useState({ username: 'Administrator', password: '', domain: '', show_pw: false })
+  const [addWinCredWorking, setAddWinCredWorking] = useState(false)
+  const [addWinCredError, setAddWinCredError] = useState('')
+  const [editWinCred, setEditWinCred] = useState<RdpCredential | null>(null)
+  const [editWinCredForm, setEditWinCredForm] = useState({ username: '', password: '', domain: '', label: '' })
+  const [editWinCredWorking, setEditWinCredWorking] = useState(false)
+  const [revealedWinPasswords, setRevealedWinPasswords] = useState<Record<string, string>>({})
+
   const [infoServer, setInfoServer] = useState<Server | null>(null)
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [infoError, setInfoError] = useState('')
-  const [infoTab, setInfoTab] = useState<'overview' | 'users' | 'keys' | 'credentials' | 'software' | 'recommendations'>('overview')
+  const [infoTab, setInfoTab] = useState<'overview' | 'users' | 'keys' | 'credentials' | 'software' | 'recommendations' | 'benchmark' | 'ai'>('overview')
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [recLoading, setRecLoading] = useState(false)
   const [recError, setRecError] = useState('')
   const [recFilter, setRecFilter] = useState<'all' | 'security' | 'performance' | 'stability' | 'monitoring'>('all')
   const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null)
   const [expandedRec, setExpandedRec] = useState<string | null>(null)
+  const [benchmark, setBenchmark] = useState<BenchmarkResult | null>(null)
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false)
+  const [benchmarkError, setBenchmarkError] = useState('')
+  const [benchmarkCatFilter, setBenchmarkCatFilter] = useState<'all' | CheckCategory>('all')
+  const [expandedCheck, setExpandedCheck] = useState<string | null>(null)
+  const [copiedRemediation, setCopiedRemediation] = useState<string | null>(null)
+
   const [software, setSoftware] = useState<SoftwareItem[]>([])
   const [softwareLoading, setSoftwareLoading] = useState(false)
   const [softwareError, setSoftwareError] = useState('')
@@ -96,37 +180,86 @@ export default function Servers() {
   const [verifyCredResult, setVerifyCredResult] = useState<Record<string, 'match' | 'mismatch' | 'error'>>({})
   const [openCredMenu, setOpenCredMenu] = useState<string | null>(null)
   const [setMgmtKeyWorking, setSetMgmtKeyWorking] = useState(false)
+  const [srvSearch, setSrvSearch] = useState('')
+  const [srvOsFilter, setSrvOsFilter] = useState('')
+  const [srvEnvFilter, setSrvEnvFilter] = useState('')
+  const [srvHostFilter, setSrvHostFilter] = useState('')
 
   // User management state (within info modal)
   const [showAddUser, setShowAddUser] = useState(false)
-  const [addUserForm, setAddUserForm] = useState({ username: '', comment: '', shell: '/bin/bash', system_user: false })
+  const [addUserForm, setAddUserForm] = useState({ username: '', comment: '', shell: '/bin/bash', system_user: false, password: '', save_to_vault: true })
   const [addUserError, setAddUserError] = useState('')
   const [addUserWorking, setAddUserWorking] = useState(false)
+  const [editUserTarget, setEditUserTarget] = useState<string | null>(null)
+  const [editUserForm, setEditUserForm] = useState({ shell: '/bin/bash', comment: '', password: '', save_to_vault: true })
+  const [editUserError, setEditUserError] = useState('')
+  const [editUserWorking, setEditUserWorking] = useState(false)
   const [pushKeyTarget, setPushKeyTarget] = useState<string | null>(null)  // username being targeted for key push
   const [pushKeyId, setPushKeyId] = useState('')
   const [pushKeyWorking, setPushKeyWorking] = useState(false)
   const [pushKeyError, setPushKeyError] = useState('')
   const [deleteUserWorking, setDeleteUserWorking] = useState<string | null>(null)
 
+  // AI Analyst
+  const [aiForm, setAiForm] = useState({ log_source_idx: 0, custom_cmd: '', lines: 300, analysis_type: 'health' as string, custom_question: '', provider: 'claude', model: 'claude-sonnet-4-6' })
+  const [aiDefaultsLoaded, setAiDefaultsLoaded] = useState(false)
+  const [aiRunning, setAiRunning] = useState(false)
+  const [aiResult, setAiResult] = useState<AiResult | null>(null)
+  const [aiError, setAiError] = useState('')
+  const [aiCopied, setAiCopied] = useState<string | null>(null)
+
+  const runAiAnalysis = async () => {
+    if (!infoServer) return
+    setAiRunning(true); setAiResult(null); setAiError('')
+    const src = LOG_SOURCES[aiForm.log_source_idx]
+    const cmd = src.cmd === '' ? aiForm.custom_cmd : src.cmd.replace('{lines}', String(aiForm.lines))
+    try {
+      const res = await api.post<AiResult>(`/servers/${infoServer.id}/ai-analyse`, {
+        log_source: cmd, lines: aiForm.lines,
+        analysis_type: aiForm.analysis_type,
+        custom_question: aiForm.analysis_type === 'custom' ? aiForm.custom_question : undefined,
+        provider: aiForm.provider, model: aiForm.model,
+      })
+      setAiResult(res)
+    } catch (err: unknown) { setAiError((err as Error).message) }
+    finally { setAiRunning(false) }
+  }
+
+  const copyCmd = (cmd: string) => {
+    navigator.clipboard.writeText(cmd)
+    setAiCopied(cmd)
+    setTimeout(() => setAiCopied(null), 2000)
+  }
+
   const load = () => {
-    api.get<Server[]>('/servers').then(setServers).catch(() => {})
+    api.get<Server[]>('/servers?device_category=server').then(list => setServers(list)).catch(() => {})
     api.get<SshKey[]>('/keys').then(setAllKeys).catch(() => {})
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    api.get<{ default_provider: string; default_model: string }>('/settings/ai-keys').then(s => {
+      if (s.default_provider) {
+        const providerDef = AI_PROVIDERS.find(p => p.id === s.default_provider)
+        const model = s.default_model || providerDef?.models[0] || ''
+        setAiForm(f => ({ ...f, provider: s.default_provider, model }))
+      }
+      setAiDefaultsLoaded(true)
+    }).catch(() => setAiDefaultsLoaded(true))
+  }, [])
 
   const addServer = async (e: React.FormEvent) => {
     e.preventDefault(); setAddError('')
     try {
       await api.post('/servers', addForm)
       setShowAdd(false)
-      setAddForm({ name: '', hostname: '', ssh_port: 22, environment: 'production' })
+      setAddForm({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType })
       load()
     } catch (err: unknown) { setAddError((err as Error).message) }
   }
 
   const openEdit = (s: Server) => {
     setEditServer(s)
-    setEditForm({ name: s.name, hostname: s.hostname, ssh_port: s.ssh_port, environment: s.environment })
+    setEditForm({ name: s.name, hostname: s.hostname, ssh_port: s.ssh_port, environment: s.environment, os_type: (s.os_type ?? 'linux') as OsType })
     setEditError('')
   }
 
@@ -145,12 +278,115 @@ export default function Servers() {
     load()
   }
 
-  const openSetup = (id: string) => {
-    setSetupServerId(id)
+  const openSetup = (server: Server) => {
+    if (server.os_type === 'windows') {
+      setWinSetupServer(server)
+      setWinSetupForm({ username: 'Administrator', password: '', domain: '', rdp_port: 3389, show_pw: false })
+      setWinSetupError('')
+      setWinSetupDone(false)
+      return
+    }
+    setSetupServerId(server.id)
     setSetupStep('credentials')
     setSetupForm({ linux_user: 'root', password: '' })
     setSetupError('')
     setSetupResult(null)
+  }
+
+  const openSshSetup = (server: Server) => {
+    setSetupServerId(server.id)
+    setSetupStep('credentials')
+    setSetupForm({ linux_user: 'Administrator', password: '' })
+    setSetupError('')
+    setSetupResult(null)
+  }
+
+  const runWindowsSetup = async () => {
+    if (!winSetupServer) return
+    setWinSetupWorking(true)
+    setWinSetupError('')
+    try {
+      await api.post(`/servers/${winSetupServer.id}/windows-setup`, {
+        username: winSetupForm.username,
+        password: winSetupForm.password,
+        domain:   winSetupForm.domain || undefined,
+        rdp_port: winSetupForm.rdp_port,
+      })
+      setWinSetupDone(true)
+      setServers(prev => prev.map(s => s.id === winSetupServer.id ? { ...s, windows_rdp_ready: true, os_type: 'windows' } : s))
+    } catch (err: unknown) {
+      setWinSetupError((err as Error).message)
+    } finally {
+      setWinSetupWorking(false)
+    }
+  }
+
+  const loadWinCreds = async (serverId: string) => {
+    setWinCredsLoading(true)
+    try {
+      const list = await api.get<RdpCredential[]>(`/servers/${serverId}/rdp-credentials`)
+      setWinCreds(list)
+    } catch { /* silent */ }
+    finally { setWinCredsLoading(false) }
+  }
+
+  const addWinCred = async (serverId: string) => {
+    setAddWinCredWorking(true); setAddWinCredError('')
+    try {
+      await api.post(`/servers/${serverId}/windows-setup`, {
+        username: addWinCredForm.username,
+        password: addWinCredForm.password,
+        domain:   addWinCredForm.domain || undefined,
+        rdp_port: 3389,
+      })
+      await loadWinCreds(serverId)
+      setShowAddWinCred(false)
+      setAddWinCredForm({ username: 'Administrator', password: '', domain: '', show_pw: false })
+    } catch (err: unknown) { setAddWinCredError((err as Error).message) }
+    finally { setAddWinCredWorking(false) }
+  }
+
+  const saveWinCred = async (serverId: string, credId: string) => {
+    setEditWinCredWorking(true)
+    try {
+      await api.put(`/servers/${serverId}/rdp-credentials/${credId}`, {
+        label:    editWinCredForm.label,
+        username: editWinCredForm.username,
+        password: editWinCredForm.password || undefined,
+        domain:   editWinCredForm.domain || undefined,
+      })
+      await loadWinCreds(serverId)
+      setEditWinCred(null)
+    } catch (err: unknown) { alert((err as Error).message) }
+    finally { setEditWinCredWorking(false) }
+  }
+
+  const deleteWinCred = async (serverId: string, credId: string, isArchived: boolean) => {
+    const msg = isArchived
+      ? 'Permanently delete this archived RDP credential? This cannot be undone.'
+      : 'Archive this RDP credential? It will be hidden but not deleted.'
+    if (!confirm(msg)) return
+    await api.delete(`/servers/${serverId}/rdp-credentials/${credId}`, { permanent: isArchived })
+    await loadWinCreds(serverId)
+  }
+
+  const revealWinPassword = async (serverId: string, credId: string) => {
+    try {
+      const res = await api.post<{ password: string }>(`/servers/${serverId}/rdp-credentials/${credId}/reveal`)
+      setRevealedWinPasswords(p => ({ ...p, [credId]: res.password }))
+    } catch (err: unknown) { alert((err as Error).message) }
+  }
+
+  const copyPasswordSilently = async (serverId: string, credId: string, type: 'rdp' | 'linux') => {
+    try {
+      const url = type === 'rdp'
+        ? `/servers/${serverId}/rdp-credentials/${credId}/reveal`
+        : `/servers/${serverId}/credentials/${credId}/reveal`
+      const res = await api.post<{ password: string }>(url)
+      await navigator.clipboard.writeText(res.password)
+      setCopiedCred(credId)
+      setTimeout(() => setCopiedCred(x => x === credId ? null : x), 2000)
+    } catch (err: unknown) { alert('Failed to copy password') }
   }
 
   const runSetup = async (e: React.FormEvent) => {
@@ -190,7 +426,6 @@ export default function Servers() {
     setInfoServer(s)
     setServerInfo(null)
     setInfoError('')
-    setInfoTab('overview')
     setShowAddUser(false)
     setPushKeyTarget(null)
     setRevealedPasswords({})
@@ -203,7 +438,23 @@ export default function Servers() {
     setRecError('')
     setRecFilter('all')
     setExpandedRec(null)
-    await Promise.all([refreshInfo(s.id), loadCredentials(s.id)])
+    setBenchmark(null)
+    setBenchmarkError('')
+    setBenchmarkCatFilter('all')
+    setExpandedCheck(null)
+    setWinCreds([])
+    setShowAddWinCred(false)
+    setEditWinCred(null)
+    setRevealedWinPasswords({})
+    if (s.os_type === 'windows') {
+      setInfoTab('credentials')
+      // Load credentials immediately; scan SSH info in background (requires OpenSSH on Windows)
+      await Promise.all([loadCredentials(s.id), loadWinCreds(s.id)])
+      if (s.management_key_id) refreshInfo(s.id).catch(() => {})
+    } else {
+      setInfoTab('overview')
+      await Promise.all([refreshInfo(s.id), loadCredentials(s.id)])
+    }
   }
 
   const loadRecommendations = async (serverId: string) => {
@@ -216,6 +467,19 @@ export default function Servers() {
       setRecError((err as Error).message)
     } finally {
       setRecLoading(false)
+    }
+  }
+
+  const loadBenchmark = async (serverId: string) => {
+    setBenchmarkLoading(true)
+    setBenchmarkError('')
+    try {
+      const result = await api.get<BenchmarkResult>(`/servers/${serverId}/benchmark`)
+      setBenchmark(result)
+    } catch (err: unknown) {
+      setBenchmarkError((err as Error).message)
+    } finally {
+      setBenchmarkLoading(false)
     }
   }
 
@@ -419,10 +683,25 @@ export default function Servers() {
       setVerifyResults((p) => ({ ...p, [id]: 'ok' }))
       setTimeout(() => setVerifyResults((p) => { const n = { ...p }; delete n[id]; return n }), 3000)
     } catch (err: unknown) {
-      const e = err as { status?: number; data?: { error?: string } }
+      const e = err as { status?: number; data?: { error?: string; incoming?: string } }
       if (e.status === 409) {
         setVerifyResults((p) => ({ ...p, [id]: 'mismatch' }))
-        alert(`⚠ Host key mismatch detected!\n\n${e.data?.error ?? 'Fingerprint has changed — possible MITM attack.'}`)
+        const trust = window.confirm(
+          `⚠ Host key mismatch!\n\nThe server's SSH host key has changed. This can happen after an OS reinstall or SSH key regeneration — but could also indicate a MITM attack.\n\nNew fingerprint: ${e.data?.incoming ?? 'unknown'}\n\nDo you want to trust the new key and update the stored fingerprint?`
+        )
+        if (trust) {
+          try {
+            await api.post(`/servers/${id}/reset-host-key`)
+            load()
+            setVerifyResults((p) => ({ ...p, [id]: 'ok' }))
+            setTimeout(() => setVerifyResults((p) => { const n = { ...p }; delete n[id]; return n }), 3000)
+          } catch {
+            setVerifyResults((p) => ({ ...p, [id]: 'failed' }))
+            setTimeout(() => setVerifyResults((p) => { const n = { ...p }; delete n[id]; return n }), 3000)
+          }
+        } else {
+          setTimeout(() => setVerifyResults((p) => { const n = { ...p }; delete n[id]; return n }), 5000)
+        }
       } else {
         setVerifyResults((p) => ({ ...p, [id]: 'failed' }))
         setTimeout(() => setVerifyResults((p) => { const n = { ...p }; delete n[id]; return n }), 3000)
@@ -437,10 +716,32 @@ export default function Servers() {
     try {
       await api.post(`/servers/${infoServer!.id}/users`, addUserForm)
       setShowAddUser(false)
-      setAddUserForm({ username: '', comment: '', shell: '/bin/bash', system_user: false })
+      setAddUserForm({ username: '', comment: '', shell: '/bin/bash', system_user: false, password: '', save_to_vault: true })
       await refreshInfo(infoServer!.id)
     } catch (err: unknown) { setAddUserError((err as Error).message) }
     finally { setAddUserWorking(false) }
+  }
+
+  const openEditUser = (u: { username: string; shell: string }) => {
+    setEditUserTarget(u.username)
+    setEditUserForm({ shell: u.shell, comment: '', password: '', save_to_vault: true })
+    setEditUserError('')
+    setShowAddUser(false)
+    setPushKeyTarget(null)
+  }
+
+  const saveEditUser = async (e: React.FormEvent) => {
+    e.preventDefault(); setEditUserError(''); setEditUserWorking(true)
+    try {
+      const payload: Record<string, unknown> = { save_to_vault: editUserForm.save_to_vault }
+      if (editUserForm.shell) payload.shell = editUserForm.shell
+      if (editUserForm.comment) payload.comment = editUserForm.comment
+      if (editUserForm.password) payload.password = editUserForm.password
+      await api.patch(`/servers/${infoServer!.id}/users/${editUserTarget}`, payload)
+      setEditUserTarget(null)
+      await refreshInfo(infoServer!.id)
+    } catch (err: unknown) { setEditUserError((err as Error).message) }
+    finally { setEditUserWorking(false) }
   }
 
   const deleteUser = async (username: string) => {
@@ -469,6 +770,16 @@ export default function Servers() {
   const setupServer = servers.find((s) => s.id === setupServerId)
   const envOptions = ['production', 'staging', 'development', 'other']
 
+  const q = srvSearch.toLowerCase()
+  const filteredServers = servers.filter(s => {
+    if (srvSearch && !(s.name ?? '').toLowerCase().includes(q) && !(s.hostname ?? '').toLowerCase().includes(q)) return false
+    if (srvOsFilter && (s.os_type ?? '') !== srvOsFilter) return false
+    if (srvEnvFilter && (s.environment ?? '') !== srvEnvFilter) return false
+    if (srvHostFilter && (s.host_type ?? 'unknown') !== srvHostFilter) return false
+    return true
+  })
+  const hostTypes = Array.from(new Set(servers.map(s => s.host_type ?? 'unknown').filter(Boolean))).sort()
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -476,6 +787,36 @@ export default function Servers() {
         <button onClick={() => setShowAdd(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors">
           + Add Server
         </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <input value={srvSearch} onChange={e => setSrvSearch(e.target.value)} placeholder="Search name or hostname…"
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-52" />
+        <select value={srvOsFilter} onChange={e => setSrvOsFilter(e.target.value)}
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option value="">All OS</option>
+          {OS_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <select value={srvEnvFilter} onChange={e => setSrvEnvFilter(e.target.value)}
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option value="">All Environments</option>
+          {envOptions.map(e => <option key={e} value={e}>{e.charAt(0).toUpperCase() + e.slice(1)}</option>)}
+        </select>
+        {hostTypes.length > 1 && (
+          <select value={srvHostFilter} onChange={e => setSrvHostFilter(e.target.value)}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="">All Platforms</option>
+            {hostTypes.map(h => <option key={h} value={h}>{HOST_META[h]?.label ?? h}</option>)}
+          </select>
+        )}
+        {(srvSearch || srvOsFilter || srvEnvFilter || srvHostFilter) && (
+          <button onClick={() => { setSrvSearch(''); setSrvOsFilter(''); setSrvEnvFilter(''); setSrvHostFilter('') }}
+            className="px-3 py-1.5 text-xs text-gray-400 hover:text-white border border-gray-700 rounded-lg">
+            ✕ Clear
+          </button>
+        )}
+        <span className="text-xs text-gray-500 ml-auto">{filteredServers.length} / {servers.length}</span>
       </div>
 
       {/* overflow-x:auto lets the table scroll on narrow screens without
@@ -507,7 +848,7 @@ export default function Servers() {
             </tr>
           </thead>
           <tbody>
-            {servers.map((s) => (
+            {filteredServers.map((s) => (
               <tr key={s.id} className="hover:bg-gray-800/30 transition-colors"
                 style={{ borderBottom: '1px solid var(--border-weak)' }}>
                 <td className="px-3 py-2 text-white font-medium" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</td>
@@ -516,6 +857,12 @@ export default function Servers() {
                     ? <span className="inline-flex items-center gap-1 text-xs text-blue-300 bg-blue-900/30 border border-blue-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>🪟 Windows</span>
                     : s.os_type === 'linux'
                       ? <span className="inline-flex items-center gap-1 text-xs text-green-300 bg-green-900/30 border border-green-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>🐧 Linux</span>
+                    : s.os_type === 'router'
+                      ? <span className="inline-flex items-center gap-1 text-xs text-orange-300 bg-orange-900/30 border border-orange-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>📡 Router</span>
+                    : s.os_type === 'access-point'
+                      ? <span className="inline-flex items-center gap-1 text-xs text-purple-300 bg-purple-900/30 border border-purple-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>📶 AP</span>
+                    : s.os_type === 'switch'
+                      ? <span className="inline-flex items-center gap-1 text-xs text-cyan-300 bg-cyan-900/30 border border-cyan-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>🔀 Switch</span>
                       : <span className="text-xs text-gray-500">—</span>
                   }
                 </td>
@@ -525,22 +872,61 @@ export default function Servers() {
                 <td className="px-3 py-2 text-gray-300 font-mono text-xs" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.hostname}:{s.ssh_port}</td>
                 <td className="px-3 py-2"><Badge label={s.environment} /></td>
                 <td className="px-3 py-2">
-                  {!s.management_key_id
-                    ? <Badge label="Not set up" variant="high" />
-                    : s.host_key_verified
-                      ? <Badge label="Ready" variant="ok" />
-                      : <Badge label="Unverified" variant="medium" />}
+                  {s.os_type === 'windows'
+                    ? s.windows_rdp_ready
+                      ? <Badge label="RDP Ready" variant="ok" />
+                      : <Badge label="Not set up" variant="high" />
+                    : !s.management_key_id
+                      ? <Badge label="Not set up" variant="high" />
+                      : s.host_key_verified
+                        ? <Badge label="Ready" variant="ok" />
+                        : <Badge label="Unverified" variant="medium" />}
                 </td>
                 <td className="px-3 py-2 text-gray-400 text-xs" title={new Date(s.created_at).toLocaleString()}>{new Date(s.created_at).toLocaleDateString()}</td>
                 <td className="px-3 py-2 text-gray-400 text-xs">{s.last_connected_at ? new Date(s.last_connected_at).toLocaleDateString() : <span className="text-gray-600">Never</span>}</td>
                 <td className="px-3 py-2">
                   <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', alignItems: 'center' }}>
-                    {!s.management_key_id ? (
-                      <button onClick={() => openSetup(s.id)}
+                    {s.os_type === 'windows' ? (
+                      <>
+                        {!s.windows_rdp_ready && (
+                          <button onClick={() => openSetup(s)}
+                            className="px-2 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium whitespace-nowrap">
+                            ⚙ Setup RDP
+                          </button>
+                        )}
+                        {!s.management_key_id ? (
+                          <button onClick={() => openSshSetup(s)}
+                            title="Setup SSH access (OpenSSH must be installed on the Windows server)"
+                            className="px-2 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium whitespace-nowrap">
+                            ⚙ Setup SSH
+                          </button>
+                        ) : (
+                          <button onClick={() => openSshSetup(s)}
+                            title="Re-run SSH setup with username & password"
+                            className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-yellow-600 text-gray-300 hover:text-white transition-colors whitespace-nowrap">
+                            ⚙ Re-setup SSH
+                          </button>
+                        )}
+                      </>
+                    ) : (s.os_type === 'router' || s.os_type === 'access-point' || s.os_type === 'switch') ? (
+                      !s.management_key_id && (
+                        <button onClick={() => openSetup(s)}
+                          className="px-2 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium whitespace-nowrap">
+                          ⚙ Setup SSH
+                        </button>
+                      )
+                    ) : !s.management_key_id ? (
+                      <button onClick={() => openSetup(s)}
                         className="px-2 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium whitespace-nowrap">
                         ⚙ Setup
                       </button>
                     ) : (
+                      <>
+                      <button onClick={() => openSetup(s)}
+                        title="Re-run setup with username & password (fixes host key mismatch)"
+                        className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-yellow-600 text-gray-300 hover:text-white transition-colors whitespace-nowrap">
+                        ⚙ Re-setup
+                      </button>
                       <button onClick={() => testConnection(s.id)}
                         title={
                           testResults[s.id] === 'ok' && testKeyInfo[s.id]
@@ -559,24 +945,50 @@ export default function Servers() {
                           : testResults[s.id] === 'failed' ? '✗ Fail'
                           : 'Test'}
                       </button>
+                      </>
                     )}
-                    <button onClick={() => verifyHostKey(s.id)} disabled={verifyResults[s.id] === 'verifying'}
-                      className={`px-2 py-1 text-xs rounded transition-colors disabled:opacity-60 whitespace-nowrap ${
-                        verifyResults[s.id] === 'ok' ? 'bg-green-700 text-white'
-                        : verifyResults[s.id] === 'mismatch' || verifyResults[s.id] === 'failed' ? 'bg-red-700 text-white'
-                        : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
-                      {verifyResults[s.id] === 'verifying' ? '…' : verifyResults[s.id] === 'ok' ? '✓ Verified'
-                        : verifyResults[s.id] === 'mismatch' ? '✗ Mismatch' : verifyResults[s.id] === 'failed' ? '✗ Failed' : 'Verify'}
-                    </button>
+                    {s.os_type !== 'windows' && (
+                      <button onClick={() => verifyHostKey(s.id)} disabled={verifyResults[s.id] === 'verifying'}
+                        className={`px-2 py-1 text-xs rounded transition-colors disabled:opacity-60 whitespace-nowrap ${
+                          verifyResults[s.id] === 'ok' ? 'bg-green-700 text-white'
+                          : verifyResults[s.id] === 'mismatch' || verifyResults[s.id] === 'failed' ? 'bg-red-700 text-white'
+                          : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
+                        {verifyResults[s.id] === 'verifying' ? '…' : verifyResults[s.id] === 'ok' ? '✓ Verified'
+                          : verifyResults[s.id] === 'mismatch' ? '✗ Mismatch' : verifyResults[s.id] === 'failed' ? '✗ Failed' : 'Verify'}
+                      </button>
+                    )}
                     <button onClick={() => openEdit(s)}
                       className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors whitespace-nowrap">
                       Edit
                     </button>
-                    {s.management_key_id && (
+                    {(s.management_key_id || s.os_type === 'windows') && (
                       <button onClick={() => openInfo(s)}
                         className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors whitespace-nowrap">
                         Info
                       </button>
+                    )}
+                    {s.os_type === 'windows' && (
+                      <>
+                        <button
+                          onClick={() => checkRdpPort(s)}
+                          disabled={rdpCheckResults[s.id] === 'checking'}
+                          title="Check if RDP port (3389) is reachable"
+                          className={`px-2 py-1 text-xs rounded transition-colors whitespace-nowrap disabled:opacity-60 ${
+                            rdpCheckResults[s.id] === 'up'   ? 'bg-green-700 text-white' :
+                            rdpCheckResults[s.id] === 'down' ? 'bg-red-700 text-white' :
+                            'bg-gray-600 hover:bg-gray-500 text-white'
+                          }`}>
+                          {rdpCheckResults[s.id] === 'checking' ? '…' :
+                           rdpCheckResults[s.id] === 'up'       ? '✓ RDP Up' :
+                           rdpCheckResults[s.id] === 'down'     ? '✗ Unreachable' :
+                           'Check'}
+                        </button>
+                        <button onClick={() => openRdpTab(s)}
+                          className="px-2 py-1 text-xs rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors whitespace-nowrap"
+                          title="Open Remote Desktop (RDP) in browser">
+                          🖥 RDP
+                        </button>
+                      </>
                     )}
                     <button onClick={() => deleteServer(s)}
                       className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors whitespace-nowrap">
@@ -611,13 +1023,23 @@ export default function Servers() {
                   className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" required />
               </label>
             ))}
-            <label className="block">
-              <span className="text-sm text-gray-400">Environment</span>
-              <select value={addForm.environment} onChange={(e) => setAddForm((f) => ({ ...f, environment: e.target.value }))}
-                className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                {envOptions.map((v) => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-sm text-gray-400">Environment</span>
+                <select value={addForm.environment} onChange={(e) => setAddForm((f) => ({ ...f, environment: e.target.value }))}
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  {envOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-sm text-gray-400">Device Type</span>
+                <select value={addForm.os_type} onChange={(e) => setAddForm((f) => ({ ...f, os_type: e.target.value as typeof f.os_type }))}
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  <option value="linux">🐧 Linux Server</option>
+                  <option value="windows">🪟 Windows Server</option>
+                </select>
+              </label>
+            </div>
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setShowAdd(false)} className="flex-1 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm transition-colors">Cancel</button>
               <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Add Server</button>
@@ -639,13 +1061,23 @@ export default function Servers() {
                   className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" required />
               </label>
             ))}
-            <label className="block">
-              <span className="text-sm text-gray-400">Environment</span>
-              <select value={editForm.environment} onChange={(e) => setEditForm((f) => ({ ...f, environment: e.target.value }))}
-                className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                {envOptions.map((v) => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-sm text-gray-400">Environment</span>
+                <select value={editForm.environment} onChange={(e) => setEditForm((f) => ({ ...f, environment: e.target.value }))}
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  {envOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-sm text-gray-400">Device Type</span>
+                <select value={editForm.os_type} onChange={(e) => setEditForm((f) => ({ ...f, os_type: e.target.value as typeof f.os_type }))}
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  <option value="linux">🐧 Linux Server</option>
+                  <option value="windows">🪟 Windows Server</option>
+                </select>
+              </label>
+            </div>
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setEditServer(null)} className="flex-1 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm transition-colors">Cancel</button>
               <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Save Changes</button>
@@ -657,52 +1089,278 @@ export default function Servers() {
       {/* Server Info Modal */}
       {infoServer && (
         <Modal title={`Server Info — ${infoServer.name}`} onClose={() => setInfoServer(null)} size="lg">
-          {infoLoading && !serverInfo && (
+          {infoLoading && !serverInfo && infoServer?.os_type !== 'windows' && (
             <div className="py-8 text-center space-y-3">
               <div className="inline-block w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
               <p className="text-gray-300 text-sm">Connecting and gathering system info…</p>
             </div>
           )}
           {infoError && <p className="text-red-400 text-sm py-4">{infoError}</p>}
+          {/* Windows servers render the credential UI; SSH scan runs in background */}
+          {infoServer?.os_type === 'windows' && !serverInfo && (
+            <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border-med)', flexShrink: 0 }}>
+                {(['credentials', 'users'] as const).map(t => (
+                  <button key={t} type="button" onMouseDown={e => e.preventDefault()} onClick={() => setInfoTab(t)}
+                    style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer', background: 'none', border: 'none', borderBottom: infoTab === t ? '2px solid var(--accent-hex)' : '2px solid transparent', color: infoTab === t ? 'var(--accent-hex)' : 'var(--text-secondary)', marginBottom: -1 }}>
+                    {t === 'credentials' ? `🔑 RDP Credentials (${winCreds.filter(c => !c.is_archived).length})` : `🐧 SSH Users (${credentials.filter(c => c.category === 'linux' && !c.is_archived).length})`}
+                  </button>
+                ))}
+              </div>
+              <div style={{ height: 480, overflowY: 'auto', paddingTop: 16, paddingRight: 18 }}>
+                {/* reuse same windows creds UI via a synthetic tab check */}
+                {/* RDP Credentials tab */}
+                {infoTab === 'credentials' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-gray-500">RDP credentials stored in the vault. Use these to connect via Remote Desktop.</p>
+                        <button onClick={() => { setShowAddWinCred(true); setAddWinCredError('') }}
+                          className="px-3 py-1.5 text-xs bg-blue-700 hover:bg-blue-600 text-white rounded-lg transition-colors font-medium">+ Add Credential</button>
+                      </div>
+                      {showAddWinCred && (
+                        <div className="bg-gray-800 border border-blue-700/50 rounded-lg p-4 space-y-3">
+                          <p className="text-sm font-semibold text-white">New RDP Credential</p>
+                          {addWinCredError && <p className="text-red-400 text-xs">{addWinCredError}</p>}
+                          <div className="grid grid-cols-2 gap-3">
+                            <label className="block"><span className="text-xs text-gray-400">Username</span>
+                              <input value={addWinCredForm.username} onChange={e => setAddWinCredForm(f => ({ ...f, username: e.target.value }))} placeholder="Administrator"
+                                className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" /></label>
+                            <label className="block"><span className="text-xs text-gray-400">Domain <span className="text-gray-600">(optional)</span></span>
+                              <input value={addWinCredForm.domain} onChange={e => setAddWinCredForm(f => ({ ...f, domain: e.target.value }))} placeholder="CONTOSO"
+                                className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" /></label>
+                          </div>
+                          <label className="block"><span className="text-xs text-gray-400">Password</span>
+                            <div className="relative mt-1">
+                              <input type={addWinCredForm.show_pw ? 'text' : 'password'} value={addWinCredForm.password} onChange={e => setAddWinCredForm(f => ({ ...f, password: e.target.value }))}
+                                className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 pr-14" />
+                              <button type="button" onClick={() => setAddWinCredForm(f => ({ ...f, show_pw: !f.show_pw }))}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-200">{addWinCredForm.show_pw ? 'Hide' : 'Show'}</button>
+                            </div>
+                          </label>
+                          <div className="flex gap-2 pt-1">
+                            <button onClick={() => setShowAddWinCred(false)} className="flex-1 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
+                            <button onClick={() => addWinCred(infoServer!.id)} disabled={addWinCredWorking || !addWinCredForm.username || !addWinCredForm.password}
+                              className="flex-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium transition-colors">{addWinCredWorking ? 'Saving…' : 'Save Credential'}</button>
+                          </div>
+                        </div>
+                      )}
+                      {winCredsLoading && <p className="text-center text-gray-500 text-sm py-4">Loading…</p>}
+                      {winCreds.filter(c => !c.is_archived).map(c => {
+                        const domain = c.notes?.match(/^Domain:\s*(.+)$/im)?.[1]
+                        return (
+                          <div key={c.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
+                            {editWinCred?.id === c.id ? (
+                              <div className="space-y-2">
+                                <p className="text-xs font-semibold text-white">Edit Credential</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {[['Label','label'],['Username','username'],['Domain','domain']].map(([lbl, fld]) => (
+                                    <label key={fld} className="block"><span className="text-xs text-gray-400">{lbl}</span>
+                                      <input value={(editWinCredForm as Record<string,string>)[fld]} onChange={e => setEditWinCredForm(f => ({ ...f, [fld]: e.target.value }))}
+                                        className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" /></label>
+                                  ))}
+                                  <label className="block"><span className="text-xs text-gray-400">New Password <span className="text-gray-600">(blank = keep)</span></span>
+                                    <input type="password" value={editWinCredForm.password} onChange={e => setEditWinCredForm(f => ({ ...f, password: e.target.value }))} placeholder="Leave blank to keep current"
+                                      className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" /></label>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={() => setEditWinCred(null)} className="flex-1 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs">Cancel</button>
+                                  <button onClick={() => saveWinCred(infoServer!.id, c.id)} disabled={editWinCredWorking || !editWinCredForm.username}
+                                    className="flex-1 py-1 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium">{editWinCredWorking ? 'Saving…' : 'Save Changes'}</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-medium text-white">🔑 {c.label}</p>
+                                    <p className="text-xs text-gray-400 mt-0.5">User: <span className="text-gray-200 font-mono">{c.service_username ?? '—'}</span>{domain && <span className="ml-2">Domain: <span className="text-gray-200 font-mono">{domain}</span></span>}</p>
+                                  </div>
+                                  <div className="flex gap-1.5 shrink-0">
+                                    <button onClick={() => copyPasswordSilently(infoServer!.id, c.id, 'rdp')}
+                                      className={`px-2 py-0.5 text-xs rounded transition-colors ${copiedCred === c.id ? 'bg-green-700 text-white' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
+                                      {copiedCred === c.id ? '✓ Copied' : '📋 Copy'}
+                                    </button>
+                                    <button onClick={() => { setEditWinCred(c); const dom = c.notes?.match(/^Domain:\s*(.+)$/im)?.[1] ?? ''; setEditWinCredForm({ label: c.label, username: c.service_username ?? '', password: '', domain: dom }) }}
+                                      className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white">Edit</button>
+                                    <button onClick={() => deleteWinCred(infoServer!.id, c.id, false)}
+                                      className="px-2 py-0.5 text-xs rounded bg-red-800 hover:bg-red-700 text-white">Archive</button>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {revealedWinPasswords[c.id]
+                                    ? <span className="font-mono text-xs text-green-300 bg-gray-900 px-2 py-1 rounded select-all">{revealedWinPasswords[c.id]}</span>
+                                    : <button onClick={() => revealWinPassword(infoServer!.id, c.id)} className="text-xs text-blue-400 hover:text-blue-300">🔍 Reveal password</button>
+                                  }
+                                  {revealedWinPasswords[c.id] && <button onClick={() => setRevealedWinPasswords(p => { const n = { ...p }; delete n[c.id]; return n })} className="text-xs text-gray-500 hover:text-gray-300">Hide</button>}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {winCreds.some(c => c.is_archived) && (
+                        <details className="mt-2">
+                          <summary className="text-xs text-gray-500 cursor-pointer">Archived ({winCreds.filter(c => c.is_archived).length})</summary>
+                          <div className="mt-2 space-y-1.5">
+                            {winCreds.filter(c => c.is_archived).map(c => (
+                              <div key={c.id} className="bg-gray-900 border border-gray-700/50 rounded p-2.5 space-y-1.5 opacity-70">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs text-gray-400">🗄 {c.label} — {c.service_username}</span>
+                                  <div className="flex gap-1.5 shrink-0">
+                                    <button onClick={() => revealedWinPasswords[c.id] ? setRevealedWinPasswords(p => { const n={...p}; delete n[c.id]; return n }) : revealWinPassword(infoServer!.id, c.id)}
+                                      className="px-2 py-0.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300">{revealedWinPasswords[c.id] ? 'Hide' : '🔍 Reveal'}</button>
+                                    <button onClick={() => deleteWinCred(infoServer!.id, c.id, true)} className="px-2 py-0.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300">Delete</button>
+                                  </div>
+                                </div>
+                                {revealedWinPasswords[c.id] && <span className="font-mono text-xs text-green-300 bg-gray-950 px-2 py-1 rounded select-all block break-all">{revealedWinPasswords[c.id]}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      {winCreds.length === 0 && !winCredsLoading && !showAddWinCred && (
+                        <p className="text-gray-500 text-sm text-center py-6">No RDP credentials stored. Click "Add Credential" to save one.</p>
+                      )}
+                    </div>
+                )}
+                {/* SSH Users tab */}
+                {infoTab === 'users' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-gray-500">SSH user credentials for Windows OpenSSH. Stored encrypted in the vault.</p>
+                      <button onClick={() => { setShowCredForm(true); setCredFormError(''); setCredForm({ category: 'linux', linux_user: '', service_name: '', service_username: '', label: '', password: '', notes: '', apply_on_server: false }) }}
+                        className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors font-medium">+ Add SSH User</button>
+                    </div>
+                    {showCredForm && (
+                      <div className="bg-gray-800 border border-indigo-700/50 rounded-lg p-4 space-y-3">
+                        <p className="text-sm font-semibold text-white">New SSH User</p>
+                        {credFormError && <p className="text-red-400 text-xs">{credFormError}</p>}
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="block"><span className="text-xs text-gray-400">Label</span>
+                            <input value={credForm.label} onChange={e => setCredForm(f => ({ ...f, label: e.target.value }))} placeholder="e.g. admin account"
+                              className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                          <label className="block"><span className="text-xs text-gray-400">Username</span>
+                            <input value={credForm.linux_user} onChange={e => setCredForm(f => ({ ...f, linux_user: e.target.value }))} placeholder="Administrator"
+                              className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                        </div>
+                        <label className="block"><span className="text-xs text-gray-400">Password</span>
+                          <input type="password" value={credForm.password} onChange={e => setCredForm(f => ({ ...f, password: e.target.value }))}
+                            className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                        <label className="block"><span className="text-xs text-gray-400">Notes <span className="text-gray-600">(optional)</span></span>
+                          <input value={credForm.notes} onChange={e => setCredForm(f => ({ ...f, notes: e.target.value }))}
+                            className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                        <div className="flex gap-2 pt-1">
+                          <button onClick={() => setShowCredForm(false)} className="flex-1 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
+                          <button onClick={() => createCredential(infoServer!.id)} disabled={credFormWorking || !credForm.label || !credForm.password}
+                            className="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium transition-colors">{credFormWorking ? 'Saving…' : 'Save to Vault'}</button>
+                        </div>
+                      </div>
+                    )}
+                    {credLoading && <p className="text-center text-gray-500 text-sm py-4">Loading…</p>}
+                    {credentials.filter(c => c.category === 'linux' && !c.is_archived).map(c => {
+                      const isRevealed = !!revealedPasswords[c.id]
+                      return (
+                        <div key={c.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-medium text-white">🐧 {c.label}</p>
+                              {c.linux_user && <p className="text-xs text-gray-400 mt-0.5">User: <span className="text-gray-200 font-mono">{c.linux_user}</span></p>}
+                              {c.notes && <p className="text-xs text-gray-500 mt-0.5">{c.notes}</p>}
+                            </div>
+                            <div className="flex gap-1.5 shrink-0">
+                              <button onClick={() => copyPasswordSilently(infoServer!.id, c.id, 'linux')}
+                                className={`px-2 py-0.5 text-xs rounded transition-colors ${copiedCred === c.id ? 'bg-green-700 text-white' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
+                                {copiedCred === c.id ? '✓ Copied' : '📋 Copy'}
+                              </button>
+                              <button onClick={() => isRevealed ? hidePassword(c.id) : revealPassword(infoServer!.id, c.id)}
+                                className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors">
+                                {isRevealed ? 'Hide' : '🔍 Reveal'}
+                              </button>
+                              <button onClick={() => deleteCredential(infoServer!.id, c.id)}
+                                className="px-2 py-0.5 text-xs rounded bg-red-800 hover:bg-red-700 text-white transition-colors">Archive</button>
+                            </div>
+                          </div>
+                          {isRevealed && (
+                            <span className="font-mono text-xs text-green-300 bg-gray-900 px-2 py-1 rounded select-all block break-all">{revealedPasswords[c.id]}</span>
+                          )}
+                        </div>
+                      )
+                    })}
+                    {credentials.filter(c => c.category === 'linux' && !c.is_archived).length === 0 && !credLoading && !showCredForm && (
+                      <p className="text-gray-500 text-sm text-center py-6">No SSH users stored. Click "Add SSH User" to save one.</p>
+                    )}
+                    {credentials.some(c => c.category === 'linux' && c.is_archived) && (
+                      <details className="mt-2">
+                        <summary className="text-xs text-gray-500 cursor-pointer">Archived ({credentials.filter(c => c.category === 'linux' && c.is_archived).length})</summary>
+                        <div className="mt-2 space-y-1.5">
+                          {credentials.filter(c => c.category === 'linux' && c.is_archived).map(c => (
+                            <div key={c.id} className="bg-gray-900 border border-gray-700/50 rounded p-2.5 space-y-1.5 opacity-70">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs text-gray-400">🗄 {c.label} — {c.linux_user}</span>
+                                <div className="flex gap-1.5 shrink-0">
+                                  <button onClick={() => revealedPasswords[c.id] ? hidePassword(c.id) : revealPassword(infoServer!.id, c.id)}
+                                    className="px-2 py-0.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300">{revealedPasswords[c.id] ? 'Hide' : '🔍 Reveal'}</button>
+                                  <button onClick={() => deleteCredential(infoServer!.id, c.id)} className="px-2 py-0.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300">Delete</button>
+                                </div>
+                              </div>
+                              {revealedPasswords[c.id] && <span className="font-mono text-xs text-green-300 bg-gray-950 px-2 py-1 rounded select-all block break-all">{revealedPasswords[c.id]}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           {serverInfo && (
             <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
               {/* Tabs */}
               <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border-med)', flexShrink: 0, flexWrap: 'wrap' }}>
-                {(['overview', 'users', 'keys', 'credentials', 'software', 'recommendations'] as const).map((t) => (
+                {(infoServer?.os_type === 'windows'
+                  ? (['overview', 'credentials', 'users'] as const)
+                  : (['overview', 'users', 'keys', 'credentials', 'software', 'recommendations', 'benchmark', 'ai'] as const)
+                ).map((t) => (
                   <button key={t}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       setInfoTab(t as typeof infoTab)
                       setShowAddUser(false)
+                      setEditUserTarget(null)
                       setPushKeyTarget(null)
-                      if (t === 'software' && software.length === 0 && !softwareLoading) {
-                        loadSoftware(infoServer!.id)
-                      }
-                      if (t === 'recommendations' && recommendations.length === 0 && !recLoading) {
-                        loadRecommendations(infoServer!.id)
-                      }
+                      if (t === 'software' && software.length === 0 && !softwareLoading) loadSoftware(infoServer!.id)
+                      if (t === 'recommendations' && recommendations.length === 0 && !recLoading) loadRecommendations(infoServer!.id)
+                      if (t === 'benchmark' && !benchmark && !benchmarkLoading) loadBenchmark(infoServer!.id)
                     }}
                     style={{
-                      padding: '9px 14px',
-                      fontSize: 13, fontWeight: 500,
+                      padding: '9px 14px', fontSize: 13, fontWeight: 500,
                       cursor: 'pointer', background: 'none', border: 'none',
                       borderBottom: infoTab === t ? '2px solid var(--accent-hex)' : '2px solid transparent',
                       color: infoTab === t ? 'var(--accent-hex)' : 'var(--text-secondary)',
-                      marginBottom: -1,
-                      transition: 'color 0.1s',
-                      whiteSpace: 'nowrap',
+                      marginBottom: -1, transition: 'color 0.1s', whiteSpace: 'nowrap',
                     }}>
                     {t === 'keys' ? 'Auth Keys'
-                      : t === 'users' ? `Users (${serverInfo.users.length})`
-                      : t === 'credentials' ? `Vault (${credentials.filter((c) => !c.is_archived).length})`
+                      : t === 'users'
+                        ? infoServer?.os_type === 'windows'
+                          ? `🐧 SSH Users (${credentials.filter(c => c.category === 'linux' && !c.is_archived).length})`
+                          : `Users (${serverInfo.users.length})`
+                      : t === 'credentials'
+                        ? infoServer?.os_type === 'windows'
+                          ? `🔑 RDP Credentials (${winCreds.filter(c => !c.is_archived).length})`
+                          : `Vault (${credentials.filter((c) => !c.is_archived).length})`
                       : t === 'software' ? '📦 Software'
                       : t === 'recommendations' ? '💡 Best Practices'
+                      : t === 'benchmark' ? '🔐 Security Benchmark'
+                      : t === 'ai' ? '🤖 AI Analyst'
                       : 'Overview'}
                   </button>
                 ))}
               </div>
 
-              {/* Tab content — fixed height with scroll so modal doesn't grow unbounded */}
-              <div style={{ minHeight: 420, maxHeight: 520, overflowY: 'auto', paddingTop: 16 }}>
+              {/* Tab content — fixed height prevents layout shift when content changes */}
+              <div style={{ height: 480, overflowY: 'auto', paddingTop: 16, paddingRight: 18 }}>
 
               {/* Overview Tab */}
               {infoTab === 'overview' && (
@@ -794,10 +1452,97 @@ export default function Servers() {
               )}
 
               {/* Users Tab */}
-              {infoTab === 'users' && (
+              {infoTab === 'users' && infoServer?.os_type === 'windows' && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <p className="text-xs text-gray-500">{serverInfo?.os_type === 'windows' ? 'Local user accounts on this Windows Server.' : 'Linux users with uid ≥ 1000 (and root). Click a row to push an SSH key or delete.'}</p>
+                    <p className="text-xs text-gray-500">SSH user credentials for Windows OpenSSH. Stored encrypted in the vault.</p>
+                    <button onClick={() => { setShowCredForm(true); setCredFormError(''); setCredForm({ category: 'linux', linux_user: '', service_name: '', service_username: '', label: '', password: '', notes: '', apply_on_server: false }) }}
+                      className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors font-medium">+ Add SSH User</button>
+                  </div>
+                  {showCredForm && (
+                    <div className="bg-gray-800 border border-indigo-700/50 rounded-lg p-4 space-y-3">
+                      <p className="text-sm font-semibold text-white">New SSH User</p>
+                      {credFormError && <p className="text-red-400 text-xs">{credFormError}</p>}
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="block"><span className="text-xs text-gray-400">Label</span>
+                          <input value={credForm.label} onChange={e => setCredForm(f => ({ ...f, label: e.target.value }))} placeholder="e.g. admin account"
+                            className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                        <label className="block"><span className="text-xs text-gray-400">Username</span>
+                          <input value={credForm.linux_user} onChange={e => setCredForm(f => ({ ...f, linux_user: e.target.value }))} placeholder="Administrator"
+                            className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                      </div>
+                      <label className="block"><span className="text-xs text-gray-400">Password</span>
+                        <input type="password" value={credForm.password} onChange={e => setCredForm(f => ({ ...f, password: e.target.value }))}
+                          className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                      <label className="block"><span className="text-xs text-gray-400">Notes <span className="text-gray-600">(optional)</span></span>
+                        <input value={credForm.notes} onChange={e => setCredForm(f => ({ ...f, notes: e.target.value }))}
+                          className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                      <div className="flex gap-2 pt-1">
+                        <button onClick={() => setShowCredForm(false)} className="flex-1 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
+                        <button onClick={() => createCredential(infoServer!.id)} disabled={credFormWorking || !credForm.label || !credForm.password}
+                          className="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium transition-colors">{credFormWorking ? 'Saving…' : 'Save to Vault'}</button>
+                      </div>
+                    </div>
+                  )}
+                  {credLoading && <p className="text-center text-gray-500 text-sm py-4">Loading…</p>}
+                  {credentials.filter(c => c.category === 'linux' && !c.is_archived).map(c => {
+                    const isRevealed = !!revealedPasswords[c.id]
+                    return (
+                      <div key={c.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-white">🐧 {c.label}</p>
+                            {c.linux_user && <p className="text-xs text-gray-400 mt-0.5">User: <span className="text-gray-200 font-mono">{c.linux_user}</span></p>}
+                            {c.notes && <p className="text-xs text-gray-500 mt-0.5">{c.notes}</p>}
+                          </div>
+                          <div className="flex gap-1.5 shrink-0">
+                            <button onClick={() => copyPasswordSilently(infoServer!.id, c.id, 'linux')}
+                              className={`px-2 py-0.5 text-xs rounded transition-colors ${copiedCred === c.id ? 'bg-green-700 text-white' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
+                              {copiedCred === c.id ? '✓ Copied' : '📋 Copy'}
+                            </button>
+                            <button onClick={() => isRevealed ? hidePassword(c.id) : revealPassword(infoServer!.id, c.id)}
+                              className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors">
+                              {isRevealed ? 'Hide' : '🔍 Reveal'}
+                            </button>
+                            <button onClick={() => deleteCredential(infoServer!.id, c.id)}
+                              className="px-2 py-0.5 text-xs rounded bg-red-800 hover:bg-red-700 text-white transition-colors">Archive</button>
+                          </div>
+                        </div>
+                        {isRevealed && (
+                          <span className="font-mono text-xs text-green-300 bg-gray-900 px-2 py-1 rounded select-all block break-all">{revealedPasswords[c.id]}</span>
+                        )}
+                      </div>
+                    )
+                  })}
+                  {credentials.filter(c => c.category === 'linux' && !c.is_archived).length === 0 && !credLoading && !showCredForm && (
+                    <p className="text-gray-500 text-sm text-center py-6">No SSH users stored. Click "Add SSH User" to save one.</p>
+                  )}
+                  {credentials.some(c => c.category === 'linux' && c.is_archived) && (
+                    <details className="mt-2">
+                      <summary className="text-xs text-gray-500 cursor-pointer">Archived ({credentials.filter(c => c.category === 'linux' && c.is_archived).length})</summary>
+                      <div className="mt-2 space-y-1.5">
+                        {credentials.filter(c => c.category === 'linux' && c.is_archived).map(c => (
+                          <div key={c.id} className="bg-gray-900 border border-gray-700/50 rounded p-2.5 space-y-1.5 opacity-70">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs text-gray-400">🗄 {c.label} — {c.linux_user}</span>
+                              <div className="flex gap-1.5 shrink-0">
+                                <button onClick={() => revealedPasswords[c.id] ? hidePassword(c.id) : revealPassword(infoServer!.id, c.id)}
+                                  className="px-2 py-0.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300">{revealedPasswords[c.id] ? 'Hide' : '🔍 Reveal'}</button>
+                                <button onClick={() => deleteCredential(infoServer!.id, c.id)} className="px-2 py-0.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300">Delete</button>
+                              </div>
+                            </div>
+                            {revealedPasswords[c.id] && <span className="font-mono text-xs text-green-300 bg-gray-950 px-2 py-1 rounded select-all block break-all">{revealedPasswords[c.id]}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+              {infoTab === 'users' && infoServer?.os_type !== 'windows' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-gray-500">Linux users with uid ≥ 1000 (and root). Click a row to push an SSH key or delete.</p>
                     <button onClick={() => { setShowAddUser(true); setPushKeyTarget(null) }}
                       className="px-3 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium">
                       + Add User
@@ -832,16 +1577,75 @@ export default function Servers() {
                             <option value="/bin/false">/bin/false (no login)</option>
                           </select>
                         </label>
+                        <label className="block col-span-2">
+                          <span className="text-xs text-gray-400">Password <span className="text-gray-600">(optional — set login password via chpasswd)</span></span>
+                          <input type="password" value={addUserForm.password} onChange={(e) => setAddUserForm((f) => ({ ...f, password: e.target.value }))}
+                            placeholder="Leave blank for no password (SSH key only)"
+                            className="mt-1 w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                        </label>
                       </div>
-                      <label className="flex items-center gap-2">
-                        <input type="checkbox" checked={addUserForm.system_user} onChange={(e) => setAddUserForm((f) => ({ ...f, system_user: e.target.checked }))} className="rounded" />
-                        <span className="text-xs text-gray-400">System user <span className="text-gray-600">(uid &lt; 1000, no home dir, for services/daemons)</span></span>
-                      </label>
+                      <div className="flex items-center gap-4">
+                        <label className="flex items-center gap-2">
+                          <input type="checkbox" checked={addUserForm.system_user} onChange={(e) => setAddUserForm((f) => ({ ...f, system_user: e.target.checked }))} className="rounded" />
+                          <span className="text-xs text-gray-400">System user</span>
+                        </label>
+                        {addUserForm.password && (
+                          <label className="flex items-center gap-2">
+                            <input type="checkbox" checked={addUserForm.save_to_vault} onChange={(e) => setAddUserForm((f) => ({ ...f, save_to_vault: e.target.checked }))} className="rounded" />
+                            <span className="text-xs text-gray-400">Save password to vault</span>
+                          </label>
+                        )}
+                      </div>
                       <div className="flex gap-2 pt-1">
                         <button type="button" onClick={() => setShowAddUser(false)} className="flex-1 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
                         <button type="submit" disabled={addUserWorking}
                           className="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors disabled:opacity-50">
                           {addUserWorking ? 'Creating…' : 'Create User'}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Edit User Panel */}
+                  {editUserTarget && (
+                    <form onSubmit={saveEditUser} className="bg-gray-800 border border-indigo-700 rounded-lg p-3 space-y-3">
+                      <p className="text-sm font-medium text-white">Edit User — <span className="font-mono text-indigo-300">{editUserTarget}</span></p>
+                      {editUserError && <p className="text-red-400 text-xs">{editUserError}</p>}
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="block">
+                          <span className="text-xs text-gray-400">Shell</span>
+                          <select value={editUserForm.shell} onChange={(e) => setEditUserForm((f) => ({ ...f, shell: e.target.value }))}
+                            className="mt-1 w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="/bin/bash">/bin/bash</option>
+                            <option value="/bin/sh">/bin/sh</option>
+                            <option value="/usr/sbin/nologin">/usr/sbin/nologin (no login)</option>
+                            <option value="/bin/false">/bin/false (no login)</option>
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="text-xs text-gray-400">Full Name / Comment</span>
+                          <input value={editUserForm.comment} onChange={(e) => setEditUserForm((f) => ({ ...f, comment: e.target.value }))}
+                            placeholder="Leave blank to keep current"
+                            className="mt-1 w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                        </label>
+                        <label className="block col-span-2">
+                          <span className="text-xs text-gray-400">New Password <span className="text-gray-600">(leave blank to keep current)</span></span>
+                          <input type="password" value={editUserForm.password} onChange={(e) => setEditUserForm((f) => ({ ...f, password: e.target.value }))}
+                            placeholder="New login password"
+                            className="mt-1 w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                        </label>
+                      </div>
+                      {editUserForm.password && (
+                        <label className="flex items-center gap-2">
+                          <input type="checkbox" checked={editUserForm.save_to_vault} onChange={(e) => setEditUserForm((f) => ({ ...f, save_to_vault: e.target.checked }))} className="rounded" />
+                          <span className="text-xs text-gray-400">Save new password to vault (archives old)</span>
+                        </label>
+                      )}
+                      <div className="flex gap-2 pt-1">
+                        <button type="button" onClick={() => setEditUserTarget(null)} className="flex-1 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
+                        <button type="submit" disabled={editUserWorking}
+                          className="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors disabled:opacity-50">
+                          {editUserWorking ? 'Saving…' : 'Save Changes'}
                         </button>
                       </div>
                     </form>
@@ -899,10 +1703,17 @@ export default function Servers() {
                               <td className="py-2">
                                 <div className="flex gap-1.5">
                                   <button
-                                    onClick={() => { setPushKeyTarget(u.username); setShowAddUser(false); setPushKeyId(''); setPushKeyError('') }}
+                                    onClick={() => { setPushKeyTarget(u.username); setShowAddUser(false); setEditUserTarget(null); setPushKeyId(''); setPushKeyError('') }}
                                     className="px-2 py-0.5 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors">
                                     Push Key
                                   </button>
+                                  {!isProtected && (
+                                    <button
+                                      onClick={() => openEditUser(u)}
+                                      className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors">
+                                      Edit
+                                    </button>
+                                  )}
                                   {!isProtected && (
                                     <button
                                       onClick={() => deleteUser(u.username)}
@@ -979,8 +1790,171 @@ export default function Servers() {
                 </div>
               )}
 
+              {/* Windows RDP Credentials Tab (only for Windows servers) */}
+              {infoTab === 'credentials' && infoServer?.os_type === 'windows' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-gray-500">RDP credentials stored in the vault. Use these to connect via Remote Desktop.</p>
+                    <button onClick={() => { setShowAddWinCred(true); setAddWinCredError('') }}
+                      className="px-3 py-1.5 text-xs bg-blue-700 hover:bg-blue-600 text-white rounded-lg transition-colors font-medium">
+                      + Add Credential
+                    </button>
+                  </div>
+
+                  {showAddWinCred && (
+                    <div className="bg-gray-800 border border-blue-700/50 rounded-lg p-4 space-y-3">
+                      <p className="text-sm font-semibold text-white">New RDP Credential</p>
+                      {addWinCredError && <p className="text-red-400 text-xs">{addWinCredError}</p>}
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="block">
+                          <span className="text-xs text-gray-400">Username</span>
+                          <input value={addWinCredForm.username} onChange={e => setAddWinCredForm(f => ({ ...f, username: e.target.value }))}
+                            placeholder="Administrator"
+                            className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        </label>
+                        <label className="block">
+                          <span className="text-xs text-gray-400">Domain <span className="text-gray-600">(optional)</span></span>
+                          <input value={addWinCredForm.domain} onChange={e => setAddWinCredForm(f => ({ ...f, domain: e.target.value }))}
+                            placeholder="CONTOSO"
+                            className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        </label>
+                      </div>
+                      <label className="block">
+                        <span className="text-xs text-gray-400">Password</span>
+                        <div className="relative mt-1">
+                          <input type={addWinCredForm.show_pw ? 'text' : 'password'} value={addWinCredForm.password}
+                            onChange={e => setAddWinCredForm(f => ({ ...f, password: e.target.value }))}
+                            className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 pr-14" />
+                          <button type="button" onClick={() => setAddWinCredForm(f => ({ ...f, show_pw: !f.show_pw }))}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-200">
+                            {addWinCredForm.show_pw ? 'Hide' : 'Show'}
+                          </button>
+                        </div>
+                      </label>
+                      <div className="flex gap-2 pt-1">
+                        <button onClick={() => setShowAddWinCred(false)} className="flex-1 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
+                        <button onClick={() => addWinCred(infoServer!.id)} disabled={addWinCredWorking || !addWinCredForm.username || !addWinCredForm.password}
+                          className="flex-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium transition-colors">
+                          {addWinCredWorking ? 'Saving…' : 'Save Credential'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {winCredsLoading && <p className="text-center text-gray-500 text-sm py-4">Loading…</p>}
+
+                  {/* Active credentials */}
+                  {winCreds.filter(c => !c.is_archived).map(c => {
+                    const domain = c.notes?.match(/^Domain:\s*(.+)$/im)?.[1]
+                    return (
+                      <div key={c.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
+                        {editWinCred?.id === c.id ? (
+                          <div className="space-y-2">
+                            <p className="text-xs font-semibold text-white">Edit Credential</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              <label className="block">
+                                <span className="text-xs text-gray-400">Label</span>
+                                <input value={editWinCredForm.label} onChange={e => setEditWinCredForm(f => ({ ...f, label: e.target.value }))}
+                                  className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                              </label>
+                              <label className="block">
+                                <span className="text-xs text-gray-400">Username</span>
+                                <input value={editWinCredForm.username} onChange={e => setEditWinCredForm(f => ({ ...f, username: e.target.value }))}
+                                  className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                              </label>
+                              <label className="block">
+                                <span className="text-xs text-gray-400">Domain <span className="text-gray-600">(optional)</span></span>
+                                <input value={editWinCredForm.domain} onChange={e => setEditWinCredForm(f => ({ ...f, domain: e.target.value }))}
+                                  className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                              </label>
+                              <label className="block">
+                                <span className="text-xs text-gray-400">New Password <span className="text-gray-600">(blank = keep)</span></span>
+                                <input type="password" value={editWinCredForm.password} onChange={e => setEditWinCredForm(f => ({ ...f, password: e.target.value }))}
+                                  placeholder="Leave blank to keep current"
+                                  className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                              </label>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={() => setEditWinCred(null)} className="flex-1 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
+                              <button onClick={() => saveWinCred(infoServer!.id, c.id)} disabled={editWinCredWorking || !editWinCredForm.username}
+                                className="flex-1 py-1 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium transition-colors">
+                                {editWinCredWorking ? 'Saving…' : 'Save Changes'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-medium text-white">🔑 {c.label}</p>
+                                <p className="text-xs text-gray-400 mt-0.5">
+                                  User: <span className="text-gray-200 font-mono">{c.service_username ?? '—'}</span>
+                                  {domain && <span className="ml-2">Domain: <span className="text-gray-200 font-mono">{domain}</span></span>}
+                                </p>
+                              </div>
+                              <div className="flex gap-1.5 shrink-0">
+                                <button onClick={() => copyPasswordSilently(infoServer!.id, c.id, 'rdp')}
+                                  className={`px-2 py-0.5 text-xs rounded transition-colors ${copiedCred === c.id ? 'bg-green-700 text-white' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
+                                  {copiedCred === c.id ? '✓ Copied' : '📋 Copy'}
+                                </button>
+                                <button onClick={() => {
+                                    setEditWinCred(c)
+                                    const dom = c.notes?.match(/^Domain:\s*(.+)$/im)?.[1] ?? ''
+                                    setEditWinCredForm({ label: c.label, username: c.service_username ?? '', password: '', domain: dom })
+                                  }}
+                                  className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors">Edit</button>
+                                <button onClick={() => deleteWinCred(infoServer!.id, c.id, false)}
+                                  className="px-2 py-0.5 text-xs rounded bg-red-800 hover:bg-red-700 text-white transition-colors">Archive</button>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {revealedWinPasswords[c.id]
+                                ? <span className="font-mono text-xs text-green-300 bg-gray-900 px-2 py-1 rounded select-all">{revealedWinPasswords[c.id]}</span>
+                                : <button onClick={() => revealWinPassword(infoServer!.id, c.id)}
+                                    className="text-xs text-blue-400 hover:text-blue-300 transition-colors">🔍 Reveal password</button>
+                              }
+                              {revealedWinPasswords[c.id] && (
+                                <button onClick={() => setRevealedWinPasswords(p => { const n = { ...p }; delete n[c.id]; return n })}
+                                  className="text-xs text-gray-500 hover:text-gray-300">Hide</button>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+
+                  {/* Archived credentials */}
+                  {winCreds.some(c => c.is_archived) && (
+                    <details className="mt-2">
+                      <summary className="text-xs text-gray-500 cursor-pointer">Archived credentials ({winCreds.filter(c => c.is_archived).length})</summary>
+                      <div className="mt-2 space-y-1.5">
+                        {winCreds.filter(c => c.is_archived).map(c => (
+                          <div key={c.id} className="bg-gray-900 border border-gray-700/50 rounded p-2.5 space-y-1.5 opacity-70">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs text-gray-400">🗄 {c.label} — {c.service_username}</span>
+                              <div className="flex gap-1.5 shrink-0">
+                                <button onClick={() => revealedWinPasswords[c.id] ? setRevealedWinPasswords(p => { const n={...p}; delete n[c.id]; return n }) : revealWinPassword(infoServer!.id, c.id)}
+                                  className="px-2 py-0.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">{revealedWinPasswords[c.id] ? 'Hide' : '🔍 Reveal'}</button>
+                                <button onClick={() => deleteWinCred(infoServer!.id, c.id, true)}
+                                  className="px-2 py-0.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300 transition-colors">Delete</button>
+                              </div>
+                            </div>
+                            {revealedWinPasswords[c.id] && <span className="font-mono text-xs text-green-300 bg-gray-950 px-2 py-1 rounded select-all block break-all">{revealedWinPasswords[c.id]}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+
+                  {winCreds.length === 0 && !winCredsLoading && !showAddWinCred && (
+                    <p className="text-gray-500 text-sm text-center py-6">No RDP credentials stored. Click "Add Credential" to save one.</p>
+                  )}
+                </div>
+              )}
+
               {/* Credentials / Password Vault Tab */}
-              {infoTab === 'credentials' && (
+              {infoTab === 'credentials' && infoServer?.os_type !== 'windows' && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-gray-500">Passwords are encrypted with AES-256-GCM and stored in the vault. Reveal is audit-logged.</p>
@@ -1786,7 +2760,503 @@ export default function Servers() {
                 )
               })()}
 
+              {infoTab === 'benchmark' && (() => {
+                const STATUS_COLOR: Record<CheckStatus, string> = {
+                  pass: '#22c55e', warn: '#f59e0b', fail: '#ef4444', skip: '#6b7280',
+                }
+                const STATUS_BG: Record<CheckStatus, string> = {
+                  pass: 'rgba(34,197,94,0.1)', warn: 'rgba(245,158,11,0.1)', fail: 'rgba(239,68,68,0.1)', skip: 'rgba(107,114,128,0.08)',
+                }
+                const STATUS_ICON: Record<CheckStatus, string> = {
+                  pass: '✓', warn: '⚠', fail: '✗', skip: '—',
+                }
+                const CAT_LABEL: Record<CheckCategory, string> = {
+                  ssh: 'SSH', password_policy: 'Password Policy', accounts: 'Accounts',
+                  file_permissions: 'File Permissions', kernel: 'Kernel', audit: 'Audit & Logging',
+                  firewall: 'Firewall', updates: 'Updates',
+                }
+                const categories: CheckCategory[] = ['ssh', 'password_policy', 'accounts', 'file_permissions', 'kernel', 'audit', 'firewall', 'updates']
+
+                const filteredChecks = benchmarkCatFilter === 'all'
+                  ? (benchmark?.checks ?? [])
+                  : (benchmark?.checks ?? []).filter((c) => c.category === benchmarkCatFilter)
+
+                const score = benchmark?.summary.score ?? 0
+                const scoreColor = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : '#ef4444'
+
+                return (
+                  <div className="space-y-3">
+                    {/* Header */}
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        {benchmark && (
+                          <>
+                            <div style={{
+                              width: 52, height: 52, borderRadius: '50%',
+                              border: `3px solid ${scoreColor}`,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              flexShrink: 0,
+                            }}>
+                              <span style={{ fontSize: 15, fontWeight: 700, color: scoreColor }}>{score}</span>
+                            </div>
+                            <div>
+                              <p style={{ fontSize: 12, color: 'var(--text-heading)', fontWeight: 600, margin: 0 }}>Security Score</p>
+                              <div style={{ display: 'flex', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+                                {(['pass', 'warn', 'fail', 'skip'] as CheckStatus[]).map((s) => (
+                                  <span key={s} style={{
+                                    fontSize: 11, fontWeight: 600,
+                                    color: STATUS_COLOR[s],
+                                    background: STATUS_BG[s],
+                                    border: `1px solid ${STATUS_COLOR[s]}40`,
+                                    borderRadius: 5, padding: '1px 7px',
+                                  }}>
+                                    {STATUS_ICON[s]} {s.toUpperCase()} {benchmark.summary[s]}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <button onClick={() => loadBenchmark(infoServer!.id)} disabled={benchmarkLoading}
+                        style={{
+                          padding: '6px 14px', fontSize: 12, borderRadius: 7, border: 'none', cursor: 'pointer',
+                          background: 'var(--bg-card)', color: 'var(--text-secondary)', opacity: benchmarkLoading ? 0.5 : 1,
+                        }}>
+                        {benchmarkLoading ? 'Running…' : '↻ Re-run'}
+                      </button>
+                    </div>
+
+                    {/* Loading */}
+                    {benchmarkLoading && !benchmark && (
+                      <div className="py-10 text-center text-gray-500 text-sm">
+                        <div className="inline-block w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3" />
+                        <p>Running security benchmark checks… (15–30 s)</p>
+                      </div>
+                    )}
+                    {benchmarkError && <p className="text-red-400 text-sm">{benchmarkError}</p>}
+
+                    {benchmark && (
+                      <>
+                        {/* Category filter */}
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          <button onClick={() => setBenchmarkCatFilter('all')} style={{
+                            padding: '3px 10px', fontSize: 11, borderRadius: 6, border: 'none', cursor: 'pointer',
+                            fontWeight: benchmarkCatFilter === 'all' ? 700 : 400,
+                            background: benchmarkCatFilter === 'all' ? 'var(--accent-hex)' : 'var(--bg-card)',
+                            color: benchmarkCatFilter === 'all' ? 'white' : 'var(--text-secondary)',
+                          }}>All ({benchmark.checks.length})</button>
+                          {categories.filter((cat) => benchmark.checks.some((c) => c.category === cat)).map((cat) => {
+                            const catChecks = benchmark.checks.filter((c) => c.category === cat)
+                            const hasFail = catChecks.some((c) => c.status === 'fail')
+                            const hasWarn = catChecks.some((c) => c.status === 'warn')
+                            const dotColor = hasFail ? '#ef4444' : hasWarn ? '#f59e0b' : '#22c55e'
+                            return (
+                              <button key={cat} onClick={() => setBenchmarkCatFilter(cat)} style={{
+                                padding: '3px 10px', fontSize: 11, borderRadius: 6, border: 'none', cursor: 'pointer',
+                                fontWeight: benchmarkCatFilter === cat ? 700 : 400,
+                                background: benchmarkCatFilter === cat ? 'var(--accent-hex)' : 'var(--bg-card)',
+                                color: benchmarkCatFilter === cat ? 'white' : 'var(--text-secondary)',
+                                display: 'flex', alignItems: 'center', gap: 4,
+                              }}>
+                                <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+                                {CAT_LABEL[cat]}
+                              </button>
+                            )
+                          })}
+                        </div>
+
+                        {/* Check cards */}
+                        <div className="space-y-1.5">
+                          {filteredChecks.map((chk: BenchmarkCheck) => {
+                            const isOpen = expandedCheck === chk.id
+                            return (
+                              <div key={chk.id} style={{
+                                background: 'var(--bg-card)',
+                                border: `1px solid var(--border-med)`,
+                                borderLeft: `3px solid ${STATUS_COLOR[chk.status]}`,
+                                borderRadius: 8, overflow: 'hidden',
+                              }}>
+                                <button onClick={() => setExpandedCheck(isOpen ? null : chk.id)}
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  style={{
+                                    width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                                    padding: '9px 12px', cursor: 'pointer',
+                                    display: 'flex', alignItems: 'center', gap: 10,
+                                  }}>
+                                  {/* Status badge */}
+                                  <span style={{
+                                    flexShrink: 0, width: 52, textAlign: 'center',
+                                    fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
+                                    background: STATUS_BG[chk.status], color: STATUS_COLOR[chk.status],
+                                    border: `1px solid ${STATUS_COLOR[chk.status]}40`,
+                                    borderRadius: 5, padding: '2px 6px',
+                                  }}>
+                                    {STATUS_ICON[chk.status]} {chk.status.toUpperCase()}
+                                  </span>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', lineHeight: 1.3 }}>{chk.title}</p>
+                                    {chk.reference && (
+                                      <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{chk.reference}</span>
+                                    )}
+                                  </div>
+                                  <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
+                                </button>
+
+                                {isOpen && (
+                                  <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border-weak)' }}>
+                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '8px 0 10px' }}>{chk.description}</p>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+                                      <div style={{ background: 'var(--bg-input)', borderRadius: 6, padding: '8px 10px' }}>
+                                        <p style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 3px' }}>Found</p>
+                                        <code style={{ fontSize: 11, color: STATUS_COLOR[chk.status], wordBreak: 'break-all' }}>{chk.actual}</code>
+                                      </div>
+                                      <div style={{ background: 'var(--bg-input)', borderRadius: 6, padding: '8px 10px' }}>
+                                        <p style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 3px' }}>Expected</p>
+                                        <code style={{ fontSize: 11, color: '#22c55e', wordBreak: 'break-all' }}>{chk.expected}</code>
+                                      </div>
+                                    </div>
+
+                                    {chk.status !== 'pass' && chk.remediation && (
+                                      <div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                                          <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Remediation</p>
+                                          <button onClick={() => {
+                                            navigator.clipboard.writeText(chk.remediation)
+                                            setCopiedRemediation(chk.id)
+                                            setTimeout(() => setCopiedRemediation(null), 2000)
+                                          }} style={{
+                                            fontSize: 11, padding: '2px 8px', borderRadius: 4, border: 'none', cursor: 'pointer',
+                                            background: copiedRemediation === chk.id ? '#065f46' : 'var(--bg-input)',
+                                            color: copiedRemediation === chk.id ? '#6ee7b7' : 'var(--text-secondary)',
+                                          }}>
+                                            {copiedRemediation === chk.id ? '✓ Copied' : '⎘ Copy'}
+                                          </button>
+                                        </div>
+                                        <pre style={{
+                                          fontSize: 11, lineHeight: 1.6, fontFamily: 'monospace',
+                                          background: '#0d0d14', border: '1px solid var(--border-med)',
+                                          borderRadius: 6, padding: '10px 12px', overflowX: 'auto',
+                                          color: '#e2e8f0', whiteSpace: 'pre-wrap', margin: 0,
+                                        }}>{chk.remediation}</pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+
+                        <p style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 8 }}>
+                          Last run: {new Date(benchmark.ran_at).toLocaleString()} — CIS Benchmark-inspired controls
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* ── AI Analyst Tab ─────────────────────────────────────────── */}
+              {infoTab === 'ai' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                  {/* Controls */}
+                  <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+
+                      {/* Log source */}
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>Log Source</label>
+                        <select value={aiForm.log_source_idx} onChange={e => {
+                          const idx = Number(e.target.value)
+                          setAiForm(f => ({ ...f, log_source_idx: idx, analysis_type: LOG_SOURCES[idx].focus }))
+                        }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12 }}>
+                          {LOG_SOURCES.map((s, i) => <option key={i} value={i}>{s.label}</option>)}
+                        </select>
+                        <div style={{ marginTop: 5, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4, padding: '4px 6px', background: 'rgba(99,102,241,0.06)', borderRadius: 5 }}>
+                          ℹ️ {LOG_SOURCES[aiForm.log_source_idx].hint}
+                        </div>
+                        {LOG_SOURCES[aiForm.log_source_idx].cmd === '' && (
+                          <input value={aiForm.custom_cmd} onChange={e => setAiForm(f => ({ ...f, custom_cmd: e.target.value }))}
+                            placeholder="e.g. docker logs myapp --tail 200"
+                            style={{ marginTop: 6, width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'monospace', boxSizing: 'border-box' }} />
+                        )}
+                      </div>
+
+                      {/* Analysis type */}
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          Analysis Focus
+                          <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--accent-hex)', textTransform: 'none', letterSpacing: 0 }}>← auto-set from log source</span>
+                        </div>
+                        <select value={aiForm.analysis_type} onChange={e => setAiForm(f => ({ ...f, analysis_type: e.target.value }))}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12 }}>
+                          {Object.entries(ANALYSIS_FOCUS_INFO).map(([val, { icon, label }]) => (
+                            <option key={val} value={val}>{icon} {label}</option>
+                          ))}
+                        </select>
+                        <div style={{ marginTop: 5, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4, padding: '4px 6px', background: 'rgba(99,102,241,0.06)', borderRadius: 5 }}>
+                          🔍 {ANALYSIS_FOCUS_INFO[aiForm.analysis_type]?.desc}
+                        </div>
+                        {aiForm.analysis_type === 'custom' && (
+                          <input value={aiForm.custom_question} onChange={e => setAiForm(f => ({ ...f, custom_question: e.target.value }))}
+                            placeholder="e.g. Why did nginx crash at 3am?"
+                            style={{ marginTop: 6, width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12, boxSizing: 'border-box' }} />
+                        )}
+                      </div>
+
+                      {/* Provider */}
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>AI Provider</label>
+                        <select value={aiForm.provider} onChange={e => {
+                          const p = e.target.value
+                          const models = AI_PROVIDERS.find(x => x.id === p)?.models ?? []
+                          setAiForm(f => ({ ...f, provider: p, model: models[0] ?? '' }))
+                        }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12 }}>
+                          {AI_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                        </select>
+                      </div>
+
+                      {/* Model + lines */}
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>Model</label>
+                          <select value={aiForm.model} onChange={e => setAiForm(f => ({ ...f, model: e.target.value }))}
+                            style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12 }}>
+                            {(AI_PROVIDERS.find(p => p.id === aiForm.provider)?.models ?? []).map(m => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </div>
+                        <div style={{ width: 80 }}>
+                          <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>Lines</label>
+                          <input type="number" min={50} max={2000} value={aiForm.lines} onChange={e => setAiForm(f => ({ ...f, lines: Number(e.target.value) }))}
+                            style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12 }} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <button onClick={runAiAnalysis} disabled={!aiDefaultsLoaded || aiRunning || (LOG_SOURCES[aiForm.log_source_idx].cmd === '' && !aiForm.custom_cmd)}
+                        style={{ padding: '8px 24px', borderRadius: 7, border: 'none', background: aiRunning ? 'var(--border-med)' : 'var(--accent-hex)', color: '#fff', fontWeight: 600, fontSize: 13, cursor: aiRunning ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {aiRunning ? <><span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />Analysing…</> : '🤖 Run Analysis'}
+                      </button>
+                      {aiError && <span style={{ fontSize: 12, color: 'var(--error)' }}>✗ {aiError}</span>}
+                    </div>
+                  </div>
+
+                  {/* Results */}
+                  {aiResult && (() => {
+                    const score = aiResult.health_score
+                    const scoreColor = score >= 90 ? '#22c55e' : score >= 70 ? '#84cc16' : score >= 50 ? '#eab308' : score >= 30 ? '#f97316' : '#ef4444'
+                    const allIssues = [...aiResult.issues, ...aiResult.security_alerts]
+                    const critCount = allIssues.filter(i => i.severity === 'critical').length
+                    const warnCount = allIssues.filter(i => i.severity === 'warning').length
+
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                        {/* Header row — score + summary */}
+                        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 16, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+                          {/* Score gauge */}
+                          <div style={{ flexShrink: 0, textAlign: 'center', width: 80 }}>
+                            <svg width={80} height={80} viewBox="0 0 80 80">
+                              <circle cx={40} cy={40} r={34} fill="none" stroke="var(--border-med)" strokeWidth={8} />
+                              <circle cx={40} cy={40} r={34} fill="none" stroke={scoreColor} strokeWidth={8}
+                                strokeDasharray={`${(score / 100) * 213.6} 213.6`}
+                                strokeDashoffset={53.4} strokeLinecap="round" transform="rotate(-90 40 40)" />
+                              <text x={40} y={44} textAnchor="middle" fill={scoreColor} fontSize={18} fontWeight={700}>{score}</text>
+                            </svg>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -4 }}>Health Score</div>
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                              {critCount > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>🔴 {critCount} Critical</span>}
+                              {warnCount > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: 'rgba(234,179,8,0.15)', color: '#eab308' }}>🟡 {warnCount} Warning</span>}
+                              {allIssues.length === 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>✓ No issues found</span>}
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                                {aiResult.raw_provider} / {aiResult.raw_model} · {new Date(aiResult.analysed_at).toLocaleTimeString()}
+                              </span>
+                            </div>
+                            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{aiResult.summary}</p>
+                          </div>
+                        </div>
+
+                        {/* Issues */}
+                        {allIssues.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 8 }}>
+                              Issues Found ({allIssues.length})
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              {allIssues.map((issue, i) => {
+                                const isSec = aiResult.security_alerts.includes(issue)
+                                const borderColor = issue.severity === 'critical' ? '#ef4444' : issue.severity === 'warning' ? '#eab308' : '#6366f1'
+                                const bgColor = issue.severity === 'critical' ? 'rgba(239,68,68,0.06)' : issue.severity === 'warning' ? 'rgba(234,179,8,0.06)' : 'rgba(99,102,241,0.06)'
+                                return (
+                                  <div key={i} style={{ border: `1px solid ${borderColor}40`, borderLeft: `3px solid ${borderColor}`, background: bgColor, borderRadius: 8, padding: 12 }}>
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                                      <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: `${borderColor}20`, color: borderColor, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                        {issue.severity.toUpperCase()}
+                                      </span>
+                                      {isSec && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: 'rgba(239,68,68,0.1)', color: '#ef4444', whiteSpace: 'nowrap', flexShrink: 0 }}>🔒 SECURITY</span>}
+                                      {issue.service && <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, background: 'var(--border-weak)', color: 'var(--text-muted)', fontFamily: 'monospace', flexShrink: 0 }}>{issue.service}</span>}
+                                      {issue.timestamp && <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>{issue.timestamp}</span>}
+                                      <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-heading)' }}>{issue.title}</span>
+                                    </div>
+                                    <p style={{ margin: '0 0 6px', fontSize: 12, color: 'var(--text-secondary)' }}>{issue.description}</p>
+                                    {issue.root_cause && (
+                                      <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-muted)' }}>
+                                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Root cause: </span>{issue.root_cause}
+                                      </p>
+                                    )}
+                                    {issue.fix_commands && issue.fix_commands.length > 0 && (
+                                      <div style={{ marginBottom: 6 }}>
+                                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>Fix commands:</div>
+                                        {issue.fix_commands.map((cmd, ci) => (
+                                          <div key={ci} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                                            <code style={{ flex: 1, fontSize: 11, background: 'var(--bg-input,#111)', color: '#a5f3fc', padding: '3px 8px', borderRadius: 4, fontFamily: 'monospace', wordBreak: 'break-all' }}>{cmd}</code>
+                                            <button onClick={() => copyCmd(cmd)}
+                                              style={{ padding: '3px 8px', fontSize: 11, borderRadius: 4, border: '1px solid var(--border-med)', background: aiCopied === cmd ? '#1a7f37' : 'var(--card-bg)', color: aiCopied === cmd ? '#fff' : 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                              {aiCopied === cmd ? '✓ Copied' : 'Copy'}
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {issue.prevention && (
+                                      <p style={{ margin: 0, fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                        💡 {issue.prevention}
+                                      </p>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Recommendations */}
+                        {aiResult.recommendations.length > 0 && (
+                          <div style={{ background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 10, padding: 14 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#818cf8', marginBottom: 10 }}>
+                              💡 Recommendations
+                            </div>
+                            <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {aiResult.recommendations.map((r, i) => (
+                                <li key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{r}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                      </div>
+                    )
+                  })()}
+
+                </div>
+              )}
+
               </div>{/* end tab-content min-height wrapper */}
+            </div>
+          )}
+
+          {/* Windows servers: credentials panel (no SSH required) */}
+          {!serverInfo && !infoLoading && infoServer?.os_type === 'windows' && (
+            <div className="space-y-3 mt-2">
+              {credLoading && <p className="text-xs text-gray-500">Loading…</p>}
+
+              {/* RDP Credentials */}
+              {(() => {
+                const rdpCreds = credentials.filter(c => !c.is_archived && c.category !== 'linux')
+                return (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold text-blue-400">🖥 RDP Credentials ({rdpCreds.length})</p>
+                      <button onClick={() => { setShowCredForm(true); setCredForm({ category: 'other', linux_user: '', service_name: 'RDP', service_username: '', label: '', password: '', notes: '', apply_on_server: false }) }}
+                        className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors">
+                        + Add RDP Credential
+                      </button>
+                    </div>
+                    {rdpCreds.length === 0 && !credLoading && (
+                      <p className="text-xs text-gray-500 py-3 text-center">No RDP credentials saved.</p>
+                    )}
+                    {rdpCreds.map(cred => (
+                      <div key={cred.id} style={{ background: 'var(--bg-card)', border: '1px solid var(--border-med)', borderRadius: 8, padding: '10px 14px', marginBottom: 8 }}>
+                        {editCred?.id === cred.id ? (
+                          <div className="space-y-2">
+                            <label className="block"><span className="text-xs text-gray-400">Label</span>
+                              <input value={editCred.label} onChange={e => setEditCred({ ...editCred, label: e.target.value })}
+                                className="mt-1 w-full bg-gray-700 border border-gray-600 rounded-lg px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                            <label className="block"><span className="text-xs text-gray-400">New Password <span className="text-gray-600">(leave blank to keep)</span></span>
+                              <input type="password" value={editCredPwd} onChange={e => setEditCredPwd(e.target.value)} placeholder="••••••••"
+                                className="mt-1 w-full bg-gray-700 border border-gray-600 rounded-lg px-2 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" /></label>
+                            <div className="flex gap-2 pt-1">
+                              <button onClick={() => { setEditCred(null); setEditCredPwd('') }} className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors">Cancel</button>
+                              <button onClick={() => updateCredential(infoServer!.id, cred.id)} disabled={editCredWorking} className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-60">{editCredWorking ? 'Saving…' : 'Save'}</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginBottom: 2 }}>{cred.label}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                {cred.service_username && <span>👤 {cred.service_username}</span>}
+                                {cred.notes && <span style={{ marginLeft: 8 }}>{cred.notes}</span>}
+                              </div>
+                            </div>
+                            <button onClick={() => { setEditCred(cred); setEditCredPwd('') }} className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors">✎ Edit</button>
+                            <button onClick={() => { setInfoServer(null); infoServer && openRdpTab(infoServer) }} className="px-3 py-1.5 text-xs bg-blue-700 hover:bg-blue-600 text-white rounded-lg transition-colors whitespace-nowrap">🖥 Connect RDP</button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })()}
+
+              {/* SSH Credentials */}
+              {(() => {
+                const sshCreds = credentials.filter(c => !c.is_archived && c.category === 'linux')
+                if (sshCreds.length === 0) return null
+                return (
+                  <div className="pt-2 border-t border-gray-700">
+                    <p className="text-xs font-semibold text-green-400 mb-2">🐧 SSH Credentials ({sshCreds.length})</p>
+                    {sshCreds.map(cred => {
+                      const isRevealed = !!revealedPasswords[cred.id]
+                      const isCopied = copiedCred === cred.id
+                      return (
+                        <div key={cred.id} style={{ background: 'var(--bg-card)', border: '1px solid var(--border-med)', borderRadius: 8, padding: '10px 14px', marginBottom: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginBottom: 2 }}>{cred.label}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                {cred.linux_user && <span>👤 {cred.linux_user}</span>}
+                                {cred.notes && <span style={{ marginLeft: 8 }}>{cred.notes}</span>}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => copyPasswordSilently(infoServer!.id, cred.id, 'linux')}
+                              className={`px-2 py-1 text-xs rounded transition-colors whitespace-nowrap ${isCopied ? 'bg-green-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'}`}>
+                              {isCopied ? '✓ Copied' : '📋 Copy Password'}
+                            </button>
+                            {isRevealed && (
+                              <button onClick={() => hidePassword(cred.id)} className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-400 rounded transition-colors">Hide</button>
+                            )}
+                            <button onClick={() => deleteCredential(infoServer!.id, cred.id)} className="px-2 py-1 text-xs bg-red-800 hover:bg-red-700 text-white rounded transition-colors">Archive</button>
+                          </div>
+                          {isRevealed && (
+                            <span className="mt-2 font-mono text-xs text-green-300 bg-gray-900 px-2 py-1 rounded select-all block break-all">{revealedPasswords[cred.id]}</span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
             </div>
           )}
         </Modal>
@@ -1851,6 +3321,99 @@ export default function Servers() {
           )}
         </Modal>
       )}
+
+      {/* Windows RDP Setup Modal */}
+      {winSetupServer && (
+        <Modal title={`Setup RDP — ${winSetupServer.name}`} onClose={() => setWinSetupServer(null)}>
+          {winSetupDone ? (
+            <div className="space-y-4">
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-green-900/30 border border-green-700/40">
+                <span className="text-green-400 text-lg mt-0.5">✓</span>
+                <div>
+                  <p className="text-green-300 font-semibold text-sm">RDP credentials saved!</p>
+                  <p className="text-green-400/80 text-xs mt-1">
+                    Credentials saved to the vault. Click <strong>🖥 RDP</strong> in the server list to open a Remote Desktop session.
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => { const s = winSetupServer; setWinSetupServer(null); s && openRdpTab(s) }}
+                className="w-full py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white text-sm font-semibold transition-colors">
+                🖥 Open Remote Desktop Now
+              </button>
+              <button onClick={() => setWinSetupServer(null)}
+                className="w-full py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">
+                Close
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="text-xs text-gray-400 bg-gray-800/60 rounded-lg p-3 space-y-1">
+                <p>🪟 This is a <strong className="text-gray-200">Windows Server</strong>. Enter the RDP credentials to save them to the vault.</p>
+                <p>These will be used when you click <strong className="text-gray-200">🖥 RDP</strong> to connect via browser.</p>
+              </div>
+
+              {winSetupError && (
+                <div className="p-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-300 text-sm">
+                  ✗ {winSetupError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Windows Username</label>
+                <input value={winSetupForm.username}
+                  onChange={e => setWinSetupForm(f => ({ ...f, username: e.target.value }))}
+                  placeholder="Administrator"
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-600 text-white text-sm focus:outline-none focus:border-blue-500" />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Password</label>
+                <div className="relative">
+                  <input type={winSetupForm.show_pw ? 'text' : 'password'}
+                    value={winSetupForm.password}
+                    onChange={e => setWinSetupForm(f => ({ ...f, password: e.target.value }))}
+                    placeholder="Windows login password"
+                    className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-600 text-white text-sm focus:outline-none focus:border-blue-500 pr-16" />
+                  <button type="button" onClick={() => setWinSetupForm(f => ({ ...f, show_pw: !f.show_pw }))}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-200 px-2 py-1">
+                    {winSetupForm.show_pw ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Domain <span className="text-gray-600 font-normal">(optional)</span></label>
+                  <input value={winSetupForm.domain}
+                    onChange={e => setWinSetupForm(f => ({ ...f, domain: e.target.value }))}
+                    placeholder="CONTOSO"
+                    className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-600 text-white text-sm focus:outline-none focus:border-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">RDP Port</label>
+                  <input type="number" value={winSetupForm.rdp_port}
+                    onChange={e => setWinSetupForm(f => ({ ...f, rdp_port: Number(e.target.value) }))}
+                    className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-600 text-white text-sm focus:outline-none focus:border-blue-500" />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-1">
+                <button onClick={() => setWinSetupServer(null)}
+                  className="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">
+                  Cancel
+                </button>
+                <button
+                  onClick={runWindowsSetup}
+                  disabled={winSetupWorking || !winSetupForm.username || !winSetupForm.password}
+                  className="flex-1 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-sm font-semibold transition-colors">
+                  {winSetupWorking ? 'Saving…' : '💾 Save & Set Ready'}
+                </button>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+
     </div>
   )
 }

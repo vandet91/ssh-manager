@@ -8,6 +8,7 @@ import { getRemoteHostFingerprint, withSsh, connectWithFallback } from '../../ut
 import { withServerSsh } from '../../utils/server-ssh'
 import { decryptSecret, encryptSecret, getVaultKey } from '../../utils/vault'
 import { generateKeyPair } from '../../utils/keygen'
+import { callAiProvider, type AiProvider, type AnalysisType } from '../../utils/ai-analyst'
 
 const ServerBody = z.object({
   name: z.string().min(1).max(100),
@@ -17,6 +18,8 @@ const ServerBody = z.object({
   tags: z.record(z.string()).optional().default({}),
   management_key_id: z.string().uuid().optional(),
   management_linux_user: z.string().min(1).optional(),
+  os_type: z.enum(['linux', 'windows', 'router', 'access-point', 'switch', 'dvr', 'nvr', 'other-network']).optional(),
+  device_category: z.enum(['server', 'network']).optional(),
 })
 
 async function serversRoutes(fastify: FastifyInstance): Promise<void> {
@@ -26,12 +29,18 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/servers', { preHandler: requirePermission('servers:read') }, async (req) => {
     const query = z.object({
       environment: z.string().optional(),
+      device_category: z.enum(['server', 'network']).optional(),
       page: z.coerce.number().default(1),
-      limit: z.coerce.number().default(50),
+      limit: z.coerce.number().default(200),
     }).parse(req.query)
 
     let qb = db.selectFrom('servers').selectAll().where('is_active', '=', true)
     if (query.environment) qb = qb.where('environment', '=', query.environment as 'production')
+    if (query.device_category === 'server') {
+      qb = qb.where('os_type', 'in', ['linux', 'windows'])
+    } else if (query.device_category === 'network') {
+      qb = qb.where('os_type', 'in', ['router', 'access-point', 'switch', 'dvr', 'nvr', 'other-network'])
+    }
     return qb.limit(query.limit).offset((query.page - 1) * query.limit).execute()
   })
 
@@ -125,6 +134,31 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     return { fingerprint: incoming }
   })
 
+  // POST /servers/:id/reset-host-key — force re-learn host key (use when key changed legitimately)
+  fastify.post('/servers/:id/reset-host-key', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+    if (!server) return reply.code(404).send({ error: 'Server not found' })
+
+    const incoming = await getRemoteHostFingerprint(server.hostname, server.ssh_port)
+
+    await db.updateTable('servers').set({
+      host_key_fingerprint: incoming,
+      host_key_verified: true,
+      host_key_last_seen: new Date(),
+      updated_at: new Date(),
+    }).where('id', '=', id).execute()
+
+    await writeAuditLog({
+      userId: req.session.user!.id, userEmail: req.session.user!.email,
+      action: 'server.host_key_reset', resource: 'server', resourceId: id,
+      details: { old_fingerprint: server.host_key_fingerprint, new_fingerprint: incoming },
+      request: req,
+    })
+
+    return { fingerprint: incoming }
+  })
+
   // POST /servers/:id/test-connection
   fastify.post('/servers/:id/test-connection', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
@@ -169,8 +203,25 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
         client
           .on('ready', async () => {
             try {
-              await sshExec(client, 'mkdir -p ~/.ssh && chmod 700 ~/.ssh')
-              await sshExec(client, `echo ${JSON.stringify(authorizedKeysLine)} >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`)
+              // Detect Windows by checking for PowerShell/cmd
+              const osCheck = await sshExec(client, 'echo %OS%')
+              const isWindows = osCheck.stdout.trim().toLowerCase().includes('windows')
+
+              if (isWindows) {
+                // Windows OpenSSH: write key to a temp file via echo, then append with type, avoiding shell quoting issues
+                // Write to both locations: ~/.ssh/authorized_keys (for non-admin users / custom sshd_config)
+                // and C:\ProgramData\ssh\administrators_authorized_keys (default for Administrators group)
+                const escapedKey = authorizedKeysLine.replace(/[&<>|^]/g, '^$&')
+                // Location 1: user's .ssh directory
+                await sshExec(client, `mkdir "%USERPROFILE%\\.ssh" 2>nul & echo ${escapedKey}>> "%USERPROFILE%\\.ssh\\authorized_keys"`)
+                // Location 2: administrators_authorized_keys (required for Administrator/Administrators group)
+                await sshExec(client, `echo ${escapedKey}>> "C:\\ProgramData\\ssh\\administrators_authorized_keys"`)
+                // Fix permissions on administrators_authorized_keys (inherited ACLs break SSH key auth)
+                await sshExec(client, `icacls "C:\\ProgramData\\ssh\\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"`)
+              } else {
+                await sshExec(client, 'mkdir -p ~/.ssh && chmod 700 ~/.ssh')
+                await sshExec(client, `echo ${JSON.stringify(authorizedKeysLine)} >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`)
+              }
               client.end()
               resolve()
             } catch (e) { client.end(); reject(e) }
@@ -215,6 +266,36 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       last_connected_at: new Date(),
       updated_at: new Date(),
     }).where('id', '=', id).execute()
+
+    // Step 5: create a key_assignment so the management user appears in the terminal
+    // Deactivate any old management assignments for this user first, then insert fresh
+    await db.updateTable('key_assignments')
+      .set({ is_active: false })
+      .where('server_id', '=', id)
+      .where('linux_user', '=', body.linux_user)
+      .execute()
+    await db.insertInto('key_assignments').values({
+      user_id: req.session.user!.id,
+      key_id: savedKey.id,
+      server_id: id,
+      linux_user: body.linux_user,
+      can_terminal: true,
+      is_active: true,
+    }).execute()
+
+    // Step 6: save the password to the vault as a linux credential
+    const vaultKey2 = getVaultKey()
+    await db.insertInto('server_credentials').values({
+      server_id: id,
+      category: 'linux',
+      linux_user: body.linux_user,
+      service_name: null,
+      service_username: null,
+      label: `${body.linux_user} login password (initial setup)`,
+      password_enc: encryptSecret(body.password, vaultKey2),
+      notes: 'Saved automatically during initial SSH setup.',
+      created_by: req.session.user!.id,
+    }).execute()
 
     await writeAuditLog({
       userId: req.session.user!.id, userEmail: req.session.user!.email,
@@ -457,17 +538,18 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       username: z.string().min(1).max(32).regex(/^[a-z_][a-z0-9_-]*$/, 'Invalid linux username'),
-      comment: z.string().max(100).optional(),   // GECOS field
+      comment: z.string().max(100).optional(),
       shell: z.string().optional().default('/bin/bash'),
       create_home: z.boolean().default(true),
-      system_user: z.boolean().default(false),   // --system flag (no home, no login shell by default)
+      system_user: z.boolean().default(false),
+      password: z.string().min(1).optional(),
+      save_to_vault: z.boolean().default(true),
     }).parse(req.body)
 
     try {
       const result = await withServerSsh(id, async (client) => {
         const { sshExec } = await import('../../utils/ssh')
 
-        // Check user doesn't already exist
         const check = await sshExec(client, `id ${body.username} 2>/dev/null && echo EXISTS || echo MISSING`)
         if (check.stdout.includes('EXISTS')) throw Object.assign(new Error(`User "${body.username}" already exists`), { statusCode: 409 })
 
@@ -481,13 +563,34 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
         const { code, stderr } = await sshExec(client, `sudo useradd ${flags} ${body.username}`)
         if (code !== 0) throw new Error(`useradd failed: ${stderr}`)
 
+        if (body.password) {
+          const escaped = body.password.replace(/'/g, "'\\''")
+          const { code: pc, stderr: ps } = await sshExec(client, `echo '${body.username}:${escaped}' | sudo chpasswd`)
+          if (pc !== 0) throw new Error(`chpasswd failed: ${ps}`)
+        }
+
         return { username: body.username, created: true }
       })
+
+      if (body.password && body.save_to_vault) {
+        const vk = getVaultKey()
+        await db.insertInto('server_credentials').values({
+          server_id: id,
+          category: 'linux',
+          linux_user: body.username,
+          service_name: null,
+          service_username: null,
+          label: `${body.username} login password`,
+          password_enc: encryptSecret(body.password, vk),
+          notes: null,
+          created_by: req.session.user!.id,
+        }).execute()
+      }
 
       await writeAuditLog({
         userId: req.session.user!.id, userEmail: req.session.user!.email,
         action: 'server.user_created', resource: 'server', resourceId: id,
-        details: { username: body.username, system_user: body.system_user }, request: req,
+        details: { username: body.username, system_user: body.system_user, has_password: !!body.password }, request: req,
       })
 
       return reply.code(201).send(result)
@@ -538,6 +641,81 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       })
 
       return result
+    } catch (err: unknown) {
+      const e = err as Error & { statusCode?: number }
+      return reply.code(e.statusCode ?? 500).send({ error: e.message })
+    }
+  })
+
+  // PATCH /servers/:id/users/:username — edit shell, comment, or password
+  fastify.patch('/servers/:id/users/:username', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { id, username } = z.object({ id: z.string().uuid(), username: z.string().min(1) }).parse(req.params)
+    const body = z.object({
+      shell: z.string().optional(),
+      comment: z.string().max(100).optional(),
+      password: z.string().min(1).optional(),
+      save_to_vault: z.boolean().default(true),
+    }).parse(req.body)
+
+    try {
+      await withServerSsh(id, async (client) => {
+        const { sshExec } = await import('../../utils/ssh')
+
+        if (body.shell) {
+          const { code, stderr } = await sshExec(client, `sudo chsh -s ${body.shell} ${username}`)
+          if (code !== 0) throw new Error(`chsh failed: ${stderr}`)
+        }
+        if (body.comment !== undefined) {
+          const { code, stderr } = await sshExec(client, `sudo chfn -f ${JSON.stringify(body.comment)} ${username}`)
+          if (code !== 0) throw new Error(`chfn failed: ${stderr}`)
+        }
+        if (body.password) {
+          const escaped = body.password.replace(/'/g, "'\\''")
+          const { code, stderr } = await sshExec(client, `echo '${username}:${escaped}' | sudo chpasswd`)
+          if (code !== 0) throw new Error(`chpasswd failed: ${stderr}`)
+        }
+      })
+
+      if (body.password && body.save_to_vault) {
+        const vk = getVaultKey()
+        // Archive existing active linux credentials for this user, then create new one
+        const existing = await db.selectFrom('server_credentials')
+          .selectAll()
+          .where('server_id', '=', id)
+          .where('linux_user', '=', username)
+          .where('category', '=', 'linux')
+          .where('is_archived', '=', false)
+          .execute()
+        if (existing.length > 0) {
+          await db.updateTable('server_credentials')
+            .set({ is_archived: true, archived_at: new Date(), archived_reason: 'rotated' })
+            .where('server_id', '=', id)
+            .where('linux_user', '=', username)
+            .where('category', '=', 'linux')
+            .where('is_archived', '=', false)
+            .execute()
+        }
+        await db.insertInto('server_credentials').values({
+          server_id: id,
+          category: 'linux',
+          linux_user: username,
+          service_name: null,
+          service_username: null,
+          label: existing.length > 0 ? existing[0].label : `${username} login password`,
+          password_enc: encryptSecret(body.password, vk),
+          notes: null,
+          created_by: req.session.user!.id,
+          predecessor_id: existing.length > 0 ? existing[0].id : null,
+        }).execute()
+      }
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'server.user_edited', resource: 'server', resourceId: id,
+        details: { username, changed_shell: !!body.shell, changed_password: !!body.password }, request: req,
+      })
+
+      return { ok: true }
     } catch (err: unknown) {
       const e = err as Error & { statusCode?: number }
       return reply.code(e.statusCode ?? 500).send({ error: e.message })
@@ -680,6 +858,155 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       return result
     } catch (err: unknown) {
       return reply.code(500).send({ error: 'Failed to generate recommendations', details: (err as Error).message })
+    }
+  })
+
+  // GET /servers/:id/benchmark — run OS security benchmark checks via SSH
+  fastify.get('/servers/:id/benchmark', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+    if (!server) return reply.code(404).send({ error: 'Server not found' })
+    if (!server.management_key_id) return reply.code(400).send({ error: 'Server not configured' })
+
+    try {
+      const result = await withServerSsh(id, async (client) => {
+        const { runBenchmark } = await import('../../utils/benchmark')
+        return runBenchmark(client)
+      })
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'server.benchmark_run', resource: 'server', resourceId: id, request: req,
+      })
+
+      return result
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: 'Failed to run security benchmark', details: (err as Error).message })
+    }
+  })
+
+  // GET /servers/:id/browse?path=/var/www — list directory contents via SSH
+  fastify.get('/servers/:id/browse', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { path: browsePath = '/' } = z.object({ path: z.string().optional() }).parse(req.query)
+
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+    if (!server) return reply.code(404).send({ error: 'Server not found' })
+    if (!server.management_key_id) return reply.code(400).send({ error: 'Server not configured' })
+
+    try {
+      const result = await withServerSsh(id, async (client) => {
+        const { sshExec } = await import('../../utils/ssh')
+
+        // Use stat-parseable long listing: type+perms, links, owner, group, size, name
+        const [lsRaw, pwdRaw, statRaw] = await Promise.all([
+          sshExec(client, `ls -la "${browsePath}" 2>/dev/null`),
+          sshExec(client, `realpath "${browsePath}" 2>/dev/null || echo "${browsePath}"`),
+          sshExec(client, `stat -c "%F|%s|%U|%G|%y" "${browsePath}" 2>/dev/null`),
+        ])
+
+        const realPath = pwdRaw.stdout.trim() || browsePath
+        const entries: Array<{
+          name: string; type: 'dir' | 'file' | 'link' | 'other'
+          permissions: string; owner: string; group: string
+          size: number; modified: string
+        }> = []
+
+        for (const line of lsRaw.stdout.split('\n').slice(1)) { // skip 'total N' line
+          const m = line.match(/^([dlrwxst-]{10})\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)\s+(\S+\s+\S+\s+\S+)\s+(.+)$/)
+          if (!m) continue
+          const [, perms, owner, group, size, modified, rawName] = m
+          const name = rawName.trim()
+          if (name === '.' || name === '..') continue
+          const typeChar = perms[0]
+          const type = typeChar === 'd' ? 'dir' : typeChar === 'l' ? 'link' : typeChar === '-' ? 'file' : 'other'
+          entries.push({ name, type, permissions: perms, owner, group, size: parseInt(size) || 0, modified })
+        }
+
+        // Sort: dirs first, then files alphabetically
+        entries.sort((a, b) => {
+          if (a.type === 'dir' && b.type !== 'dir') return -1
+          if (a.type !== 'dir' && b.type === 'dir') return 1
+          return a.name.localeCompare(b.name)
+        })
+
+        const parentPath = realPath === '/' ? '/' : realPath.split('/').slice(0, -1).join('/') || '/'
+
+        return { path: realPath, parent: parentPath, entries }
+      })
+
+      return result
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: 'Browse failed', details: (err as Error).message })
+    }
+  })
+  // ── AI Log Analyst ───────────────────────────────────────────────────────────
+
+  // POST /servers/:id/ai-analyse
+  fastify.post('/servers/:id/ai-analyse', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const body = z.object({
+      log_source:      z.string().min(1),   // shell command to fetch logs
+      lines:           z.number().int().min(50).max(2000).default(300),
+      analysis_type:   z.enum(['health', 'security', 'performance', 'errors', 'custom']),
+      custom_question: z.string().max(500).optional(),
+      provider:        z.enum(['claude', 'openai', 'gemini', 'deepseek']),
+      model:           z.string().min(1),
+    }).parse(req.body)
+
+    // Load the API key for the chosen provider
+    const keyMap: Record<string, string> = {
+      claude: 'ai_key_claude', openai: 'ai_key_openai',
+      gemini: 'ai_key_gemini', deepseek: 'ai_key_deepseek',
+    }
+    const rows = (await (db as any).selectFrom('settings').selectAll()
+      .where('key', '=', keyMap[body.provider]).execute()) as Array<{ key: string; value: unknown }>
+    const apiKey = (rows[0]?.value as string) ?? ''
+    if (!apiKey) return reply.code(400).send({ error: `No API key configured for ${body.provider}. Add it in Settings → AI Providers.` })
+
+    // Fetch logs from server via SSH
+    let logs = ''
+    try {
+      logs = await withServerSsh(id, async (client) => {
+        const { sshExec } = await import('../../utils/ssh')
+        // Wrap user command in a tail if it's a file path, otherwise run as-is
+        const cmd = body.log_source.startsWith('/') || body.log_source.startsWith('~')
+          ? `sudo tail -n ${body.lines} ${body.log_source} 2>/dev/null || echo "[File not found or not readable]"`
+          : `${body.log_source} 2>&1 | tail -n ${body.lines}`
+        const { stdout, stderr } = await sshExec(client, cmd)
+        return (stdout || stderr || '').trim()
+      })
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: 'Failed to fetch logs via SSH', details: (err as Error).message })
+    }
+
+    if (!logs || logs === '[File not found or not readable]') {
+      return reply.code(404).send({ error: 'No logs found. The file or command returned no output.' })
+    }
+
+    // Trim to ~12 000 chars to stay within token budgets across all providers
+    const trimmed = logs.length > 12000 ? '...[trimmed]\n' + logs.slice(-12000) : logs
+
+    try {
+      const result = await callAiProvider(
+        body.provider as AiProvider,
+        body.model,
+        apiKey,
+        body.analysis_type as AnalysisType,
+        body.custom_question,
+        trimmed,
+      )
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'server.ai_analyse', resource: 'server', resourceId: id,
+        details: { provider: body.provider, model: body.model, analysis_type: body.analysis_type, log_source: body.log_source },
+        request: req,
+      })
+
+      return result
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: 'AI analysis failed', details: (err as Error).message })
     }
   })
 }

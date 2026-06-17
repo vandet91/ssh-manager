@@ -99,6 +99,42 @@ async function usersRoutes(fastify: FastifyInstance): Promise<void> {
       .where('user_id', '=', id)
       .execute()
   })
+
+  // GET /users/access-review — periodic access review (who has what role, lockout status)
+  fastify.get('/users/access-review', { preHandler: requirePermission('admin') }, async (req) => {
+    const users = await db.selectFrom('users')
+      .select([
+        'id', 'email', 'display_name', 'role', 'provider',
+        'mfa_enabled', 'is_active', 'last_login_at',
+        'failed_login_attempts', 'locked_until', 'password_changed_at',
+        'created_at',
+      ])
+      .orderBy('role').orderBy('email')
+      .execute()
+
+    const now = new Date()
+
+    const summary = {
+      total: users.length,
+      by_role: {
+        admin:     users.filter((u) => u.role === 'admin').length,
+        operator:  users.filter((u) => u.role === 'operator').length,
+        developer: users.filter((u) => u.role === 'developer').length,
+        viewer:    users.filter((u) => u.role === 'viewer').length,
+      },
+      inactive:       users.filter((u) => !u.is_active).length,
+      locked:         users.filter((u) => u.locked_until && new Date(u.locked_until) > now).length,
+      mfa_disabled:   users.filter((u) => !u.mfa_enabled && u.is_active).length,
+      never_logged_in: users.filter((u) => !u.last_login_at && u.is_active).length,
+    }
+
+    await writeAuditLog({
+      userId: req.session.user!.id, userEmail: req.session.user!.email,
+      action: 'users.access_review', resource: 'users', request: req,
+    })
+
+    return { summary, users }
+  })
 }
 
 export default usersRoutes

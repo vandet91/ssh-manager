@@ -24,6 +24,13 @@ export default function Modal({ title, onClose, children, size = 'md' }: Props) 
     if (e.target === overlayRef.current) onClose()
   }
 
+  // Lock page scroll while modal is open (prevents Firefox scroll-bleed)
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [])
+
   // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }

@@ -1,15 +1,25 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { api, User } from '../api/client'
 import type { Theme } from '../App'
+import Terminal from '../pages/Terminal'
+import RemoteDesktopPage from '../pages/RemoteDesktopPage'
+
+const PERSISTENT_ROUTES = ['/terminal', '/remote-desktop']
 
 const nav = [
   { to: '/dashboard',   label: 'Dashboard',  icon: '▣' },
   { to: '/servers',     label: 'Servers',     icon: '◫' },
   { to: '/keys',        label: 'Keys',        icon: '⚷' },
   { to: '/assignments', label: 'Assignments', icon: '⊞' },
-  { to: '/terminal',    label: 'Terminal',    icon: '⌨' },
+  { to: '/network-devices',  label: 'Network Devices', icon: '🌐' },
+  { to: '/share',           label: 'Share',          icon: '🔗' },
+  { to: '/commands',        label: 'Commands',       icon: '📚' },
+  { to: '/terminal',        label: 'Terminal',       icon: '⌨' },
+  { to: '/remote-desktop',  label: 'Remote Desktop', icon: '🖥' },
   { to: '/logs',        label: 'Logs',        icon: '≡' },
   { to: '/security',    label: 'Security',    icon: '⊛' },
+  { to: '/migration',   label: 'Migration',   icon: '⇄' },
+  { to: '/filemanager', label: 'File Manager', icon: '⊟' },
   { to: '/users',       label: 'Users',       icon: '◉' },
   { to: '/settings',    label: 'Settings',    icon: '⚙' },
 ]
@@ -30,7 +40,9 @@ interface Props {
 
 export default function Layout({ user, onLogout, theme, setTheme }: Props) {
   const navigate = useNavigate()
+  const location = useLocation()
   const isDark = theme === 'github'
+  const isPersistent = PERSISTENT_ROUTES.includes(location.pathname)
 
   const logout = async () => {
     await api.post('/auth/logout')
@@ -160,8 +172,16 @@ export default function Layout({ user, onLogout, theme, setTheme }: Props) {
       </aside>
 
       {/* ── Main ─────────────────────────────────────────────────────────── */}
-      <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-body)', minWidth: 0 }}>
-        <Outlet />
+      <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-body)', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Persistent pages: always mounted, hidden when not active so sessions survive navigation */}
+        <div style={{ display: location.pathname === '/terminal' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <Terminal />
+        </div>
+        <div style={{ display: location.pathname === '/remote-desktop' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <RemoteDesktopPage />
+        </div>
+        {/* All other routed pages */}
+        {!isPersistent && <Outlet />}
       </main>
     </div>
   )

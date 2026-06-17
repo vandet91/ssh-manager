@@ -15,6 +15,27 @@ services:
         condition: service_healthy
     volumes:
       - recordings:/var/lib/ssh-manager/recordings
+      - shares:/tmp/ssh-manager-shares
+      - guac-uploads:/tmp/guac-uploads
+
+  # Guacamole RDP/VNC protocol daemon
+  guacd:
+    image: guacamole/guacd:1.5.5
+    restart: unless-stopped
+    volumes:
+      - guac-uploads:/tmp/guac-uploads
+
+  # WebSocket ↔ guacd proxy (browser connects here for Remote Desktop)
+  guac-proxy:
+    build: ./apps/guac-proxy
+    restart: unless-stopped
+    environment:
+      - GUACD_HOST=guacd
+      - GUACD_PORT=4822
+      - PORT=3002
+      - GUAC_CRYPT_KEY=${GUAC_CRYPT_KEY:-ChangeMe32CharKeyForGuacamole!!!}
+    depends_on:
+      - guacd
 
   web:
     build: ./apps/web
@@ -22,6 +43,7 @@ services:
       - "3000:3000"
     depends_on:
       - api
+      - guac-proxy
 
   postgres:
     image: postgres:15-alpine
@@ -97,3 +119,5 @@ volumes:
   pgdata:
   redisdata:
   recordings:
+  guac-uploads:
+  shares:

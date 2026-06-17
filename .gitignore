@@ -19,7 +19,7 @@ apps/web/dist/
 
 # Logs
 *.log
-logs/
+/logs/
 
 # Session recordings (runtime data)
 recordings/

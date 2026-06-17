@@ -12,6 +12,13 @@ import Security from './pages/Security'
 import Users from './pages/Users'
 import Layout from './components/Layout'
 import Settings from './pages/Settings'
+import Migration from './pages/Migration'
+import FileManager from './pages/FileManager'
+import RemoteDesktopPage from './pages/RemoteDesktopPage'
+import NetworkDevices from './pages/NetworkDevices'
+import Share from './pages/Share'
+import ShareCenter from './pages/ShareCenter'
+import CommandLibrary from './pages/CommandLibrary'
 
 export type Theme = 'github' | 'proxmox'
 
@@ -51,6 +58,7 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/share-center" element={<ShareCenter />} />
         <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login onLogin={setUser} />} />
         {user ? (
           <Route element={<Layout user={user} onLogout={() => setUser(null)} theme={theme} setTheme={setTheme} />}>
@@ -59,8 +67,14 @@ function App() {
             <Route path="/keys"      element={<Keys />} />
             <Route path="/assignments" element={<Assignments />} />
             <Route path="/terminal"  element={<Terminal />} />
+            <Route path="/remote-desktop" element={<RemoteDesktopPage />} />
+            <Route path="/network-devices" element={<NetworkDevices />} />
+            <Route path="/share" element={<Share />} />
+            <Route path="/commands" element={<CommandLibrary />} />
             <Route path="/logs"      element={<Logs />} />
             <Route path="/security"  element={<Security />} />
+            <Route path="/migration" element={<Migration />} />
+            <Route path="/filemanager" element={<FileManager />} />
             <Route path="/users"     element={<Users />} />
             <Route path="/settings"  element={<Settings />} />
             <Route path="*"          element={<Navigate to="/dashboard" replace />} />

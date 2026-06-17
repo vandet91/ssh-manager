@@ -18,6 +18,9 @@ export interface UserTable {
   mfa_backup_codes: Opt<unknown>
   is_active: Opt<boolean>
   last_login_at: Date | null
+  failed_login_attempts: Opt<number>
+  locked_until: Date | null
+  password_changed_at: Date | null
   created_at: ColumnType<Date, never, never>
   updated_at: Opt<Date>
 }
@@ -38,8 +41,10 @@ export interface ServerTable {
   last_connected_at: Date | null
   added_by: string | null
   os_type: Opt<string>
+  device_category: Opt<string>
   host_type: Opt<string>
   host_type_detail: Opt<string>
+  windows_rdp_ready: Opt<boolean>
   created_at: ColumnType<Date, never, never>
   updated_at: Opt<Date>
 }
@@ -149,6 +154,16 @@ export interface ServerCredentialTable {
   updated_at: Opt<Date>
 }
 
+export interface MigrationSnapshotTable {
+  id: Generated<string>
+  server_id: string | null
+  server_name: string
+  label: Opt<string>
+  snapshot: unknown
+  created_by: string | null
+  created_at: ColumnType<Date, never, never>
+}
+
 export interface Database {
   users: UserTable
   servers: ServerTable
@@ -159,6 +174,7 @@ export interface Database {
   security_scans: SecurityScanTable
   rotation_jobs: RotationJobTable
   server_credentials: ServerCredentialTable
+  migration_snapshots: MigrationSnapshotTable
 }
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })

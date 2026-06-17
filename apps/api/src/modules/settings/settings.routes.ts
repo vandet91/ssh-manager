@@ -10,6 +10,7 @@ export const passwordPolicySchema = z.object({
   require_lowercase: z.boolean(),
   require_numbers: z.boolean(),
   require_special: z.boolean(),
+  max_repeat: z.number().int().min(0).max(10),            // 0 = no limit; max consecutive identical chars
   max_age_days: z.number().int().min(0).max(3650),        // 0 = never expire
   max_login_attempts: z.number().int().min(0).max(100),   // 0 = no lockout
   lockout_duration_minutes: z.number().int().min(1).max(1440),
@@ -23,6 +24,7 @@ export const DEFAULT_POLICY: PasswordPolicy = {
   require_lowercase: false,
   require_numbers: false,
   require_special: false,
+  max_repeat: 0,
   max_age_days: 0,
   max_login_attempts: 5,
   lockout_duration_minutes: 30,
@@ -52,6 +54,11 @@ export function validatePassword(password: string, policy: PasswordPolicy): stri
     return 'Password must contain at least one number'
   if (policy.require_special && !/[^A-Za-z0-9]/.test(password))
     return 'Password must contain at least one special character'
+  if (policy.max_repeat > 0) {
+    const pattern = new RegExp(`(.)\\1{${policy.max_repeat},}`)
+    if (pattern.test(password))
+      return `Password must not contain more than ${policy.max_repeat} consecutive identical characters`
+  }
   return null
 }
 
@@ -245,6 +252,53 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     } catch (err: any) {
       return reply.code(400).send({ error: err.message })
     }
+  })
+
+  // ── AI Provider Keys ────────────────────────────────────────────────────────
+
+  fastify.get('/settings/ai-keys', { preHandler: [requireAuth, requirePermission('admin')] }, async () => {
+    const keys = ['ai_key_claude', 'ai_key_openai', 'ai_key_gemini', 'ai_key_deepseek', 'ai_default_provider', 'ai_default_model']
+    const rows = (await (db as any).selectFrom('settings').selectAll().where('key', 'in', keys).execute()) as Array<{ key: string; value: unknown }>
+    const m = Object.fromEntries(rows.map((r) => [r.key, r.value]))
+    return {
+      claude:           (m['ai_key_claude'] as string) ?? '',
+      openai:           (m['ai_key_openai'] as string) ?? '',
+      gemini:           (m['ai_key_gemini'] as string) ?? '',
+      deepseek:         (m['ai_key_deepseek'] as string) ?? '',
+      default_provider: (m['ai_default_provider'] as string) ?? 'claude',
+      default_model:    (m['ai_default_model'] as string) ?? '',
+    }
+  })
+
+  fastify.put('/settings/ai-keys', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+    const body = z.object({
+      claude:           z.string().optional(),
+      openai:           z.string().optional(),
+      gemini:           z.string().optional(),
+      deepseek:         z.string().optional(),
+      default_provider: z.string().optional(),
+      default_model:    z.string().optional(),
+    }).parse(req.body)
+
+    const upsert = async (key: string, value: unknown) => {
+      await (db as any).insertInto('settings')
+        .values({ key, value: JSON.stringify(value), updated_at: new Date() })
+        .onConflict((oc: any) => oc.column('key').doUpdateSet({ value: JSON.stringify(value), updated_at: new Date() }))
+        .execute()
+    }
+    if (body.claude           !== undefined) await upsert('ai_key_claude',          body.claude)
+    if (body.openai           !== undefined) await upsert('ai_key_openai',          body.openai)
+    if (body.gemini           !== undefined) await upsert('ai_key_gemini',          body.gemini)
+    if (body.deepseek         !== undefined) await upsert('ai_key_deepseek',        body.deepseek)
+    if (body.default_provider !== undefined) await upsert('ai_default_provider',    body.default_provider)
+    if (body.default_model    !== undefined) await upsert('ai_default_model',       body.default_model)
+
+    await writeAuditLog({
+      userId: req.session.user!.id, userEmail: req.session.user!.email,
+      action: 'settings.ai_keys.updated', resource: 'settings',
+      details: { providers: Object.keys(body).filter((k) => !!(body as any)[k]) }, request: req,
+    })
+    return { ok: true }
   })
 
   // POST /settings/alerts/test-email — send a test email

@@ -25,6 +25,7 @@ const schema = z.object({
   RATE_LIMIT_AUTH: z.coerce.number().default(10),
   RATE_LIMIT_API: z.coerce.number().default(100),
   ALERT_WEBHOOK_URL: z.string().optional(),
+  GUAC_CRYPT_KEY: z.string().min(16).optional(),
 })
 
 export type Config = z.infer<typeof schema>

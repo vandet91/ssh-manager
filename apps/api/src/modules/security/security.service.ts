@@ -1,64 +1,36 @@
 import { db } from '../../db/client'
-import { decryptSecret, getVaultKey } from '../../utils/vault'
-import { withSsh } from '../../utils/ssh'
+import { withServerSsh } from '../../utils/server-ssh'
 import { writeAuditLog } from '../../utils/audit'
 import { sendAlert } from '../../utils/webhook'
+import { runBenchmark, BenchmarkCheck } from '../../utils/benchmark'
 import pino from 'pino'
 
 const log = pino({ name: 'security-scanner' })
 
-interface Check {
-  id: string
-  description: string
-  command: string
-  severity: 'low' | 'medium' | 'high' | 'critical'
-  pass: (output: string, context?: { managedCount: number }) => boolean
-}
+// Map benchmark status + category to a severity for the DB / alert system
+function toSeverity(chk: BenchmarkCheck): 'ok' | 'low' | 'medium' | 'high' | 'critical' {
+  if (chk.status === 'pass' || chk.status === 'skip') return 'ok'
 
-const CHECKS: Check[] = [
-  {
-    id: 'password_auth',
-    description: 'Password authentication should be disabled',
-    command: "sshd -T 2>/dev/null | grep '^passwordauthentication'",
-    severity: 'high',
-    pass: (output) => output.includes('no'),
-  },
-  {
-    id: 'root_login',
-    description: 'Root login should be prohibited',
-    command: "sshd -T 2>/dev/null | grep '^permitrootlogin'",
-    severity: 'critical',
-    pass: (output) => output.includes('no') || output.includes('prohibit-password'),
-  },
-  {
-    id: 'ssh_protocol',
-    description: 'Only SSH protocol 2 should be in use',
-    command: "sshd -T 2>/dev/null | grep '^protocol'",
-    severity: 'critical',
-    pass: (output) => !output.includes('1'),
-  },
-  {
-    id: 'authorized_keys_permissions',
-    description: 'authorized_keys must not be world-readable (must be 600)',
-    command: "stat -c '%a' ~/.ssh/authorized_keys 2>/dev/null || echo 'missing'",
-    severity: 'high',
-    pass: (output) => ['600', 'missing'].includes(output.trim()),
-  },
-  {
-    id: 'stale_keys',
-    description: 'authorized_keys should not contain unmanaged keys',
-    command: "cat ~/.ssh/authorized_keys 2>/dev/null | wc -l",
-    severity: 'medium',
-    pass: (output, ctx) => parseInt(output.trim()) === (ctx?.managedCount ?? 0),
-  },
-  {
-    id: 'x11_forwarding',
-    description: 'X11 forwarding should be disabled',
-    command: "sshd -T 2>/dev/null | grep '^x11forwarding'",
-    severity: 'low',
-    pass: (output) => output.includes('no'),
-  },
-]
+  // fail / warn — base on category and specific check
+  const criticalIds = new Set([
+    'ssh-permit-root', 'ssh-password-auth', 'ssh-empty-passwords', 'ssh-protocol',
+    'acct-uid0', 'pw-lockout',
+  ])
+  const highIds = new Set([
+    'ssh-max-auth-tries', 'pw-complexity', 'pw-max-age',
+    'acct-empty-passwords', 'perm-shadow', 'perm-gshadow', 'perm-sudoers',
+    'perm-world-writable', 'kernel-aslr', 'fw-iptables', 'fw-ufw', 'fw-firewalld',
+  ])
+
+  if (chk.status === 'fail') {
+    if (criticalIds.has(chk.id)) return 'critical'
+    if (highIds.has(chk.id)) return 'high'
+    return 'medium'
+  }
+  // warn
+  if (criticalIds.has(chk.id)) return 'high'
+  return 'low'
+}
 
 export async function runSecurityScan(serverId: string): Promise<void> {
   const server = await db.selectFrom('servers').selectAll().where('id', '=', serverId).executeTakeFirst()
@@ -67,90 +39,45 @@ export async function runSecurityScan(serverId: string): Promise<void> {
     return
   }
 
-  const mgmtKey = await db.selectFrom('ssh_keys').selectAll().where('id', '=', server.management_key_id).executeTakeFirst()
-  if (!mgmtKey) return
-
-  const vaultKey = getVaultKey()
-  const mgmtPrivatePem = decryptSecret(mgmtKey.private_key_enc, vaultKey)
-
-  // Count managed keys for stale check
-  const assignments = await db.selectFrom('key_assignments')
-    .select(['key_id', 'linux_user'])
-    .where('server_id', '=', serverId)
-    .where('is_active', '=', true)
-    .execute()
-
-  // Group by linux_user
-  const userKeyCounts: Record<string, number> = {}
-  for (const a of assignments) {
-    userKeyCounts[a.linux_user] = (userKeyCounts[a.linux_user] ?? 0) + 1
-  }
-
-  const findings: Array<{
-    check_id: string
-    description: string
-    severity: string
-    passed: boolean
-    output: string
-    linux_user?: string
-  }> = []
-
+  let benchmarkResult
   try {
-    await withSsh(
-      server.hostname,
-      server.ssh_port,
-      server.management_linux_user,
-      mgmtPrivatePem,
-      async (client) => {
-        const { sshExec } = await import('../../utils/ssh')
-
-        for (const check of CHECKS) {
-          try {
-            const { stdout } = await sshExec(client, check.command)
-            const ctx = check.id === 'stale_keys'
-              ? { managedCount: userKeyCounts[server.management_linux_user] ?? 0 }
-              : undefined
-            const passed = check.pass(stdout, ctx)
-            findings.push({
-              check_id: check.id,
-              description: check.description,
-              severity: check.severity,
-              passed,
-              output: stdout,
-            })
-          } catch (err: unknown) {
-            findings.push({
-              check_id: check.id,
-              description: check.description,
-              severity: check.severity,
-              passed: false,
-              output: `Error: ${(err as Error).message}`,
-            })
-          }
-        }
-      },
-      server.host_key_fingerprint ?? undefined,
-    )
+    benchmarkResult = await withServerSsh(serverId, async (client) => {
+      return runBenchmark(client)
+    })
   } catch (err: unknown) {
     log.error({ err, serverId }, 'Failed to connect for security scan')
     return
   }
 
-  // Determine overall severity
-  const failedSeverities = findings.filter((f) => !f.passed).map((f) => f.severity)
-  const severityOrder = ['ok', 'low', 'medium', 'high', 'critical']
-  const overallSeverity = failedSeverities.reduce<string>((max, s) => {
+  // Convert benchmark checks to the stored findings format
+  const findings = benchmarkResult.checks.map((chk) => ({
+    check_id: chk.id,
+    category: chk.category,
+    description: chk.title,
+    severity: toSeverity(chk),
+    passed: chk.status === 'pass' || chk.status === 'skip',
+    status: chk.status,
+    output: chk.actual,
+    expected: chk.expected,
+    remediation: chk.remediation,
+    reference: chk.reference ?? '',
+  }))
+
+  // Overall severity = worst failing check
+  const severityOrder = ['ok', 'low', 'medium', 'high', 'critical'] as const
+  const overallSeverity = findings.reduce<typeof severityOrder[number]>((max, f) => {
+    const s = f.severity
     return severityOrder.indexOf(s) > severityOrder.indexOf(max) ? s : max
   }, 'ok')
 
   await db.insertInto('security_scans').values({
     server_id: serverId,
     findings: JSON.stringify(findings),
-    severity: overallSeverity as 'ok' | 'low' | 'medium' | 'high' | 'critical',
-    scan_type: 'standard',
+    severity: overallSeverity,
+    scan_type: 'benchmark',
   }).execute()
 
-  // Alert on critical/high
+  // Alert on critical/high failures
   const serious = findings.filter((f) => !f.passed && ['critical', 'high'].includes(f.severity))
   for (const finding of serious) {
     await writeAuditLog({
@@ -166,7 +93,10 @@ export async function runSecurityScan(serverId: string): Promise<void> {
       details: {
         server: server.name,
         check: finding.check_id,
+        category: finding.category,
         severity: finding.severity,
+        found: finding.output,
+        expected: finding.expected,
       },
     })
   }

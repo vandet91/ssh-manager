@@ -45,9 +45,21 @@ export type Server = {
   host_key_fingerprint: string | null; host_key_verified: boolean
   management_key_id: string | null; management_linux_user: string
   is_active: boolean; last_connected_at: string | null; created_at: string
-  os_type: 'linux' | 'windows' | null
+  os_type: 'linux' | 'windows' | 'router' | 'access-point' | 'switch' | 'dvr' | 'nvr' | 'other-network' | null
+  device_category: 'server' | 'network' | null
   host_type: HostType | null
   host_type_detail: string | null
+  windows_rdp_ready: boolean
+}
+
+export type RdpCredential = {
+  id: string
+  label: string
+  service_username: string | null
+  notes: string | null
+  category: string
+  updated_at: string
+  is_archived: boolean
 }
 
 export type SshKey = {
@@ -164,6 +176,136 @@ export type Recommendation = {
   rationale: string
   snippet?: string
   reference?: string
+}
+
+export type CheckStatus = 'pass' | 'warn' | 'fail' | 'skip'
+export type CheckCategory = 'ssh' | 'password_policy' | 'accounts' | 'file_permissions' | 'kernel' | 'audit' | 'firewall' | 'updates'
+
+export type BenchmarkCheck = {
+  id: string
+  category: CheckCategory
+  title: string
+  description: string
+  status: CheckStatus
+  actual: string
+  expected: string
+  remediation: string
+  reference?: string
+}
+
+export type BenchmarkResult = {
+  ran_at: string
+  checks: BenchmarkCheck[]
+  summary: {
+    total: number
+    pass: number
+    warn: number
+    fail: number
+    skip: number
+    score: number
+  }
+}
+
+export type MigrationSnapshotMeta = {
+  id: string
+  server_id: string | null
+  server_name: string
+  label: string
+  created_by: string | null
+  created_at: string
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type MigrationSnapshotFull = MigrationSnapshotMeta & { snapshot: any }
+
+export type DiffStatus = 'match' | 'missing' | 'mismatch' | 'extra'
+
+export type DiffItem = {
+  section: string
+  key: string
+  status: DiffStatus
+  source_value: string
+  target_value: string
+  note: string
+}
+
+export type CompareResult = {
+  source: MigrationSnapshotMeta
+  target: MigrationSnapshotMeta
+  diff: DiffItem[]
+  summary: { total: number; match: number; missing: number; mismatch: number; extra: number }
+}
+
+export type BrowseEntry = {
+  name: string
+  type: 'dir' | 'file' | 'link' | 'other'
+  permissions: string
+  owner: string
+  group: string
+  size: number
+  modified: string
+}
+
+export type BrowseResult = {
+  path: string
+  parent: string
+  entries: BrowseEntry[]
+}
+
+export type TransferType = 'mysql' | 'postgresql' | 'mongodb' | 'redis' | 'files' | 'configs' | 'cron'
+
+export type DumpResult = {
+  dump_file: string
+  size_bytes: number
+  size_human: string
+}
+
+export type ReadinessStatus = 'ok' | 'warn' | 'fail'
+
+export type ReadinessItem = {
+  label: string
+  status: ReadinessStatus
+  value: string
+  note?: string
+}
+
+export type ReadinessReport = {
+  items: ReadinessItem[]
+  ready: boolean
+}
+
+export type VerifyStatus = 'match' | 'mismatch' | 'warning' | 'error' | 'skip'
+
+export type VerifyItem = {
+  label: string
+  source: string
+  target: string
+  status: VerifyStatus
+  note?: string
+}
+
+export type VerifyReport = {
+  job_id: string
+  ran_at: string
+  type: TransferType
+  items: VerifyItem[]
+  passed: number
+  failed: number
+  warnings: number
+}
+
+export type TransferJob = {
+  id: string
+  source_server_id: string
+  target_server_id: string
+  type: TransferType
+  options: { database?: string; source_path?: string; target_path?: string; users?: string }
+  status: 'pending' | 'running' | 'done' | 'error'
+  log: string[]
+  started_at: string
+  ended_at?: string
+  bytes_transferred: number
+  created_by: string
 }
 
 export type TelegramSettings = {

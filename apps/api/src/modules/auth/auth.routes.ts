@@ -35,21 +35,21 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     // Check account lockout
     const policy = await getPasswordPolicy()
-    if ((user as any).locked_until && new Date((user as any).locked_until) > new Date()) {
-      const unlockAt = new Date((user as any).locked_until)
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      const unlockAt = new Date(user.locked_until)
       const minsLeft = Math.ceil((unlockAt.getTime() - Date.now()) / 60000)
       return reply.code(423).send({ error: `Account locked. Try again in ${minsLeft} minute(s).` })
     }
 
     const valid = await bcrypt.compare(body.password, user.password_hash)
     if (!valid) {
-      const attempts = ((user as any).failed_login_attempts ?? 0) + 1
+      const attempts = (user.failed_login_attempts ?? 0) + 1
       const shouldLock = policy.max_login_attempts > 0 && attempts >= policy.max_login_attempts
       const lockedUntil = shouldLock
         ? new Date(Date.now() + policy.lockout_duration_minutes * 60 * 1000)
         : null
 
-      await (db as any).updateTable('users')
+      await db.updateTable('users')
         .set({ failed_login_attempts: attempts, locked_until: lockedUntil, updated_at: new Date() })
         .where('id', '=', user.id).execute()
 
@@ -66,8 +66,20 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
       })
     }
 
+    // Enforce password expiry before granting session
+    if (policy.max_age_days > 0) {
+      const changedAt = user.password_changed_at ? new Date(user.password_changed_at) : null
+      const expiredAt = changedAt
+        ? new Date(changedAt.getTime() + policy.max_age_days * 86400 * 1000)
+        : new Date(0) // never set = treat as immediately expired
+      if (new Date() > expiredAt) {
+        await writeAuditLog({ userId: user.id, userEmail: user.email, action: 'auth.login.password_expired', request: req })
+        return reply.code(403).send({ error: 'Password expired. Please contact an administrator to reset it.', code: 'PASSWORD_EXPIRED' })
+      }
+    }
+
     // Reset lockout on successful login
-    await (db as any).updateTable('users')
+    await db.updateTable('users')
       .set({ failed_login_attempts: 0, locked_until: null, last_login_at: new Date(), updated_at: new Date() })
       .where('id', '=', user.id).execute()
 
@@ -139,7 +151,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (!valid) return reply.code(401).send({ error: 'Current password is incorrect' })
 
     const passwordHash = await bcrypt.hash(body.newPassword, 12)
-    await (db as any).updateTable('users')
+    await db.updateTable('users')
       .set({ password_hash: passwordHash, password_changed_at: new Date(), updated_at: new Date() })
       .where('id', '=', user.id).execute()
 
@@ -163,7 +175,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (user.provider !== 'local') return reply.code(400).send({ error: 'Not a local account' })
 
     const passwordHash = await bcrypt.hash(body.new_password, 12)
-    await (db as any).updateTable('users')
+    await db.updateTable('users')
       .set({ password_hash: passwordHash, password_changed_at: new Date(), failed_login_attempts: 0, locked_until: null, updated_at: new Date() })
       .where('id', '=', body.user_id).execute()
 

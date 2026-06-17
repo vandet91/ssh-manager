@@ -56,9 +56,7 @@ export default function Logs() {
   }
 
   const clearAuditLogs = async (age: OlderThan) => {
-    const label = OLDER_THAN_LABELS[age]
     setClearAuditOpen(false)
-    if (!confirm(`Clear audit logs — ${label}? This cannot be undone.`)) return
     try {
       await api.delete(`/logs/audit?older_than=${age}`)
       loadAudit()
@@ -66,9 +64,7 @@ export default function Logs() {
   }
 
   const clearAllRecordings = async (age: OlderThan) => {
-    const label = OLDER_THAN_LABELS[age]
     setClearSessionOpen(false)
-    if (!confirm(`Delete session recordings — ${label}? This cannot be undone.`)) return
     try {
       await api.delete(`/logs/sessions?older_than=${age}`)
       loadSessions()
@@ -78,7 +74,6 @@ export default function Logs() {
   }
 
   const deleteRecording = async (id: string) => {
-    if (!confirm('Delete this session recording?')) return
     try {
       await api.delete(`/logs/sessions/${id}`)
       if (playingId === id) {

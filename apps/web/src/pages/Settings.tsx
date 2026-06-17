@@ -152,6 +152,14 @@ export default function Settings() {
   const [testingEmail, setTestingEmail] = useState(false)
   const [testMsg, setTestMsg] = useState('')
 
+  // AI Provider keys
+  type AiKeys = { claude: string; openai: string; gemini: string; deepseek: string; default_provider: string; default_model: string }
+  const [aiKeys, setAiKeys] = useState<AiKeys>({ claude: '', openai: '', gemini: '', deepseek: '', default_provider: 'claude', default_model: '' })
+  const [aiSaving, setAiSaving] = useState(false)
+  const [aiSaved, setAiSaved] = useState(false)
+  const [aiError, setAiError] = useState('')
+  const [showAiKeys, setShowAiKeys] = useState<Record<string, boolean>>({})
+
   useEffect(() => {
     api.get<PasswordPolicy>('/settings/password-policy')
       .then(p => { setPolicy(p); setLoading(false) })
@@ -161,6 +169,9 @@ export default function Settings() {
       .catch(() => {})
     api.get<AlertSettings>('/settings/alerts')
       .then(a => { setAlert(a); setRecipientsText(a.email_recipients.join(', ')) })
+      .catch(() => {})
+    api.get<AiKeys>('/settings/ai-keys')
+      .then(k => setAiKeys(k))
       .catch(() => {})
   }, [])
 
@@ -251,6 +262,19 @@ export default function Settings() {
     } finally {
       setTestingEmail(false)
       setTimeout(() => setTestMsg(''), 4000)
+    }
+  }
+
+  const saveAiKeys = async () => {
+    setAiSaving(true); setAiError(''); setAiSaved(false)
+    try {
+      await api.put('/settings/ai-keys', aiKeys)
+      setAiSaved(true)
+      setTimeout(() => setAiSaved(false), 3000)
+    } catch (err: unknown) {
+      setAiError((err as Error).message ?? 'Save failed')
+    } finally {
+      setAiSaving(false)
     }
   }
 
@@ -750,6 +774,82 @@ export default function Settings() {
 
             </div>
           </div>
+
+        {/* ── AI Provider Keys ─────────────────────────────────────────────── */}
+        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 12, overflow: 'hidden' }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-weak)', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 18 }}>🤖</span>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-heading)' }}>AI Providers</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>API keys for AI log analysis. Keys are stored encrypted in the database.</div>
+            </div>
+          </div>
+          <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+            {/* Provider rows */}
+            {([
+              { id: 'claude',   label: 'Anthropic Claude', icon: '🟠', hint: 'Best for deep reasoning & long-context analysis' },
+              { id: 'openai',   label: 'OpenAI GPT',       icon: '🟢', hint: 'Reliable, fast — gpt-4o-mini is cost-efficient'  },
+              { id: 'gemini',   label: 'Google Gemini',    icon: '🔵', hint: 'Huge 1M token context — great for very large logs' },
+              { id: 'deepseek', label: 'DeepSeek',         icon: '🔴', hint: 'Excellent technical analysis, very low cost'       },
+            ] as const).map(({ id, label, icon, hint }) => (
+              <div key={id} style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 12, alignItems: 'start' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{icon} {label}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.4 }}>{hint}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    <input
+                      type={showAiKeys[id] ? 'text' : 'password'}
+                      value={(aiKeys as any)[id]}
+                      onChange={e => setAiKeys(k => ({ ...k, [id]: e.target.value }))}
+                      placeholder={`${label} API key`}
+                      style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 12, paddingRight: 36 }}
+                    />
+                    <button type="button"
+                      onClick={() => setShowAiKeys(s => ({ ...s, [id]: !s[id] }))}
+                      style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, padding: 0 }}>
+                      {showAiKeys[id] ? '🙈' : '👁'}
+                    </button>
+                  </div>
+                  {(aiKeys as any)[id] && (
+                    <span style={{ fontSize: 11, color: 'var(--success)', whiteSpace: 'nowrap' }}>✓ Set</span>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {/* Default provider/model */}
+            <div style={{ borderTop: '1px solid var(--border-weak)', paddingTop: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={labelStyle}>Default Provider</label>
+                <select value={aiKeys.default_provider} onChange={e => setAiKeys(k => ({ ...k, default_provider: e.target.value }))} style={inputStyle}>
+                  <option value="claude">🟠 Anthropic Claude</option>
+                  <option value="openai">🟢 OpenAI GPT</option>
+                  <option value="gemini">🔵 Google Gemini</option>
+                  <option value="deepseek">🔴 DeepSeek</option>
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Default Model <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(overridable per analysis)</span></label>
+                <input value={aiKeys.default_model} onChange={e => setAiKeys(k => ({ ...k, default_model: e.target.value }))}
+                  placeholder="e.g. claude-sonnet-4-6 (leave blank for auto)"
+                  style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 12 }} />
+              </div>
+            </div>
+
+            {/* Save bar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 4, borderTop: '1px solid var(--border-weak)' }}>
+              <button type="button" onClick={saveAiKeys} disabled={aiSaving}
+                className="btn-primary" style={{ padding: '8px 24px' }}>
+                {aiSaving ? 'Saving…' : 'Save AI Keys'}
+              </button>
+              {aiSaved && <span style={{ fontSize: 13, color: 'var(--success)' }}>✓ Saved</span>}
+              {aiError && <span style={{ fontSize: 13, color: 'var(--error)' }}>✗ {aiError}</span>}
+            </div>
+          </div>
+        </div>
 
         </>
       )}
