@@ -228,6 +228,7 @@ icacls "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant
 | Software detection (IIS, SQL Server, .NET, Docker…) | ✅ |
 | Best Practices (Windows-specific) | ✅ |
 | Remote Desktop (RDP) | ✅ |
+| PingCastle AD Security Report | ✅ Upload XML → scores + risk findings dashboard |
 | Security Scanner | ⚠️ Linux checks only |
 | Service control (start/stop/restart) | ⚠️ Linux systemd only |
 
@@ -345,7 +346,7 @@ docker compose build --no-cache && docker compose up -d
 
 ## Database Migrations
 
-Migrations run automatically on startup. Current schema version: **017**.
+Migrations run automatically on startup. Current schema version: **018**.
 
 | Migration | What it adds |
 |-----------|-------------|
@@ -366,3 +367,4 @@ Migrations run automatically on startup. Current schema version: **017**.
 | `015` | Windows RDP credential columns |
 | `016` | Device type column |
 | `017` | Command library |
+| `018` | PingCastle AD security reports |

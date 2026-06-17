@@ -164,6 +164,22 @@ export interface MigrationSnapshotTable {
   created_at: ColumnType<Date, never, never>
 }
 
+export interface PingcastleReportTable {
+  id: Generated<string>
+  server_id: string
+  domain_fqdn: string | null
+  generation_date: Date | null
+  global_score: number | null
+  stale_score: number | null
+  privileged_score: number | null
+  trust_score: number | null
+  anomaly_score: number | null
+  risk_rules: Opt<unknown>
+  domain_controllers: Opt<unknown>
+  uploaded_by: string | null
+  uploaded_at: ColumnType<Date, never, never>
+}
+
 export interface Database {
   users: UserTable
   servers: ServerTable
@@ -175,6 +191,7 @@ export interface Database {
   rotation_jobs: RotationJobTable
   server_credentials: ServerCredentialTable
   migration_snapshots: MigrationSnapshotTable
+  pingcastle_reports: PingcastleReportTable
 }
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })

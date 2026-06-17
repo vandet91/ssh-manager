@@ -140,7 +140,7 @@ export default function Servers() {
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [infoError, setInfoError] = useState('')
-  const [infoTab, setInfoTab] = useState<'overview' | 'users' | 'keys' | 'credentials' | 'software' | 'recommendations' | 'benchmark' | 'ai'>('overview')
+  const [infoTab, setInfoTab] = useState<'overview' | 'users' | 'keys' | 'credentials' | 'software' | 'recommendations' | 'benchmark' | 'ai' | 'pingcastle'>('overview')
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [recLoading, setRecLoading] = useState(false)
   const [recError, setRecError] = useState('')
@@ -153,6 +153,16 @@ export default function Servers() {
   const [benchmarkCatFilter, setBenchmarkCatFilter] = useState<'all' | CheckCategory>('all')
   const [expandedCheck, setExpandedCheck] = useState<string | null>(null)
   const [copiedRemediation, setCopiedRemediation] = useState<string | null>(null)
+
+  // PingCastle
+  type PcRule = { points: number; category: string; risk_id: string; rationale: string; details: string }
+  type PcReport = { domain_fqdn: string | null; generation_date: string | null; global_score: number; stale_score: number; privileged_score: number; trust_score: number; anomaly_score: number; risk_rules: PcRule[]; domain_controllers: { name: string; ip: string; os: string }[]; uploaded_at: string }
+  const [pcReport, setPcReport] = useState<PcReport | null>(null)
+  const [pcLoading, setPcLoading] = useState(false)
+  const [pcUploading, setPcUploading] = useState(false)
+  const [pcError, setPcError] = useState('')
+  const [pcCatFilter, setPcCatFilter] = useState('All')
+  const [pcSearch, setPcSearch] = useState('')
 
   const [software, setSoftware] = useState<SoftwareItem[]>([])
   const [softwareLoading, setSoftwareLoading] = useState(false)
@@ -446,6 +456,8 @@ export default function Servers() {
     setShowAddWinCred(false)
     setEditWinCred(null)
     setRevealedWinPasswords({})
+    setPcReport(null)
+    setPcError('')
     if (s.os_type === 'windows') {
       setInfoTab('credentials')
       // Load credentials immediately; scan SSH info in background (requires OpenSSH on Windows)
@@ -467,6 +479,36 @@ export default function Servers() {
       setRecError((err as Error).message)
     } finally {
       setRecLoading(false)
+    }
+  }
+
+  const loadPingcastle = async (serverId: string) => {
+    setPcLoading(true)
+    setPcError('')
+    try {
+      const result = await api.get<any>(`/servers/${serverId}/pingcastle`)
+      setPcReport({ ...result, risk_rules: result.risk_rules ?? [], domain_controllers: result.domain_controllers ?? [] })
+    } catch (err: unknown) {
+      const msg = (err as Error).message
+      if (!msg.includes('404')) setPcError(msg)
+    } finally {
+      setPcLoading(false)
+    }
+  }
+
+  const uploadPingcastle = async (serverId: string, file: File) => {
+    setPcUploading(true)
+    setPcError('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      await fetch(`/api/servers/${serverId}/pingcastle`, { method: 'POST', body: form, credentials: 'include' })
+        .then(async r => { if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error ?? 'Upload failed') } })
+      await loadPingcastle(serverId)
+    } catch (err: unknown) {
+      setPcError((err as Error).message)
+    } finally {
+      setPcUploading(false)
     }
   }
 
@@ -1319,7 +1361,7 @@ export default function Servers() {
               {/* Tabs */}
               <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border-med)', flexShrink: 0, flexWrap: 'wrap' }}>
                 {(infoServer?.os_type === 'windows'
-                  ? (['overview', 'credentials', 'users'] as const)
+                  ? (['overview', 'credentials', 'users', 'pingcastle'] as const)
                   : (['overview', 'users', 'keys', 'credentials', 'software', 'recommendations', 'benchmark', 'ai'] as const)
                 ).map((t) => (
                   <button key={t}
@@ -1333,6 +1375,7 @@ export default function Servers() {
                       if (t === 'software' && software.length === 0 && !softwareLoading) loadSoftware(infoServer!.id)
                       if (t === 'recommendations' && recommendations.length === 0 && !recLoading) loadRecommendations(infoServer!.id)
                       if (t === 'benchmark' && !benchmark && !benchmarkLoading) loadBenchmark(infoServer!.id)
+                      if (t === 'pingcastle' && !pcReport && !pcLoading) loadPingcastle(infoServer!.id)
                     }}
                     style={{
                       padding: '9px 14px', fontSize: 13, fontWeight: 500,
@@ -1354,6 +1397,7 @@ export default function Servers() {
                       : t === 'recommendations' ? '💡 Best Practices'
                       : t === 'benchmark' ? '🔐 Security Benchmark'
                       : t === 'ai' ? '🤖 AI Analyst'
+                      : t === 'pingcastle' ? '🏰 PingCastle'
                       : 'Overview'}
                   </button>
                 ))}
@@ -3159,6 +3203,172 @@ export default function Servers() {
 
                 </div>
               )}
+
+              {infoTab === 'pingcastle' && (() => {
+                const scoreColor = (n: number) => n >= 80 ? '#ef4444' : n >= 50 ? '#f97316' : n >= 25 ? '#eab308' : '#22c55e'
+                const scoreLabel = (n: number) => n >= 80 ? 'Critical' : n >= 50 ? 'High' : n >= 25 ? 'Medium' : 'Good'
+                const catColors: Record<string, string> = { Stale: '#f97316', Anomaly: '#a855f7', Privileged: '#ef4444', Trust: '#3b82f6' }
+                const filteredRules = (pcReport?.risk_rules ?? []).filter(r => {
+                  const catOk = pcCatFilter === 'All' || r.category === pcCatFilter
+                  const searchOk = !pcSearch || r.risk_id.toLowerCase().includes(pcSearch.toLowerCase()) || r.rationale.toLowerCase().includes(pcSearch.toLowerCase())
+                  return catOk && searchOk
+                }).sort((a, b) => b.points - a.points)
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                    {/* Upload area */}
+                    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 16 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 4 }}>🏰 PingCastle AD Security Report</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                            Run PingCastle on your domain controller, then upload the generated <code style={{ background: 'var(--border-weak)', padding: '1px 4px', borderRadius: 3 }}>ad_hc_*.xml</code> file here.
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                          {pcReport && (
+                            <button onClick={async () => {
+                              if (!confirm('Delete this PingCastle report?')) return
+                              await fetch(`/api/servers/${infoServer!.id}/pingcastle`, { method: 'DELETE', credentials: 'include' })
+                              setPcReport(null)
+                            }}
+                              style={{ padding: '7px 14px', fontSize: 12, borderRadius: 7, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontWeight: 500 }}>
+                              🗑 Delete Report
+                            </button>
+                          )}
+                          <label style={{ padding: '7px 14px', fontSize: 12, borderRadius: 7, border: '1px solid var(--border-med)', background: pcUploading ? 'var(--border-weak)' : 'var(--accent-hex)', color: pcUploading ? 'var(--text-muted)' : '#fff', cursor: pcUploading ? 'default' : 'pointer', fontWeight: 600, display: 'inline-block' }}>
+                            {pcUploading ? '⏳ Uploading…' : '📤 Upload XML'}
+                            <input type="file" accept=".xml" style={{ display: 'none' }} disabled={pcUploading}
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0]
+                                if (!file) return
+                                e.target.value = ''
+                                await uploadPingcastle(infoServer!.id, file)
+                              }} />
+                          </label>
+                        </div>
+                      </div>
+                      {pcError && <div style={{ marginTop: 10, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', padding: '8px 12px', borderRadius: 6 }}>{pcError}</div>}
+                    </div>
+
+                    {pcLoading && (
+                      <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)', fontSize: 13 }}>Loading report…</div>
+                    )}
+
+                    {!pcLoading && !pcReport && (
+                      <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)', fontSize: 13 }}>
+                        <div style={{ fontSize: 32, marginBottom: 12 }}>🏰</div>
+                        No report uploaded yet. Upload a PingCastle XML to see your AD security posture.
+                      </div>
+                    )}
+
+                    {pcReport && (
+                      <>
+                        {/* Meta */}
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-muted)' }}>
+                          {pcReport.domain_fqdn && <span style={{ background: 'var(--border-weak)', padding: '3px 8px', borderRadius: 5 }}>🌐 {pcReport.domain_fqdn}</span>}
+                          {pcReport.generation_date && <span style={{ background: 'var(--border-weak)', padding: '3px 8px', borderRadius: 5 }}>📅 Generated: {new Date(pcReport.generation_date).toLocaleDateString()}</span>}
+                          <span style={{ background: 'var(--border-weak)', padding: '3px 8px', borderRadius: 5 }}>⬆️ Uploaded: {new Date(pcReport.uploaded_at).toLocaleDateString()}</span>
+                        </div>
+
+                        {/* Global score */}
+                        <div style={{ background: 'var(--card-bg)', border: `2px solid ${scoreColor(pcReport.global_score)}40`, borderRadius: 12, padding: 20, display: 'flex', alignItems: 'center', gap: 20 }}>
+                          <div style={{ width: 72, height: 72, borderRadius: '50%', border: `4px solid ${scoreColor(pcReport.global_score)}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <span style={{ fontSize: 22, fontWeight: 800, color: scoreColor(pcReport.global_score), lineHeight: 1 }}>{pcReport.global_score}</span>
+                            <span style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>/100</span>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: scoreColor(pcReport.global_score) }}>{scoreLabel(pcReport.global_score)} Risk</div>
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Overall AD security score — higher is worse</div>
+                          </div>
+                        </div>
+
+                        {/* Category scores */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
+                          {([
+                            { label: 'Stale Objects', key: 'stale_score' as const, icon: '🕰' },
+                            { label: 'Privileged Accounts', key: 'privileged_score' as const, icon: '👑' },
+                            { label: 'Trusts', key: 'trust_score' as const, icon: '🔗' },
+                            { label: 'Anomalies', key: 'anomaly_score' as const, icon: '⚠️' },
+                          ]).map(({ label, key, icon }) => {
+                            const val = pcReport[key] ?? 0
+                            const col = scoreColor(val)
+                            return (
+                              <div key={key} style={{ background: 'var(--card-bg)', border: `1px solid ${col}30`, borderLeft: `3px solid ${col}`, borderRadius: 8, padding: '12px 14px' }}>
+                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>{icon} {label}</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                  <span style={{ fontSize: 24, fontWeight: 800, color: col }}>{val}</span>
+                                  <span style={{ fontSize: 11, color: col, fontWeight: 600 }}>{scoreLabel(val)}</span>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+
+                        {/* Domain controllers */}
+                        {pcReport.domain_controllers.length > 0 && (
+                          <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 14 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 10 }}>Domain Controllers</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {pcReport.domain_controllers.map((dc, i) => (
+                                <div key={i} style={{ display: 'flex', gap: 10, fontSize: 12, flexWrap: 'wrap' }}>
+                                  <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{dc.name}</span>
+                                  {dc.ip && <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{dc.ip}</span>}
+                                  {dc.os && <span style={{ color: 'var(--text-secondary)' }}>{dc.os}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Risk rules */}
+                        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 14 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', marginRight: 'auto' }}>
+                              Risk Findings ({filteredRules.length}{filteredRules.length !== pcReport.risk_rules.length ? ` / ${pcReport.risk_rules.length}` : ''})
+                            </div>
+                            <select value={pcCatFilter} onChange={e => setPcCatFilter(e.target.value)}
+                              style={{ padding: '5px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}>
+                              <option>All</option>
+                              {['Stale', 'Privileged', 'Trust', 'Anomaly'].map(c => <option key={c}>{c}</option>)}
+                            </select>
+                            <input value={pcSearch} onChange={e => setPcSearch(e.target.value)} placeholder="Search findings…"
+                              style={{ padding: '5px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', width: 160 }} />
+                          </div>
+
+                          {filteredRules.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: 24, fontSize: 12, color: 'var(--text-muted)' }}>
+                              {pcReport.risk_rules.length === 0 ? '🎉 No risk findings — excellent AD security posture!' : 'No findings match the current filter.'}
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {filteredRules.map((rule, i) => {
+                                const col = catColors[rule.category] ?? '#6366f1'
+                                return (
+                                  <div key={i} style={{ border: `1px solid ${col}25`, borderLeft: `3px solid ${col}`, background: `${col}06`, borderRadius: 8, padding: '10px 12px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: rule.rationale ? 6 : 0 }}>
+                                      <span style={{ fontSize: 13, fontWeight: 800, color: col, minWidth: 32, textAlign: 'right', flexShrink: 0 }}>{rule.points}</span>
+                                      <div style={{ flex: 1 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: `${col}20`, color: col }}>{rule.category}</span>
+                                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{rule.risk_id}</span>
+                                        </div>
+                                        {rule.rationale && <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.45 }}>{rule.rationale}</div>}
+                                        {rule.details && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, fontFamily: 'monospace', wordBreak: 'break-word' }}>{rule.details}</div>}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                  </div>
+                )
+              })()}
 
               </div>{/* end tab-content min-height wrapper */}
             </div>

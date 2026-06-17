@@ -23,6 +23,7 @@
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.4.2",
     "dotenv": "^16.4.5",
+    "fast-xml-parser": "^5.9.2",
     "fastify": "^4.26.2",
     "fastify-plugin": "^4.5.1",
     "ioredis": "^5.3.2",

@@ -29,6 +29,7 @@ import fsRoutes from './modules/servers/fs.routes'
 import rdpRoutes from './modules/rdp/rdp.routes'
 import shareRoutes from './modules/share/share.routes'
 import commandRoutes from './modules/commands/commands.routes'
+import pingcastleRoutes from './modules/pingcastle/pingcastle.routes'
 import { startTelegramBot } from './modules/telegram/telegram.service'
 import { startRotationWorker, scheduleRotations } from './jobs/rotation.worker'
 import { FileMigrationProvider, Migrator } from 'kysely'
@@ -139,6 +140,7 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(rdpRoutes)
   await fastify.register(shareRoutes)
   await fastify.register(commandRoutes)
+  await fastify.register(pingcastleRoutes)
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
