@@ -193,7 +193,34 @@ Set-Service -Name sshd -StartupType Automatic
 
 > For Windows Server 2016, download from [github.com/PowerShell/Win32-OpenSSH](https://github.com/PowerShell/Win32-OpenSSH/releases) and run `install-sshd.ps1`.
 
-#### 2. Set PowerShell as the default shell (recommended)
+#### 2. Allow SSH through Windows Firewall
+
+Installing OpenSSH Server automatically creates an inbound rule named **OpenSSH SSH Server (sshd)**. Verify it is enabled, or create it manually:
+
+```powershell
+# Verify the rule exists and is enabled
+Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' | Select-Object Name, Enabled, Action
+
+# If missing, create it manually
+New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' `
+  -DisplayName 'OpenSSH SSH Server (sshd)' `
+  -Enabled True `
+  -Direction Inbound `
+  -Protocol TCP `
+  -Action Allow `
+  -LocalPort 22
+```
+
+> To restrict SSH access to specific management IP addresses (recommended for Domain Controllers):
+> ```powershell
+> New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' `
+>   -DisplayName 'OpenSSH SSH Server (sshd)' `
+>   -Enabled True -Direction Inbound -Protocol TCP `
+>   -Action Allow -LocalPort 22 `
+>   -RemoteAddress 192.168.1.10,192.168.1.11
+> ```
+
+#### 3. Set PowerShell as the default shell (recommended)
 
 ```powershell
 New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell `
