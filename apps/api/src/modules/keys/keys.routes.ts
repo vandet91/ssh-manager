@@ -199,12 +199,63 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     return { ...key, private_key_enc: undefined }
   })
 
+  // GET /keys/orphaned-assignments — keys that have active assignments pointing to deleted servers
+  fastify.get('/keys/orphaned-assignments', { preHandler: requirePermission('keys:read') }, async (_req, reply) => {
+    const rows = await db.selectFrom('key_assignments')
+      .innerJoin('ssh_keys', 'ssh_keys.id', 'key_assignments.key_id')
+      .leftJoin('servers', 'servers.id', 'key_assignments.server_id')
+      .select([
+        'key_assignments.key_id',
+        'ssh_keys.name as key_name',
+        'key_assignments.server_id',
+        'key_assignments.linux_user',
+        'servers.name as server_name',
+        'servers.is_active as server_active',
+      ])
+      .where('key_assignments.is_active', '=', true)
+      .where((eb) => eb.or([
+        eb('servers.id', 'is', null),
+        eb('servers.is_active', '=', false),
+      ]))
+      .execute()
+    return rows
+  })
+
+  // POST /keys/cleanup-orphans — deactivate all assignments pointing to deleted servers
+  fastify.post('/keys/cleanup-orphans', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
+    const result = await db.updateTable('key_assignments')
+      .set({ is_active: false })
+      .where('is_active', '=', true)
+      .where('server_id', 'not in',
+        db.selectFrom('servers').select('id').where('is_active', '=', true)
+      )
+      .execute()
+    const cleaned = Number((result as unknown as { numUpdatedRows: bigint }).numUpdatedRows ?? 0)
+    await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'keys.orphans_cleaned', details: { rows: cleaned }, request: req })
+    return { cleaned }
+  })
+
   // DELETE /keys/:id — moves to archive (soft delete)
   fastify.delete('/keys/:id', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
+    // Auto-clean orphaned assignments (server was deleted but assignments weren't deactivated)
+    await db.updateTable('key_assignments')
+      .set({ is_active: false })
+      .where('key_id', '=', id)
+      .where('is_active', '=', true)
+      .where('server_id', 'not in',
+        db.selectFrom('servers').select('id').where('is_active', '=', true)
+      )
+      .execute()
+
     const activeAssignments = await db.selectFrom('key_assignments')
-      .selectAll().where('key_id', '=', id).where('is_active', '=', true).execute()
+      .innerJoin('servers', 'servers.id', 'key_assignments.server_id')
+      .selectAll('key_assignments')
+      .where('key_assignments.key_id', '=', id)
+      .where('key_assignments.is_active', '=', true)
+      .where('servers.is_active', '=', true)
+      .execute()
     if (activeAssignments.length > 0) {
       return reply.code(409).send({ error: `Key has ${activeAssignments.length} active assignment(s) — revoke them first`, count: activeAssignments.length })
     }

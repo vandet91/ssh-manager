@@ -609,6 +609,25 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.code(500).send({ error: (err as Error).message })
     }
   })
+
+  // GET /servers/:id/fs/download?path= — stream file to browser
+  fastify.get('/servers/:id/fs/download', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { path: filePath } = z.object({ path: z.string().min(1) }).parse(req.query)
+    try {
+      const buf = await withServerSsh(id, async (client) => {
+        const sftp = await getSftp(client)
+        return sftpReadFile(sftp, filePath)
+      })
+      const filename = path.posix.basename(filePath)
+      return reply
+        .header('Content-Disposition', `attachment; filename="${filename}"`)
+        .header('Content-Type', 'application/octet-stream')
+        .send(buf)
+    } catch (err) {
+      return reply.code(500).send({ error: (err as Error).message })
+    }
+  })
 }
 
 export default fsRoutes

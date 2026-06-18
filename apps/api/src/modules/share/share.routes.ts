@@ -54,24 +54,24 @@ async function shareRoutes(fastify: FastifyInstance): Promise<void> {
 
   // POST /share/file — upload file as base64
   fastify.post('/share/file', { preHandler: [] }, async (req, reply) => {
-    const body = z.object({
-      filename: z.string().min(1),
-      data: z.string().min(1),
-    }).parse(req.body)
+    const data = await (req as any).file()
+    if (!data) return reply.code(400).send({ error: 'No file uploaded' })
+
+    const buf: Buffer = await data.toBuffer()
+    const base64 = buf.toString('base64')
+    const filename = (data.filename as string).replace(/[^a-zA-Z0-9._-]/g, '_') || 'file'
 
     const redis = getRedis()
     const id = generateId()
     const now = new Date().toISOString()
     const expiresAt = getExpiryTime()
-    const filename = body.filename.replace(/[^a-zA-Z0-9._-]/g, '_')
-    const size = Math.round(body.data.length * 0.75)
 
     const item = JSON.stringify({
       id,
       type: 'file',
       name: filename,
-      size,
-      data: body.data,
+      size: buf.length,
+      data: base64,
       createdAt: now,
       expiresAt,
     })
@@ -80,7 +80,7 @@ async function shareRoutes(fastify: FastifyInstance): Promise<void> {
     await redis.zadd(LIST_KEY, Date.now(), id)
     await redis.expire(LIST_KEY, EXPIRY_SECONDS)
 
-    return { id, expiresAt }
+    return { id, expiresAt, name: filename, size: buf.length }
   })
 
   // GET /share/access/:id — get file/text content

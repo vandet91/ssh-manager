@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../api/client'
 
+type Server = { id: string; name: string; hostname: string; os_type?: string; management_key_id?: string | null }
+
 const DEVICE_TYPES = [
   { value: 'windows', label: '🪟 Windows', color: '#0078d4' },
   { value: 'linux',   label: '🐧 Linux',   color: '#e95420' },
@@ -32,13 +34,23 @@ export default function Share() {
   const [label, setLabel]         = useState('')
   const [filterType, setFilterType] = useState('all')
   const [textError, setTextError] = useState('')
+  const [fileError, setFileError] = useState('')
+  const [uploading, setUploading] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText]   = useState('')
   const [editLabel, setEditLabel] = useState('')
   const [editType, setEditType]   = useState('windows')
+  const [servers, setServers]     = useState<Server[]>([])
+  const [grabServerId, setGrabServerId] = useState('')
+  const [grabPath, setGrabPath]   = useState('')
+  const [grabLoading, setGrabLoading] = useState(false)
+  const [grabError, setGrabError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadShares() }, [])
+  useEffect(() => {
+    loadShares()
+    api.get<Server[]>('/servers').then(s => setServers(s.filter(sv => sv.management_key_id))).catch(() => {})
+  }, [])
 
   const loadShares = async () => {
     try { setItems(await api.get<ShareItem[]>('/share/list')) } catch {}
@@ -72,17 +84,46 @@ export default function Share() {
   }
 
   const uploadFiles = async (files: File[]) => {
-    for (const file of files) {
-      const reader = new FileReader()
-      reader.onload = async () => {
-        try {
-          const base64 = (reader.result as string).split(',')[1]
-          const res = await api.post<{ id: string; expiresAt: string }>('/share/file', { filename: file.name, data: base64 })
-          setItems(prev => [{ id: res.id, type: 'file', name: file.name, size: file.size,
-            createdAt: new Date().toISOString(), expiresAt: res.expiresAt }, ...prev])
-        } catch {}
+    setFileError('')
+    setUploading(true)
+    try {
+      for (const file of files) {
+        const form = new FormData()
+        form.append('file', file)
+        const res = await fetch('/api/share/file', { method: 'POST', body: form, credentials: 'include' })
+        if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error ?? `Upload failed (${res.status})`) }
+        const data = await res.json()
+        setItems(prev => [{ id: data.id, type: 'file', name: data.name ?? file.name, size: data.size ?? file.size,
+          createdAt: new Date().toISOString(), expiresAt: data.expiresAt }, ...prev])
       }
-      reader.readAsDataURL(file)
+    } catch (err: unknown) {
+      setFileError((err as Error).message || 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const grabFromServer = async () => {
+    if (!grabServerId || !grabPath.trim()) return
+    setGrabError('')
+    setGrabLoading(true)
+    try {
+      const res = await fetch(`/api/servers/${grabServerId}/fs/download?path=${encodeURIComponent(grabPath.trim())}`, { credentials: 'include' })
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error ?? `Failed (${res.status})`) }
+      const buf = await res.arrayBuffer()
+      const filename = grabPath.trim().split('/').pop()?.split('\\').pop() || 'file'
+      const form = new FormData()
+      form.append('file', new File([buf], filename))
+      const shareRes = await fetch('/api/share/file', { method: 'POST', body: form, credentials: 'include' })
+      if (!shareRes.ok) { const j = await shareRes.json().catch(() => ({})); throw new Error(j.error ?? 'Share failed') }
+      const data = await shareRes.json()
+      setItems(prev => [{ id: data.id, type: 'file', name: data.name ?? filename, size: buf.byteLength,
+        createdAt: new Date().toISOString(), expiresAt: data.expiresAt }, ...prev])
+      setGrabPath('')
+    } catch (err: unknown) {
+      setGrabError((err as Error).message)
+    } finally {
+      setGrabLoading(false)
     }
   }
 
@@ -142,16 +183,37 @@ export default function Share() {
           {/* File upload */}
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-med)', borderRadius: 10, padding: 16 }}>
             <h2 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>📁 File Share</h2>
-            <input ref={fileInputRef} type="file" multiple onChange={e => uploadFiles(Array.from(e.target.files ?? []))} style={{ display: 'none' }} />
-            <div onClick={() => fileInputRef.current?.click()}
+            <input ref={fileInputRef} type="file" multiple onChange={e => { uploadFiles(Array.from(e.target.files ?? [])); e.target.value = '' }} style={{ display: 'none' }} />
+            <div onClick={() => !uploading && fileInputRef.current?.click()}
               onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLDivElement).style.borderColor = '#1f6feb' }}
               onDragLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-med)' }}
-              onDrop={e => { e.preventDefault(); (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-med)'; uploadFiles(Array.from(e.dataTransfer.files)) }}
+              onDrop={e => { e.preventDefault(); (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-med)'; if (!uploading) uploadFiles(Array.from(e.dataTransfer.files)) }}
               style={{ padding: 20, borderRadius: 8, border: '2px dashed var(--border-med)',
-                background: 'var(--bg-input)', cursor: 'pointer', textAlign: 'center' }}>
-              <div style={{ fontSize: 26, marginBottom: 4 }}>📤</div>
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>Click or drop files</p>
+                background: 'var(--bg-input)', cursor: uploading ? 'default' : 'pointer', textAlign: 'center', opacity: uploading ? 0.6 : 1 }}>
+              <div style={{ fontSize: 26, marginBottom: 4 }}>{uploading ? '⏳' : '📤'}</div>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>{uploading ? 'Uploading…' : 'Click or drop files'}</p>
             </div>
+            {fileError && <p style={{ margin: '8px 0 0', fontSize: 11, color: '#ef4444' }}>⚠️ {fileError}</p>}
+          </div>
+
+          {/* Grab from server */}
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-med)', borderRadius: 10, padding: 16 }}>
+            <h2 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>🖥 Grab file from server</h2>
+            <select value={grabServerId} onChange={e => setGrabServerId(e.target.value)}
+              style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12, marginBottom: 8 }}>
+              <option value=''>— Select server —</option>
+              {servers.map(s => <option key={s.id} value={s.id}>{s.os_type === 'windows' ? '🪟' : '🐧'} {s.name} ({s.hostname})</option>)}
+            </select>
+            <input value={grabPath} onChange={e => setGrabPath(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && grabFromServer()}
+              placeholder='/var/log/syslog  or  C:\path\to\file.txt'
+              style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'monospace', marginBottom: 8, boxSizing: 'border-box' }} />
+            {grabError && <p style={{ margin: '0 0 8px', fontSize: 11, color: '#ef4444' }}>⚠️ {grabError}</p>}
+            <button onClick={grabFromServer} disabled={grabLoading || !grabServerId || !grabPath.trim()}
+              style={{ width: '100%', padding: '8px', borderRadius: 6, border: 'none', fontSize: 13, fontWeight: 600, cursor: grabLoading || !grabServerId || !grabPath.trim() ? 'not-allowed' : 'pointer',
+                background: grabLoading || !grabServerId || !grabPath.trim() ? '#4b5563' : '#0e7490', color: '#fff' }}>
+              {grabLoading ? '⏳ Fetching…' : '⬇ Fetch & Share'}
+            </button>
           </div>
 
           {/* Shared files */}

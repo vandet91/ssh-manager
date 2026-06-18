@@ -15,6 +15,7 @@ export default function Assignments() {
   const [error, setError] = useState('')
   const [serverUsers, setServerUsers] = useState<ServerUser[]>([])
   const [loadingServerUsers, setLoadingServerUsers] = useState(false)
+  const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null)
 
   const load = () => {
     api.get<{ data: Assignment[] } | Assignment[]>('/assignments').then((r) => setAssignments(Array.isArray(r) ? r : (r as { data: Assignment[] }).data ?? [])).catch(() => {})
@@ -51,14 +52,16 @@ export default function Assignments() {
   }
 
   const revoke = async (id: string) => {
-    if (!confirm('Revoke this assignment? The key will be removed from the server.')) return
     await api.delete(`/assignments/${id}`)
+    setRevokeConfirm(null)
     load()
   }
 
   const userMap = Object.fromEntries(users.map((u) => [u.id, u.email]))
   const keyMap = Object.fromEntries(keys.map((k) => [k.id, k.name]))
   const serverMap = Object.fromEntries(servers.map((s) => [s.id, s.name]))
+
+  const orphanedCount = assignments.filter(a => a.is_active && (a.server_is_active === false || a.key_is_active === false)).length
 
   return (
     <div className="p-6 space-y-4">
@@ -68,6 +71,12 @@ export default function Assignments() {
           + Assign Key
         </button>
       </div>
+
+      {orphanedCount > 0 && (
+        <div className="flex items-center gap-3 bg-yellow-900/30 border border-yellow-700/50 text-yellow-300 text-sm rounded-lg px-4 py-3">
+          <span>⚠ {orphanedCount} assignment{orphanedCount > 1 ? 's' : ''} point to deleted servers or deleted keys. Revoke them to clean up.</span>
+        </div>
+      )}
 
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
         <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 780 }}>
@@ -96,23 +105,43 @@ export default function Assignments() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {assignments.map((a) => (
-              <tr key={a.id} className="hover:bg-gray-800/30">
+            {assignments.map((a) => {
+              const serverDeleted = a.is_active && a.server_is_active === false
+              const keyDeleted = a.is_active && a.key_is_active === false
+              const isOrphaned = serverDeleted || keyDeleted
+              return (
+              <tr key={a.id} className={`hover:bg-gray-800/30 ${isOrphaned ? 'bg-yellow-900/10' : ''}`}>
                 <td className="px-3 py-2 text-gray-300 text-xs" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{userMap[a.user_id] ?? a.user_id.slice(0, 8)}</td>
-                <td className="px-3 py-2 text-gray-300" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{keyMap[a.key_id] ?? '—'}</td>
-                <td className="px-3 py-2 text-gray-300" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{serverMap[a.server_id] ?? '—'}</td>
+                <td className="px-3 py-2 text-gray-300" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {keyDeleted
+                    ? <span className="text-yellow-400">{a.key_name ?? '(deleted key)'} <Badge label="Deleted" variant="high" /></span>
+                    : (a.key_name ?? keyMap[a.key_id] ?? '—')}
+                </td>
+                <td className="px-3 py-2 text-gray-300" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {serverDeleted
+                    ? <span className="text-yellow-400">{a.server_name ?? '(deleted server)'} <Badge label="Deleted" variant="high" /></span>
+                    : (a.server_name ?? serverMap[a.server_id] ?? '—')}
+                </td>
                 <td className="px-3 py-2 font-mono text-xs text-indigo-300" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.linux_user}</td>
                 <td className="px-3 py-2">{a.can_terminal ? <Badge label="Yes" variant="ok" /> : <Badge label="No" />}</td>
                 <td className="px-3 py-2 text-gray-400 text-xs">{a.expires_at ? new Date(a.expires_at).toLocaleDateString() : '—'}</td>
                 <td className="px-3 py-2"><Badge label={a.is_active ? 'Active' : 'Revoked'} variant={a.is_active ? 'ok' : 'default'} /></td>
                 <td className="px-3 py-2 text-gray-400 text-xs" title={new Date(a.created_at).toLocaleString()}>{new Date(a.created_at).toLocaleDateString()}</td>
                 <td className="px-3 py-2">
-                  {a.is_active && (
-                    <button onClick={() => revoke(a.id)} className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors" style={{ whiteSpace: 'nowrap' }}>Revoke</button>
+                  {a.is_active && revokeConfirm !== a.id && (
+                    <button onClick={() => setRevokeConfirm(a.id)} className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors" style={{ whiteSpace: 'nowrap' }}>Revoke</button>
+                  )}
+                  {a.is_active && revokeConfirm === a.id && (
+                    <span className="flex gap-1 items-center flex-wrap">
+                      <span className="text-yellow-400 text-xs">Sure?</span>
+                      <button onClick={() => revoke(a.id)} className="px-2 py-1 text-xs rounded bg-red-600 hover:bg-red-500 text-white transition-colors">Yes</button>
+                      <button onClick={() => setRevokeConfirm(null)} className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">No</button>
+                    </span>
                   )}
                 </td>
               </tr>
-            ))}
+              )
+            })}
             {assignments.length === 0 && (
               <tr><td colSpan={9} className="px-3 py-5 text-center text-gray-500">No assignments.</td></tr>
             )}

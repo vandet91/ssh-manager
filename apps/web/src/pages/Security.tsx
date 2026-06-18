@@ -133,22 +133,30 @@ export default function Security() {
                 const scan = scans[s.id]
                 return (
                   <tr key={s.id}
-                    className={`hover:bg-gray-800/30 cursor-pointer transition-colors ${selectedServer === s.id ? 'bg-gray-800/50' : ''}`}
-                    onClick={() => { setSelectedServer(s.id); setCatFilter('all'); setStatusFilter('all'); setExpandedCheck(null) }}>
-                    <td className="px-3 py-2 text-white font-medium" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</td>
-                    <td className="px-3 py-2 text-gray-400 text-xs" style={{ whiteSpace: 'nowrap' }}>{scan ? new Date(scan.scanned_at).toLocaleString() : '—'}</td>
-                    <td className="px-3 py-2">
-                      {scan?.severity ? <Badge label={scan.severity.toUpperCase()} variant={scan.severity as 'ok'} /> : <Badge label="N/A" />}
+                    className={`transition-colors ${s.os_type === 'windows' ? 'opacity-50' : `hover:bg-gray-800/30 cursor-pointer ${selectedServer === s.id ? 'bg-gray-800/50' : ''}`}`}
+                    onClick={() => { if (s.os_type !== 'windows') { setSelectedServer(s.id); setCatFilter('all'); setStatusFilter('all'); setExpandedCheck(null) } }}>
+                    <td className="px-3 py-2 text-white font-medium" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.os_type === 'windows' ? '🪟' : '🐧'} {s.name}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400 text-xs" style={{ whiteSpace: 'nowrap' }}>
+                      {s.os_type === 'windows' ? <span className="text-gray-600 italic">—</span> : scan ? new Date(scan.scanned_at).toLocaleString() : '—'}
                     </td>
                     <td className="px-3 py-2">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); scanServer(s.id) }}
-                        disabled={scanning === s.id}
-                        className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white disabled:opacity-50 transition-colors"
-                        style={{ whiteSpace: 'nowrap' }}
-                      >
-                        {scanning === s.id ? '…' : '↻'}
-                      </button>
+                      {s.os_type === 'windows'
+                        ? <span className="text-xs text-gray-600">—</span>
+                        : scan?.severity ? <Badge label={scan.severity.toUpperCase()} variant={scan.severity as 'ok'} /> : <Badge label="N/A" />}
+                    </td>
+                    <td className="px-3 py-2">
+                      {s.os_type !== 'windows' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); scanServer(s.id) }}
+                          disabled={scanning === s.id}
+                          className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white disabled:opacity-50 transition-colors"
+                          style={{ whiteSpace: 'nowrap' }}
+                        >
+                          {scanning === s.id ? '…' : '↻'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 )

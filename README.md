@@ -1,6 +1,6 @@
 # SSH Manager
 
-A self-hosted web platform for centralizing SSH key management, server credential vault, browser-based terminal, Remote Desktop (RDP), security auditing, Telegram bot integration, and full audit logging.
+A self-hosted web platform for centralizing SSH key management, server credential vault, browser-based terminal, Remote Desktop (RDP), Active Directory management, security auditing, Telegram bot integration, and full audit logging.
 
 ---
 
@@ -9,8 +9,10 @@ A self-hosted web platform for centralizing SSH key management, server credentia
 - **SSH Key Vault** — AES-256-GCM encrypted keys, Ed25519/RSA-4096 generation, PuTTY PPK import/export, key rotation with automatic scheduler
 - **Server Inventory** — Linux & Windows support, OS/host-platform auto-detection (VMware, Hyper-V, Proxmox, AWS, Azure, GCP…), per-server filters
 - **Credential Vault** — per-server password vault for RDP, SSH users, databases, web services; reveal/copy/archive with audit log
+- **Global Vault** — standalone credential store (server OS, service accounts, API keys, network devices, domain AD, email, printers, DVRs); OU grouping, tagging, archiving
 - **Browser Terminal** — xterm.js multi-tab SSH, drag-and-drop SFTP upload, session recording & playback
 - **Remote Desktop** — browser-based RDP via Guacamole; command panel, file sharing
+- **Domain Manager** — Active Directory management over SSH: list/search/filter users, reset passwords (syncs stored credentials), unlock accounts, enable/disable, view OUs; multi-AD cluster support with domain health panel (FSMO roles, DC status, replication failures, service checks, password policy) and force-sync
 - **Windows Server** — full OpenSSH support; Info panel shows OS, memory, CPU, hostname, domain, installed roles; RDP credentials and SSH user vault
 - **Security Scanner** — checks password auth, root login, stale keys, X11 forwarding; configurable alerts
 - **Best Practices** — tailored config recommendations calculated from actual RAM/CPU; includes copy-paste config snippets
@@ -228,9 +230,60 @@ icacls "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant
 | Software detection (IIS, SQL Server, .NET, Docker…) | ✅ |
 | Best Practices (Windows-specific) | ✅ |
 | Remote Desktop (RDP) | ✅ |
-| PingCastle AD Security Report | ✅ Upload XML → scores + risk findings dashboard |
+| Domain Manager | ✅ Requires server flagged as Domain Controller — see below |
 | Security Scanner | ⚠️ Linux checks only |
 | Service control (start/stop/restart) | ⚠️ Linux systemd only |
+
+---
+
+## Domain Manager
+
+Domain Manager connects to your Active Directory Domain Controllers over SSH and runs PowerShell commands to manage users and monitor domain health.
+
+### Setting up a Domain Controller
+
+1. Onboard the Windows server normally (OpenSSH + management key)
+2. Go to **Servers → Edit** on the DC server
+3. Enable **🏢 Domain Controller** checkbox
+4. Enter the **AD Domain Name** (e.g. `staff.company.local`)
+5. Save — the server now appears in **Domain Manager**
+
+Multiple DCs across different AD forests are supported. Each DC shows its domain name in the dropdown so you can switch between them.
+
+### User Management
+
+| Action | Description |
+|--------|-------------|
+| Reset Password | Generates or enters a new password, resets in AD, and automatically syncs any matching stored credentials in the vault |
+| Unlock Account | Clears the lockout flag on a locked-out account |
+| Enable / Disable | Toggles the account's enabled state |
+| Toggle Password Expiry | Sets or clears PasswordNeverExpires |
+
+**Password sync on reset:** when you reset a domain user's password, SSH Manager searches `server_credentials` for any stored credentials whose `linux_user` matches `domain\username` (e.g. `staff.company.local\administrator` or `staff\administrator`) and automatically updates them with the new password. Plain usernames without a domain prefix are intentionally skipped to avoid cross-domain collisions when you have multiple ADs.
+
+### User Tabs
+
+| Tab | Shows |
+|-----|-------|
+| Locked | Accounts currently locked out |
+| Password Issues | Expired passwords or accounts requiring a change at next logon |
+| Disabled | Disabled accounts |
+| All | Full user list with OU filter and search |
+
+### Domain Health
+
+Click **🏥 Domain Health** to run a comprehensive check:
+
+- **FSMO Roles** — PDC Emulator, RID Master, Infrastructure Master, Schema Master, Domain Naming Master
+- **Domain Controllers** — list with GC/RODC flags, OS, site, IP
+- **Replication** — failure count and per-partner failure details
+- **Services** — NTDS, NETLOGON, W32Time, DNS, KDC status on the selected DC
+- **Password Policy** — minimum length, complexity, history, max/min age, lockout settings
+- **Forest info** — domain/forest mode, Recycle Bin feature status
+
+If replication failures are detected, a **Force Sync** button triggers `repadmin /replicate` from the local DC to each partner.
+
+> **Note:** Replication failure records in AD persist until the next full replication cycle confirms everything is clean, so the failure count may remain briefly after a successful sync.
 
 ---
 
@@ -263,6 +316,10 @@ Each server stores credentials encrypted with AES-256-GCM. For Windows servers:
 For Linux servers, the **Vault tab** stores Linux users, databases, web services, and more.
 
 Archived credentials (both RDP and SSH) remain in the vault with a **Reveal** button — passwords are never lost on archive, only on permanent delete.
+
+### Global Vault
+
+The standalone **Vault** page stores credentials not tied to a specific server — domain admin accounts, service accounts, API keys, network device logins, email accounts, printers, DVRs, and more. Entries can be tagged, grouped by OU, and linked to a server credential for cross-reference.
 
 ---
 
@@ -311,7 +368,8 @@ ssh-manager/
 │   │       │   └── migrations/
 │   │       ├── modules/       # auth, users, servers, keys, assignments,
 │   │       │                  # rotation, terminal, credentials, security,
-│   │       │                  # logs, settings, telegram, rdp, share, commands
+│   │       │                  # logs, settings, telegram, rdp, share,
+│   │       │                  # commands, vault, domain
 │   │       └── utils/         # vault, ssh, windows-ssh, virt-detect,
 │   │                          # key-ops, ppk, recommendations, alerts, audit
 │   ├── web/                   # React + Vite + Tailwind CSS
@@ -320,7 +378,7 @@ ssh-manager/
 │   │       └── pages/         # Dashboard, Servers, Keys, Assignments,
 │   │                          # Terminal, RemoteDesktop, Logs, Security,
 │   │                          # Users, Settings, Migration, FileManager,
-│   │                          # NetworkDevices, CommandLibrary
+│   │                          # NetworkDevices, CommandLibrary, Vault, Domain
 │   └── guac-proxy/            # WebSocket ↔ guacd bridge (RDP)
 ├── docker-compose.yml
 ├── docker-compose.prod.yml
@@ -339,14 +397,14 @@ npm run dev   # starts api (port 3001) + web (port 3000) concurrently
 Rebuild after changes:
 
 ```bash
-docker compose build --no-cache && docker compose up -d
+docker compose build web api && docker compose up -d web api
 ```
 
 ---
 
 ## Database Migrations
 
-Migrations run automatically on startup. Current schema version: **018**.
+Migrations run automatically on startup. Current schema version: **022**.
 
 | Migration | What it adds |
 |-----------|-------------|
@@ -367,4 +425,8 @@ Migrations run automatically on startup. Current schema version: **018**.
 | `015` | Windows RDP credential columns |
 | `016` | Device type column |
 | `017` | Command library |
-| `018` | PingCastle AD security reports |
+| `018` | PingCastle report storage (table retained; feature removed from UI) |
+| `019` | Global vault entries table |
+| `020` | Vault OU grouping |
+| `021` | Vault entry archiving |
+| `022` | `is_domain_controller` flag on servers |

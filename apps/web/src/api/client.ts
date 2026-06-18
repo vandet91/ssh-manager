@@ -50,6 +50,7 @@ export type Server = {
   host_type: HostType | null
   host_type_detail: string | null
   windows_rdp_ready: boolean
+  is_domain_controller: boolean
 }
 
 export type RdpCredential = {
@@ -81,6 +82,8 @@ export type Assignment = {
   id: string; user_id: string; key_id: string; server_id: string
   linux_user: string; can_terminal: boolean; is_active: boolean
   expires_at: string | null; granted_by: string | null; created_at: string
+  server_name?: string | null; server_is_active?: boolean | null
+  key_name?: string | null; key_is_active?: boolean | null
 }
 
 export type AuditLog = {
@@ -134,7 +137,7 @@ export type ServerInfo = {
   roles?: string[]
 }
 
-export type CredentialCategory = 'linux' | 'database' | 'web' | 'application' | 'service' | 'other'
+export type CredentialCategory = 'linux' | 'windows' | 'database' | 'web' | 'application' | 'service' | 'other'
 
 export type ServerCredential = {
   id: string; server_id: string
@@ -333,6 +336,29 @@ export type AlertEvents = {
   server_unreachable: boolean
   key_revoked: boolean
   user_deactivated: boolean
+}
+
+export type VaultType = 'server_os' | 'service' | 'api_key' | 'network_device' | 'domain_ad' | 'email' | 'printer' | 'dvr' | 'other'
+
+export type VaultEntry = {
+  id: string
+  title: string
+  type: VaultType
+  category: string | null
+  ou: string | null
+  tags: string[]
+  username: string | null
+  url: string | null
+  notes: string | null
+  server_credential_id: string | null
+  is_archived: boolean
+  archived_at: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  linked_credential_label?: string | null
+  linked_server_id?: string | null
+  linked_server_name?: string | null
 }
 
 export type AlertSettings = {

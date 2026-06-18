@@ -29,7 +29,8 @@ import fsRoutes from './modules/servers/fs.routes'
 import rdpRoutes from './modules/rdp/rdp.routes'
 import shareRoutes from './modules/share/share.routes'
 import commandRoutes from './modules/commands/commands.routes'
-import pingcastleRoutes from './modules/pingcastle/pingcastle.routes'
+import vaultRoutes from './modules/vault/vault.routes'
+import domainRoutes from './modules/domain/domain.routes'
 import { startTelegramBot } from './modules/telegram/telegram.service'
 import { startRotationWorker, scheduleRotations } from './jobs/rotation.worker'
 import { FileMigrationProvider, Migrator } from 'kysely'
@@ -108,7 +109,7 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   })
 
   await fastify.register(fastifyWebSocket)
-  await fastify.register(fastifyMultipart, { limits: { fileSize: 10 * 1024 * 1024 } })
+  await fastify.register(fastifyMultipart, { limits: { fileSize: 200 * 1024 * 1024 } })
 
   // Auth rate limiting on /auth/* routes
   fastify.addHook('onRoute', (routeOptions) => {
@@ -140,7 +141,8 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(rdpRoutes)
   await fastify.register(shareRoutes)
   await fastify.register(commandRoutes)
-  await fastify.register(pingcastleRoutes)
+  await fastify.register(vaultRoutes)
+  await fastify.register(domainRoutes)
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))

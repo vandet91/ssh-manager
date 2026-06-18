@@ -53,7 +53,12 @@ export default function Users() {
   const create = async (e: React.FormEvent) => {
     e.preventDefault(); setCreateError('')
     try {
-      await api.post('/auth/register', createForm)
+      await api.post('/auth/register', {
+        email: createForm.email,
+        displayName: createForm.display_name,
+        password: createForm.password,
+        role: createForm.role,
+      })
       setShowCreate(false)
       setCreateForm({ email: '', display_name: '', password: '', role: 'viewer' })
       load()

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+﻿import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, Server, ServerInfo, SshKey, ServerCredential, CredentialCategory, SoftwareItem, Recommendation, RecSeverity, HostType, BenchmarkResult, BenchmarkCheck, CheckStatus, CheckCategory, RdpCredential } from '../api/client'
 import Modal from '../components/Modal'
@@ -84,11 +84,11 @@ export default function Servers() {
   const [allKeys, setAllKeys] = useState<SshKey[]>([])
   const [showAdd, setShowAdd] = useState(false)
   type OsType = 'linux' | 'windows'
-  const [addForm, setAddForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType })
+  const [addForm, setAddForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '' })
   const [addError, setAddError] = useState('')
 
   const [editServer, setEditServer] = useState<Server | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType })
+  const [editForm, setEditForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '' })
   const [editError, setEditError] = useState('')
 
   const [setupServerId, setSetupServerId] = useState<string | null>(null)
@@ -128,11 +128,11 @@ export default function Servers() {
   const [winCreds, setWinCreds] = useState<RdpCredential[]>([])
   const [winCredsLoading, setWinCredsLoading] = useState(false)
   const [showAddWinCred, setShowAddWinCred] = useState(false)
-  const [addWinCredForm, setAddWinCredForm] = useState({ username: 'Administrator', password: '', domain: '', show_pw: false })
+  const [addWinCredForm, setAddWinCredForm] = useState({ username: 'Administrator', password: '', domain: '', show_pw: false, use_for_ssh: false })
   const [addWinCredWorking, setAddWinCredWorking] = useState(false)
   const [addWinCredError, setAddWinCredError] = useState('')
   const [editWinCred, setEditWinCred] = useState<RdpCredential | null>(null)
-  const [editWinCredForm, setEditWinCredForm] = useState({ username: '', password: '', domain: '', label: '' })
+  const [editWinCredForm, setEditWinCredForm] = useState({ username: '', password: '', domain: '', label: '', use_for_ssh: false })
   const [editWinCredWorking, setEditWinCredWorking] = useState(false)
   const [revealedWinPasswords, setRevealedWinPasswords] = useState<Record<string, string>>({})
 
@@ -140,7 +140,7 @@ export default function Servers() {
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [infoError, setInfoError] = useState('')
-  const [infoTab, setInfoTab] = useState<'overview' | 'users' | 'keys' | 'credentials' | 'software' | 'recommendations' | 'benchmark' | 'ai' | 'pingcastle'>('overview')
+  const [infoTab, setInfoTab] = useState<'overview' | 'users' | 'keys' | 'credentials' | 'software' | 'recommendations' | 'benchmark' | 'ai'>('overview')
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [recLoading, setRecLoading] = useState(false)
   const [recError, setRecError] = useState('')
@@ -154,15 +154,6 @@ export default function Servers() {
   const [expandedCheck, setExpandedCheck] = useState<string | null>(null)
   const [copiedRemediation, setCopiedRemediation] = useState<string | null>(null)
 
-  // PingCastle
-  type PcRule = { points: number; category: string; risk_id: string; rationale: string; details: string }
-  type PcReport = { domain_fqdn: string | null; generation_date: string | null; global_score: number; stale_score: number; privileged_score: number; trust_score: number; anomaly_score: number; risk_rules: PcRule[]; domain_controllers: { name: string; ip: string; os: string }[]; uploaded_at: string }
-  const [pcReport, setPcReport] = useState<PcReport | null>(null)
-  const [pcLoading, setPcLoading] = useState(false)
-  const [pcUploading, setPcUploading] = useState(false)
-  const [pcError, setPcError] = useState('')
-  const [pcCatFilter, setPcCatFilter] = useState('All')
-  const [pcSearch, setPcSearch] = useState('')
 
   const [software, setSoftware] = useState<SoftwareItem[]>([])
   const [softwareLoading, setSoftwareLoading] = useState(false)
@@ -189,6 +180,7 @@ export default function Servers() {
   const [verifyingCred, setVerifyingCred] = useState<string | null>(null)
   const [verifyCredResult, setVerifyCredResult] = useState<Record<string, 'match' | 'mismatch' | 'error'>>({})
   const [openCredMenu, setOpenCredMenu] = useState<string | null>(null)
+  const [confirmDeleteCred, setConfirmDeleteCred] = useState<{ id: string; label: string; isArchived: boolean } | null>(null)
   const [setMgmtKeyWorking, setSetMgmtKeyWorking] = useState(false)
   const [srvSearch, setSrvSearch] = useState('')
   const [srvOsFilter, setSrvOsFilter] = useState('')
@@ -260,23 +252,28 @@ export default function Servers() {
   const addServer = async (e: React.FormEvent) => {
     e.preventDefault(); setAddError('')
     try {
-      await api.post('/servers', addForm)
+      const { domain_name, ...rest } = addForm
+      const payload = { ...rest, tags: domain_name ? { domain_name } : {} }
+      await api.post('/servers', payload)
       setShowAdd(false)
-      setAddForm({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType })
+      setAddForm({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '' })
       load()
     } catch (err: unknown) { setAddError((err as Error).message) }
   }
 
   const openEdit = (s: Server) => {
     setEditServer(s)
-    setEditForm({ name: s.name, hostname: s.hostname, ssh_port: s.ssh_port, environment: s.environment, os_type: (s.os_type ?? 'linux') as OsType })
+    setEditForm({ name: s.name, hostname: s.hostname, ssh_port: s.ssh_port, environment: s.environment, os_type: (s.os_type ?? 'linux') as OsType, is_domain_controller: s.is_domain_controller ?? false, domain_name: s.tags?.domain_name ?? '' })
     setEditError('')
   }
 
   const saveEdit = async (e: React.FormEvent) => {
     e.preventDefault(); setEditError('')
     try {
-      await api.patch(`/servers/${editServer!.id}`, editForm)
+      const { domain_name, ...rest } = editForm
+      const existing = editServer!.tags ?? {}
+      const payload = { ...rest, tags: { ...existing, domain_name: domain_name || undefined } }
+      await api.patch(`/servers/${editServer!.id}`, payload)
       setEditServer(null)
       load()
     } catch (err: unknown) { setEditError((err as Error).message) }
@@ -344,14 +341,15 @@ export default function Servers() {
     setAddWinCredWorking(true); setAddWinCredError('')
     try {
       await api.post(`/servers/${serverId}/windows-setup`, {
-        username: addWinCredForm.username,
-        password: addWinCredForm.password,
-        domain:   addWinCredForm.domain || undefined,
-        rdp_port: 3389,
+        username:    addWinCredForm.username,
+        password:    addWinCredForm.password,
+        domain:      addWinCredForm.domain || undefined,
+        rdp_port:    3389,
+        use_for_ssh: addWinCredForm.use_for_ssh,
       })
-      await loadWinCreds(serverId)
+      await Promise.all([loadWinCreds(serverId), loadCredentials(serverId)])
       setShowAddWinCred(false)
-      setAddWinCredForm({ username: 'Administrator', password: '', domain: '', show_pw: false })
+      setAddWinCredForm({ username: 'Administrator', password: '', domain: '', show_pw: false, use_for_ssh: false })
     } catch (err: unknown) { setAddWinCredError((err as Error).message) }
     finally { setAddWinCredWorking(false) }
   }
@@ -360,12 +358,14 @@ export default function Servers() {
     setEditWinCredWorking(true)
     try {
       await api.put(`/servers/${serverId}/rdp-credentials/${credId}`, {
-        label:    editWinCredForm.label,
-        username: editWinCredForm.username,
-        password: editWinCredForm.password || undefined,
-        domain:   editWinCredForm.domain || undefined,
+        label:       editWinCredForm.label,
+        username:    editWinCredForm.username,
+        password:    editWinCredForm.password || undefined,
+        domain:      editWinCredForm.domain || undefined,
+        use_for_ssh: editWinCredForm.use_for_ssh,
       })
       await loadWinCreds(serverId)
+      await loadCredentials(serverId)
       setEditWinCred(null)
     } catch (err: unknown) { alert((err as Error).message) }
     finally { setEditWinCredWorking(false) }
@@ -456,8 +456,6 @@ export default function Servers() {
     setShowAddWinCred(false)
     setEditWinCred(null)
     setRevealedWinPasswords({})
-    setPcReport(null)
-    setPcError('')
     if (s.os_type === 'windows') {
       setInfoTab('credentials')
       // Load credentials immediately; scan SSH info in background (requires OpenSSH on Windows)
@@ -479,36 +477,6 @@ export default function Servers() {
       setRecError((err as Error).message)
     } finally {
       setRecLoading(false)
-    }
-  }
-
-  const loadPingcastle = async (serverId: string) => {
-    setPcLoading(true)
-    setPcError('')
-    try {
-      const result = await api.get<any>(`/servers/${serverId}/pingcastle`)
-      setPcReport({ ...result, risk_rules: result.risk_rules ?? [], domain_controllers: result.domain_controllers ?? [] })
-    } catch (err: unknown) {
-      const msg = (err as Error).message
-      if (!msg.includes('404')) setPcError(msg)
-    } finally {
-      setPcLoading(false)
-    }
-  }
-
-  const uploadPingcastle = async (serverId: string, file: File) => {
-    setPcUploading(true)
-    setPcError('')
-    try {
-      const form = new FormData()
-      form.append('file', file)
-      await fetch(`/api/servers/${serverId}/pingcastle`, { method: 'POST', body: form, credentials: 'include' })
-        .then(async r => { if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error ?? 'Upload failed') } })
-      await loadPingcastle(serverId)
-    } catch (err: unknown) {
-      setPcError((err as Error).message)
-    } finally {
-      setPcUploading(false)
     }
   }
 
@@ -648,17 +616,18 @@ export default function Servers() {
   }
 
   const deleteCredential = async (serverId: string, credId: string) => {
-    const cred = credentials.find((c) => c.id === credId)
-    const isArchived = cred?.is_archived
-    const msg = isArchived
-      ? `Permanently delete this archived entry?\n\nLabel: ${cred?.label}\nThis cannot be undone.`
-      : `Archive this credential?\n\nLabel: ${cred?.label}\nIt will move to the archived section where you can still reveal or permanently delete it later.`
-    if (!confirm(msg)) return
     try {
       await api.delete(`/servers/${serverId}/credentials/${credId}`)
       await loadCredentials(serverId)
       setRevealedPasswords((p) => { const n = { ...p }; delete n[credId]; return n })
+      setConfirmDeleteCred(null)
     } catch (err: unknown) { alert((err as Error).message) }
+  }
+
+  const promptDeleteCred = (credId: string) => {
+    const cred = credentials.find((c) => c.id === credId)
+    if (!cred) return
+    setConfirmDeleteCred({ id: credId, label: cred.label, isArchived: !!cred.is_archived })
   }
 
   const verifyCredential = async (serverId: string, credId: string) => {
@@ -1082,6 +1051,28 @@ export default function Servers() {
                 </select>
               </label>
             </div>
+            {addForm.os_type === 'windows' && (
+              <div className="space-y-2">
+                <label className="flex items-center gap-3 cursor-pointer select-none p-3 rounded-lg bg-gray-800 border border-gray-700">
+                  <input type="checkbox" checked={addForm.is_domain_controller}
+                    onChange={(e) => setAddForm((f) => ({ ...f, is_domain_controller: e.target.checked }))}
+                    className="w-4 h-4 accent-indigo-500" />
+                  <div>
+                    <div className="text-sm text-white font-medium">🏢 Domain Controller</div>
+                    <div className="text-xs text-gray-400">This server runs Active Directory and will appear in Domain Manager</div>
+                  </div>
+                </label>
+                {addForm.is_domain_controller && (
+                  <label className="block">
+                    <span className="text-sm text-gray-400">AD Domain Name <span className="text-gray-600">(e.g. staff.company.local)</span></span>
+                    <input type="text" value={addForm.domain_name}
+                      onChange={(e) => setAddForm((f) => ({ ...f, domain_name: e.target.value }))}
+                      placeholder="staff.company.local"
+                      className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </label>
+                )}
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setShowAdd(false)} className="flex-1 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm transition-colors">Cancel</button>
               <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Add Server</button>
@@ -1120,6 +1111,28 @@ export default function Servers() {
                 </select>
               </label>
             </div>
+            {editForm.os_type === 'windows' && (
+              <div className="space-y-2">
+                <label className="flex items-center gap-3 cursor-pointer select-none p-3 rounded-lg bg-gray-800 border border-gray-700">
+                  <input type="checkbox" checked={editForm.is_domain_controller}
+                    onChange={(e) => setEditForm((f) => ({ ...f, is_domain_controller: e.target.checked }))}
+                    className="w-4 h-4 accent-indigo-500" />
+                  <div>
+                    <div className="text-sm text-white font-medium">🏢 Domain Controller</div>
+                    <div className="text-xs text-gray-400">This server runs Active Directory and will appear in Domain Manager</div>
+                  </div>
+                </label>
+                {editForm.is_domain_controller && (
+                  <label className="block">
+                    <span className="text-sm text-gray-400">AD Domain Name <span className="text-gray-600">(e.g. staff.company.local)</span></span>
+                    <input type="text" value={editForm.domain_name}
+                      onChange={(e) => setEditForm((f) => ({ ...f, domain_name: e.target.value }))}
+                      placeholder="staff.company.local"
+                      className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </label>
+                )}
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setEditServer(null)} className="flex-1 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm transition-colors">Cancel</button>
               <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Save Changes</button>
@@ -1145,7 +1158,7 @@ export default function Servers() {
                 {(['credentials', 'users'] as const).map(t => (
                   <button key={t} type="button" onMouseDown={e => e.preventDefault()} onClick={() => setInfoTab(t)}
                     style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer', background: 'none', border: 'none', borderBottom: infoTab === t ? '2px solid var(--accent-hex)' : '2px solid transparent', color: infoTab === t ? 'var(--accent-hex)' : 'var(--text-secondary)', marginBottom: -1 }}>
-                    {t === 'credentials' ? `🔑 RDP Credentials (${winCreds.filter(c => !c.is_archived).length})` : `🐧 SSH Users (${credentials.filter(c => c.category === 'linux' && !c.is_archived).length})`}
+                    {t === 'credentials' ? `🔑 RDP Credentials (${winCreds.filter(c => !c.is_archived).length})` : `🐧 SSH Users (${credentials.filter(c => ['linux','windows'].includes(c.category) && !c.is_archived).length})`}
                   </button>
                 ))}
               </div>
@@ -1179,6 +1192,11 @@ export default function Servers() {
                                 className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-200">{addWinCredForm.show_pw ? 'Hide' : 'Show'}</button>
                             </div>
                           </label>
+                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" checked={addWinCredForm.use_for_ssh} onChange={e => setAddWinCredForm(f => ({ ...f, use_for_ssh: e.target.checked }))}
+                              className="rounded border-gray-600 bg-gray-700 text-blue-500" />
+                            <span className="text-xs text-gray-300">Also use for SSH (domain admin)</span>
+                          </label>
                           <div className="flex gap-2 pt-1">
                             <button onClick={() => setShowAddWinCred(false)} className="flex-1 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
                             <button onClick={() => addWinCred(infoServer!.id)} disabled={addWinCredWorking || !addWinCredForm.username || !addWinCredForm.password}
@@ -1197,13 +1215,17 @@ export default function Servers() {
                                 <div className="grid grid-cols-2 gap-2">
                                   {[['Label','label'],['Username','username'],['Domain','domain']].map(([lbl, fld]) => (
                                     <label key={fld} className="block"><span className="text-xs text-gray-400">{lbl}</span>
-                                      <input value={(editWinCredForm as Record<string,string>)[fld]} onChange={e => setEditWinCredForm(f => ({ ...f, [fld]: e.target.value }))}
+                                      <input value={(editWinCredForm as Record<string, string | boolean>)[fld] as string} onChange={e => setEditWinCredForm(f => ({ ...f, [fld]: e.target.value }))}
                                         className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" /></label>
                                   ))}
                                   <label className="block"><span className="text-xs text-gray-400">New Password <span className="text-gray-600">(blank = keep)</span></span>
                                     <input type="password" value={editWinCredForm.password} onChange={e => setEditWinCredForm(f => ({ ...f, password: e.target.value }))} placeholder="Leave blank to keep current"
                                       className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" /></label>
                                 </div>
+                                <label className="flex items-center gap-2 mt-1">
+                                  <input type="checkbox" checked={editWinCredForm.use_for_ssh} onChange={e => setEditWinCredForm(f => ({ ...f, use_for_ssh: e.target.checked }))} className="rounded" />
+                                  <span className="text-xs text-gray-300">Also use for SSH (domain admin)</span>
+                                </label>
                                 <div className="flex gap-2">
                                   <button onClick={() => setEditWinCred(null)} className="flex-1 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs">Cancel</button>
                                   <button onClick={() => saveWinCred(infoServer!.id, c.id)} disabled={editWinCredWorking || !editWinCredForm.username}
@@ -1214,7 +1236,10 @@ export default function Servers() {
                               <>
                                 <div className="flex items-start justify-between gap-2">
                                   <div>
-                                    <p className="text-sm font-medium text-white">🔑 {c.label}</p>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <p className="text-sm font-medium text-white">🔑 {c.label}</p>
+                                      {c.category === 'windows' && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 font-medium">RDP+SSH</span>}
+                                    </div>
                                     <p className="text-xs text-gray-400 mt-0.5">User: <span className="text-gray-200 font-mono">{c.service_username ?? '—'}</span>{domain && <span className="ml-2">Domain: <span className="text-gray-200 font-mono">{domain}</span></span>}</p>
                                   </div>
                                   <div className="flex gap-1.5 shrink-0">
@@ -1222,7 +1247,7 @@ export default function Servers() {
                                       className={`px-2 py-0.5 text-xs rounded transition-colors ${copiedCred === c.id ? 'bg-green-700 text-white' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
                                       {copiedCred === c.id ? '✓ Copied' : '📋 Copy'}
                                     </button>
-                                    <button onClick={() => { setEditWinCred(c); const dom = c.notes?.match(/^Domain:\s*(.+)$/im)?.[1] ?? ''; setEditWinCredForm({ label: c.label, username: c.service_username ?? '', password: '', domain: dom }) }}
+                                    <button onClick={() => { setEditWinCred(c); const dom = c.notes?.match(/^Domain:\s*(.+)$/im)?.[1] ?? ''; setEditWinCredForm({ label: c.label, username: c.service_username ?? '', password: '', domain: dom, use_for_ssh: c.category === 'windows' }) }}
                                       className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white">Edit</button>
                                     <button onClick={() => deleteWinCred(infoServer!.id, c.id, false)}
                                       className="px-2 py-0.5 text-xs rounded bg-red-800 hover:bg-red-700 text-white">Archive</button>
@@ -1299,13 +1324,16 @@ export default function Servers() {
                       </div>
                     )}
                     {credLoading && <p className="text-center text-gray-500 text-sm py-4">Loading…</p>}
-                    {credentials.filter(c => c.category === 'linux' && !c.is_archived).map(c => {
+                    {credentials.filter(c => ['linux','windows'].includes(c.category) && !c.is_archived).map(c => {
                       const isRevealed = !!revealedPasswords[c.id]
                       return (
                         <div key={c.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <p className="text-sm font-medium text-white">🐧 {c.label}</p>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm font-medium text-white">🐧 {c.label}</p>
+                                {c.category === 'windows' && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 font-medium">RDP+SSH</span>}
+                              </div>
                               {c.linux_user && <p className="text-xs text-gray-400 mt-0.5">User: <span className="text-gray-200 font-mono">{c.linux_user}</span></p>}
                               {c.notes && <p className="text-xs text-gray-500 mt-0.5">{c.notes}</p>}
                             </div>
@@ -1318,7 +1346,7 @@ export default function Servers() {
                                 className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors">
                                 {isRevealed ? 'Hide' : '🔍 Reveal'}
                               </button>
-                              <button onClick={() => deleteCredential(infoServer!.id, c.id)}
+                              <button onClick={() => promptDeleteCred(c.id)}
                                 className="px-2 py-0.5 text-xs rounded bg-red-800 hover:bg-red-700 text-white transition-colors">Archive</button>
                             </div>
                           </div>
@@ -1328,21 +1356,21 @@ export default function Servers() {
                         </div>
                       )
                     })}
-                    {credentials.filter(c => c.category === 'linux' && !c.is_archived).length === 0 && !credLoading && !showCredForm && (
+                    {credentials.filter(c => ['linux','windows'].includes(c.category) && !c.is_archived).length === 0 && !credLoading && !showCredForm && (
                       <p className="text-gray-500 text-sm text-center py-6">No SSH users stored. Click "Add SSH User" to save one.</p>
                     )}
-                    {credentials.some(c => c.category === 'linux' && c.is_archived) && (
+                    {credentials.some(c => ['linux','windows'].includes(c.category) && c.is_archived) && (
                       <details className="mt-2">
-                        <summary className="text-xs text-gray-500 cursor-pointer">Archived ({credentials.filter(c => c.category === 'linux' && c.is_archived).length})</summary>
+                        <summary className="text-xs text-gray-500 cursor-pointer">Archived ({credentials.filter(c => ['linux','windows'].includes(c.category) && c.is_archived).length})</summary>
                         <div className="mt-2 space-y-1.5">
-                          {credentials.filter(c => c.category === 'linux' && c.is_archived).map(c => (
+                          {credentials.filter(c => ['linux','windows'].includes(c.category) && c.is_archived).map(c => (
                             <div key={c.id} className="bg-gray-900 border border-gray-700/50 rounded p-2.5 space-y-1.5 opacity-70">
                               <div className="flex items-center justify-between gap-2">
                                 <span className="text-xs text-gray-400">🗄 {c.label} — {c.linux_user}</span>
                                 <div className="flex gap-1.5 shrink-0">
                                   <button onClick={() => revealedPasswords[c.id] ? hidePassword(c.id) : revealPassword(infoServer!.id, c.id)}
                                     className="px-2 py-0.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300">{revealedPasswords[c.id] ? 'Hide' : '🔍 Reveal'}</button>
-                                  <button onClick={() => deleteCredential(infoServer!.id, c.id)} className="px-2 py-0.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300">Delete</button>
+                                  <button onClick={() => promptDeleteCred(c.id)} className="px-2 py-0.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300">Delete</button>
                                 </div>
                               </div>
                               {revealedPasswords[c.id] && <span className="font-mono text-xs text-green-300 bg-gray-950 px-2 py-1 rounded select-all block break-all">{revealedPasswords[c.id]}</span>}
@@ -1361,7 +1389,7 @@ export default function Servers() {
               {/* Tabs */}
               <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border-med)', flexShrink: 0, flexWrap: 'wrap' }}>
                 {(infoServer?.os_type === 'windows'
-                  ? (['overview', 'credentials', 'users', 'pingcastle'] as const)
+                  ? (['overview', 'credentials', 'users', 'keys'] as const)
                   : (['overview', 'users', 'keys', 'credentials', 'software', 'recommendations', 'benchmark', 'ai'] as const)
                 ).map((t) => (
                   <button key={t}
@@ -1375,7 +1403,6 @@ export default function Servers() {
                       if (t === 'software' && software.length === 0 && !softwareLoading) loadSoftware(infoServer!.id)
                       if (t === 'recommendations' && recommendations.length === 0 && !recLoading) loadRecommendations(infoServer!.id)
                       if (t === 'benchmark' && !benchmark && !benchmarkLoading) loadBenchmark(infoServer!.id)
-                      if (t === 'pingcastle' && !pcReport && !pcLoading) loadPingcastle(infoServer!.id)
                     }}
                     style={{
                       padding: '9px 14px', fontSize: 13, fontWeight: 500,
@@ -1387,7 +1414,7 @@ export default function Servers() {
                     {t === 'keys' ? 'Auth Keys'
                       : t === 'users'
                         ? infoServer?.os_type === 'windows'
-                          ? `🐧 SSH Users (${credentials.filter(c => c.category === 'linux' && !c.is_archived).length})`
+                          ? `🐧 SSH Users (${credentials.filter(c => ['linux','windows'].includes(c.category) && !c.is_archived).length})`
                           : `Users (${serverInfo.users.length})`
                       : t === 'credentials'
                         ? infoServer?.os_type === 'windows'
@@ -1397,7 +1424,6 @@ export default function Servers() {
                       : t === 'recommendations' ? '💡 Best Practices'
                       : t === 'benchmark' ? '🔐 Security Benchmark'
                       : t === 'ai' ? '🤖 AI Analyst'
-                      : t === 'pingcastle' ? '🏰 PingCastle'
                       : 'Overview'}
                   </button>
                 ))}
@@ -1529,7 +1555,7 @@ export default function Servers() {
                     </div>
                   )}
                   {credLoading && <p className="text-center text-gray-500 text-sm py-4">Loading…</p>}
-                  {credentials.filter(c => c.category === 'linux' && !c.is_archived).map(c => {
+                  {credentials.filter(c => ['linux','windows'].includes(c.category) && !c.is_archived).map(c => {
                     const isRevealed = !!revealedPasswords[c.id]
                     return (
                       <div key={c.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
@@ -1548,7 +1574,7 @@ export default function Servers() {
                               className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors">
                               {isRevealed ? 'Hide' : '🔍 Reveal'}
                             </button>
-                            <button onClick={() => deleteCredential(infoServer!.id, c.id)}
+                            <button onClick={() => promptDeleteCred(c.id)}
                               className="px-2 py-0.5 text-xs rounded bg-red-800 hover:bg-red-700 text-white transition-colors">Archive</button>
                           </div>
                         </div>
@@ -1558,21 +1584,21 @@ export default function Servers() {
                       </div>
                     )
                   })}
-                  {credentials.filter(c => c.category === 'linux' && !c.is_archived).length === 0 && !credLoading && !showCredForm && (
+                  {credentials.filter(c => ['linux','windows'].includes(c.category) && !c.is_archived).length === 0 && !credLoading && !showCredForm && (
                     <p className="text-gray-500 text-sm text-center py-6">No SSH users stored. Click "Add SSH User" to save one.</p>
                   )}
-                  {credentials.some(c => c.category === 'linux' && c.is_archived) && (
+                  {credentials.some(c => ['linux','windows'].includes(c.category) && c.is_archived) && (
                     <details className="mt-2">
-                      <summary className="text-xs text-gray-500 cursor-pointer">Archived ({credentials.filter(c => c.category === 'linux' && c.is_archived).length})</summary>
+                      <summary className="text-xs text-gray-500 cursor-pointer">Archived ({credentials.filter(c => ['linux','windows'].includes(c.category) && c.is_archived).length})</summary>
                       <div className="mt-2 space-y-1.5">
-                        {credentials.filter(c => c.category === 'linux' && c.is_archived).map(c => (
+                        {credentials.filter(c => ['linux','windows'].includes(c.category) && c.is_archived).map(c => (
                           <div key={c.id} className="bg-gray-900 border border-gray-700/50 rounded p-2.5 space-y-1.5 opacity-70">
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-xs text-gray-400">🗄 {c.label} — {c.linux_user}</span>
                               <div className="flex gap-1.5 shrink-0">
                                 <button onClick={() => revealedPasswords[c.id] ? hidePassword(c.id) : revealPassword(infoServer!.id, c.id)}
                                   className="px-2 py-0.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300">{revealedPasswords[c.id] ? 'Hide' : '🔍 Reveal'}</button>
-                                <button onClick={() => deleteCredential(infoServer!.id, c.id)} className="px-2 py-0.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300">Delete</button>
+                                <button onClick={() => promptDeleteCred(c.id)} className="px-2 py-0.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300">Delete</button>
                               </div>
                             </div>
                             {revealedPasswords[c.id] && <span className="font-mono text-xs text-green-300 bg-gray-950 px-2 py-1 rounded select-all block break-all">{revealedPasswords[c.id]}</span>}
@@ -1875,6 +1901,11 @@ export default function Servers() {
                           </button>
                         </div>
                       </label>
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" checked={addWinCredForm.use_for_ssh} onChange={e => setAddWinCredForm(f => ({ ...f, use_for_ssh: e.target.checked }))}
+                          className="rounded border-gray-600 bg-gray-700 text-blue-500" />
+                        <span className="text-xs text-gray-300">Also use for SSH (domain admin)</span>
+                      </label>
                       <div className="flex gap-2 pt-1">
                         <button onClick={() => setShowAddWinCred(false)} className="flex-1 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
                         <button onClick={() => addWinCred(infoServer!.id)} disabled={addWinCredWorking || !addWinCredForm.username || !addWinCredForm.password}
@@ -1918,6 +1949,10 @@ export default function Servers() {
                                   className="mt-1 w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
                               </label>
                             </div>
+                            <label className="flex items-center gap-2 mt-1">
+                              <input type="checkbox" checked={editWinCredForm.use_for_ssh} onChange={e => setEditWinCredForm(f => ({ ...f, use_for_ssh: e.target.checked }))} className="rounded" />
+                              <span className="text-xs text-gray-300">Also use for SSH (domain admin)</span>
+                            </label>
                             <div className="flex gap-2">
                               <button onClick={() => setEditWinCred(null)} className="flex-1 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
                               <button onClick={() => saveWinCred(infoServer!.id, c.id)} disabled={editWinCredWorking || !editWinCredForm.username}
@@ -1944,7 +1979,7 @@ export default function Servers() {
                                 <button onClick={() => {
                                     setEditWinCred(c)
                                     const dom = c.notes?.match(/^Domain:\s*(.+)$/im)?.[1] ?? ''
-                                    setEditWinCredForm({ label: c.label, username: c.service_username ?? '', password: '', domain: dom })
+                                    setEditWinCredForm({ label: c.label, username: c.service_username ?? '', password: '', domain: dom, use_for_ssh: c.category === 'windows' })
                                   }}
                                   className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors">Edit</button>
                                 <button onClick={() => deleteWinCred(infoServer!.id, c.id, false)}
@@ -2336,7 +2371,7 @@ export default function Servers() {
                                         <span>✏</span><span>Edit</span>
                                       </button>
                                       <button
-                                        onClick={() => { setOpenCredMenu(null); deleteCredential(infoServer!.id, c.id) }}
+                                        onClick={() => { setOpenCredMenu(null); promptDeleteCred(c.id) }}
                                         style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
                                         className="text-red-400 hover:bg-red-900/30 transition-colors">
                                         <span>🗄</span><span>Archive</span>
@@ -2456,7 +2491,7 @@ export default function Servers() {
                                       {isCopied ? '✓ Copied!' : '📋 Copy'}
                                     </button>
                                     <button
-                                      onClick={() => deleteCredential(infoServer!.id, c.id)}
+                                      onClick={() => promptDeleteCred(c.id)}
                                       title="Permanently delete this archived entry — cannot be undone"
                                       className="px-2 py-1 text-xs rounded bg-red-900/30 hover:bg-red-800/50 text-red-500 hover:text-red-300 transition-colors">
                                       🗑 Purge
@@ -3204,172 +3239,6 @@ export default function Servers() {
                 </div>
               )}
 
-              {infoTab === 'pingcastle' && (() => {
-                const scoreColor = (n: number) => n >= 80 ? '#ef4444' : n >= 50 ? '#f97316' : n >= 25 ? '#eab308' : '#22c55e'
-                const scoreLabel = (n: number) => n >= 80 ? 'Critical' : n >= 50 ? 'High' : n >= 25 ? 'Medium' : 'Good'
-                const catColors: Record<string, string> = { Stale: '#f97316', Anomaly: '#a855f7', Privileged: '#ef4444', Trust: '#3b82f6' }
-                const filteredRules = (pcReport?.risk_rules ?? []).filter(r => {
-                  const catOk = pcCatFilter === 'All' || r.category === pcCatFilter
-                  const searchOk = !pcSearch || r.risk_id.toLowerCase().includes(pcSearch.toLowerCase()) || r.rationale.toLowerCase().includes(pcSearch.toLowerCase())
-                  return catOk && searchOk
-                }).sort((a, b) => b.points - a.points)
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-                    {/* Upload area */}
-                    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 16 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 4 }}>🏰 PingCastle AD Security Report</div>
-                          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                            Run PingCastle on your domain controller, then upload the generated <code style={{ background: 'var(--border-weak)', padding: '1px 4px', borderRadius: 3 }}>ad_hc_*.xml</code> file here.
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                          {pcReport && (
-                            <button onClick={async () => {
-                              if (!confirm('Delete this PingCastle report?')) return
-                              await fetch(`/api/servers/${infoServer!.id}/pingcastle`, { method: 'DELETE', credentials: 'include' })
-                              setPcReport(null)
-                            }}
-                              style={{ padding: '7px 14px', fontSize: 12, borderRadius: 7, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontWeight: 500 }}>
-                              🗑 Delete Report
-                            </button>
-                          )}
-                          <label style={{ padding: '7px 14px', fontSize: 12, borderRadius: 7, border: '1px solid var(--border-med)', background: pcUploading ? 'var(--border-weak)' : 'var(--accent-hex)', color: pcUploading ? 'var(--text-muted)' : '#fff', cursor: pcUploading ? 'default' : 'pointer', fontWeight: 600, display: 'inline-block' }}>
-                            {pcUploading ? '⏳ Uploading…' : '📤 Upload XML'}
-                            <input type="file" accept=".xml" style={{ display: 'none' }} disabled={pcUploading}
-                              onChange={async (e) => {
-                                const file = e.target.files?.[0]
-                                if (!file) return
-                                e.target.value = ''
-                                await uploadPingcastle(infoServer!.id, file)
-                              }} />
-                          </label>
-                        </div>
-                      </div>
-                      {pcError && <div style={{ marginTop: 10, fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', padding: '8px 12px', borderRadius: 6 }}>{pcError}</div>}
-                    </div>
-
-                    {pcLoading && (
-                      <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)', fontSize: 13 }}>Loading report…</div>
-                    )}
-
-                    {!pcLoading && !pcReport && (
-                      <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)', fontSize: 13 }}>
-                        <div style={{ fontSize: 32, marginBottom: 12 }}>🏰</div>
-                        No report uploaded yet. Upload a PingCastle XML to see your AD security posture.
-                      </div>
-                    )}
-
-                    {pcReport && (
-                      <>
-                        {/* Meta */}
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-muted)' }}>
-                          {pcReport.domain_fqdn && <span style={{ background: 'var(--border-weak)', padding: '3px 8px', borderRadius: 5 }}>🌐 {pcReport.domain_fqdn}</span>}
-                          {pcReport.generation_date && <span style={{ background: 'var(--border-weak)', padding: '3px 8px', borderRadius: 5 }}>📅 Generated: {new Date(pcReport.generation_date).toLocaleDateString()}</span>}
-                          <span style={{ background: 'var(--border-weak)', padding: '3px 8px', borderRadius: 5 }}>⬆️ Uploaded: {new Date(pcReport.uploaded_at).toLocaleDateString()}</span>
-                        </div>
-
-                        {/* Global score */}
-                        <div style={{ background: 'var(--card-bg)', border: `2px solid ${scoreColor(pcReport.global_score)}40`, borderRadius: 12, padding: 20, display: 'flex', alignItems: 'center', gap: 20 }}>
-                          <div style={{ width: 72, height: 72, borderRadius: '50%', border: `4px solid ${scoreColor(pcReport.global_score)}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                            <span style={{ fontSize: 22, fontWeight: 800, color: scoreColor(pcReport.global_score), lineHeight: 1 }}>{pcReport.global_score}</span>
-                            <span style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>/100</span>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 18, fontWeight: 700, color: scoreColor(pcReport.global_score) }}>{scoreLabel(pcReport.global_score)} Risk</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Overall AD security score — higher is worse</div>
-                          </div>
-                        </div>
-
-                        {/* Category scores */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
-                          {([
-                            { label: 'Stale Objects', key: 'stale_score' as const, icon: '🕰' },
-                            { label: 'Privileged Accounts', key: 'privileged_score' as const, icon: '👑' },
-                            { label: 'Trusts', key: 'trust_score' as const, icon: '🔗' },
-                            { label: 'Anomalies', key: 'anomaly_score' as const, icon: '⚠️' },
-                          ]).map(({ label, key, icon }) => {
-                            const val = pcReport[key] ?? 0
-                            const col = scoreColor(val)
-                            return (
-                              <div key={key} style={{ background: 'var(--card-bg)', border: `1px solid ${col}30`, borderLeft: `3px solid ${col}`, borderRadius: 8, padding: '12px 14px' }}>
-                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>{icon} {label}</div>
-                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                                  <span style={{ fontSize: 24, fontWeight: 800, color: col }}>{val}</span>
-                                  <span style={{ fontSize: 11, color: col, fontWeight: 600 }}>{scoreLabel(val)}</span>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-
-                        {/* Domain controllers */}
-                        {pcReport.domain_controllers.length > 0 && (
-                          <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 14 }}>
-                            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 10 }}>Domain Controllers</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                              {pcReport.domain_controllers.map((dc, i) => (
-                                <div key={i} style={{ display: 'flex', gap: 10, fontSize: 12, flexWrap: 'wrap' }}>
-                                  <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{dc.name}</span>
-                                  {dc.ip && <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{dc.ip}</span>}
-                                  {dc.os && <span style={{ color: 'var(--text-secondary)' }}>{dc.os}</span>}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Risk rules */}
-                        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 14 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-                            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', marginRight: 'auto' }}>
-                              Risk Findings ({filteredRules.length}{filteredRules.length !== pcReport.risk_rules.length ? ` / ${pcReport.risk_rules.length}` : ''})
-                            </div>
-                            <select value={pcCatFilter} onChange={e => setPcCatFilter(e.target.value)}
-                              style={{ padding: '5px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}>
-                              <option>All</option>
-                              {['Stale', 'Privileged', 'Trust', 'Anomaly'].map(c => <option key={c}>{c}</option>)}
-                            </select>
-                            <input value={pcSearch} onChange={e => setPcSearch(e.target.value)} placeholder="Search findings…"
-                              style={{ padding: '5px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', width: 160 }} />
-                          </div>
-
-                          {filteredRules.length === 0 ? (
-                            <div style={{ textAlign: 'center', padding: 24, fontSize: 12, color: 'var(--text-muted)' }}>
-                              {pcReport.risk_rules.length === 0 ? '🎉 No risk findings — excellent AD security posture!' : 'No findings match the current filter.'}
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                              {filteredRules.map((rule, i) => {
-                                const col = catColors[rule.category] ?? '#6366f1'
-                                return (
-                                  <div key={i} style={{ border: `1px solid ${col}25`, borderLeft: `3px solid ${col}`, background: `${col}06`, borderRadius: 8, padding: '10px 12px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: rule.rationale ? 6 : 0 }}>
-                                      <span style={{ fontSize: 13, fontWeight: 800, color: col, minWidth: 32, textAlign: 'right', flexShrink: 0 }}>{rule.points}</span>
-                                      <div style={{ flex: 1 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: `${col}20`, color: col }}>{rule.category}</span>
-                                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{rule.risk_id}</span>
-                                        </div>
-                                        {rule.rationale && <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.45 }}>{rule.rationale}</div>}
-                                        {rule.details && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, fontFamily: 'monospace', wordBreak: 'break-word' }}>{rule.details}</div>}
-                                      </div>
-                                    </div>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    )}
-
-                  </div>
-                )
-              })()}
-
               </div>{/* end tab-content min-height wrapper */}
             </div>
           )}
@@ -3456,7 +3325,7 @@ export default function Servers() {
                             {isRevealed && (
                               <button onClick={() => hidePassword(cred.id)} className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-400 rounded transition-colors">Hide</button>
                             )}
-                            <button onClick={() => deleteCredential(infoServer!.id, cred.id)} className="px-2 py-1 text-xs bg-red-800 hover:bg-red-700 text-white rounded transition-colors">Archive</button>
+                            <button onClick={() => promptDeleteCred(cred.id)} className="px-2 py-1 text-xs bg-red-800 hover:bg-red-700 text-white rounded transition-colors">Archive</button>
                           </div>
                           {isRevealed && (
                             <span className="mt-2 font-mono text-xs text-green-300 bg-gray-900 px-2 py-1 rounded select-all block break-all">{revealedPasswords[cred.id]}</span>
@@ -3622,6 +3491,35 @@ export default function Servers() {
             </div>
           )}
         </Modal>
+      )}
+
+      {/* Credential archive / delete confirm modal */}
+      {confirmDeleteCred && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setConfirmDeleteCred(null)}>
+          <div className="bg-gray-800 border border-gray-700 rounded-xl p-6 w-full max-w-sm space-y-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-white font-semibold text-base">
+              {confirmDeleteCred.isArchived ? '🗑 Permanently Delete?' : '🗄 Archive Credential?'}
+            </h3>
+            <p className="text-sm text-gray-300">
+              <span className="font-mono text-white">{confirmDeleteCred.label}</span>
+            </p>
+            <p className="text-xs text-gray-400">
+              {confirmDeleteCred.isArchived
+                ? 'This will permanently remove the credential. This cannot be undone.'
+                : 'The credential will be moved to the archived section. You can still reveal or permanently delete it later.'}
+            </p>
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setConfirmDeleteCred(null)}
+                className="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">
+                Cancel
+              </button>
+              <button onClick={() => deleteCredential(infoServer!.id, confirmDeleteCred.id)}
+                className={`flex-1 py-2 rounded-lg text-white text-sm font-medium transition-colors ${confirmDeleteCred.isArchived ? 'bg-red-700 hover:bg-red-600' : 'bg-orange-700 hover:bg-orange-600'}`}>
+                {confirmDeleteCred.isArchived ? 'Delete Forever' : 'Archive'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

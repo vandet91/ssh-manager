@@ -158,6 +158,7 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
       password:    z.string().min(1),
       domain:      z.string().optional(),
       rdp_port:    z.number().int().min(1).max(65535).default(3389),
+      use_for_ssh: z.boolean().default(false),
     }).parse(req.body)
 
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
@@ -165,14 +166,16 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
 
     const vk = getVaultKey()
     const label = body.domain
-      ? `${body.domain}\\${body.username} (RDP)`
-      : `${body.username} (RDP)`
+      ? `${body.domain}\\${body.username} (RDP${body.use_for_ssh ? '+SSH' : ''})`
+      : `${body.username} (RDP${body.use_for_ssh ? '+SSH' : ''})`
 
+    // category='windows' = dual RDP+SSH; category='other' = RDP only
     await (db as any).insertInto('server_credentials').values({
       server_id:        id,
-      category:         'other',
+      category:         body.use_for_ssh ? 'windows' : 'other',
       service_name:     'RDP',
       service_username: body.username,
+      linux_user:       body.use_for_ssh ? body.username : null,
       label,
       notes:            body.domain ? `Domain: ${body.domain}` : null,
       password_enc:     encryptSecret(body.password, vk),
@@ -212,10 +215,11 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.put('/servers/:id/rdp-credentials/:credId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
     const body = z.object({
-      label:    z.string().min(1),
-      username: z.string().min(1),
-      password: z.string().min(1).optional(),
-      domain:   z.string().optional(),
+      label:       z.string().min(1),
+      username:    z.string().min(1),
+      password:    z.string().min(1).optional(),
+      domain:      z.string().optional(),
+      use_for_ssh: z.boolean().optional(),
     }).parse(req.body)
 
     const cred = await (db as any)
@@ -225,11 +229,16 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
     if (!cred) return reply.code(404).send({ error: 'Credential not found' })
 
     const vk = getVaultKey()
-    const newLabel = body.domain ? `${body.domain}\\${body.username} (RDP)` : `${body.username} (RDP)`
+    const rdpSuffix = body.use_for_ssh ? 'RDP+SSH' : 'RDP'
+    const autoLabel = body.domain ? `${body.domain}\\${body.username} (${rdpSuffix})` : `${body.username} (${rdpSuffix})`
     const updates: Record<string, unknown> = {
-      label:            body.label || newLabel,
+      label:            body.label || autoLabel,
       service_username: body.username,
       notes:            body.domain ? `Domain: ${body.domain}` : null,
+    }
+    if (body.use_for_ssh !== undefined) {
+      updates.category   = body.use_for_ssh ? 'windows' : 'other'
+      updates.linux_user = body.use_for_ssh ? body.username : null
     }
     if (body.password) updates.password_enc = encryptSecret(body.password, vk)
 

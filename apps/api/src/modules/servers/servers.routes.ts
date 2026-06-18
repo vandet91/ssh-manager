@@ -20,6 +20,7 @@ const ServerBody = z.object({
   management_linux_user: z.string().min(1).optional(),
   os_type: z.enum(['linux', 'windows', 'router', 'access-point', 'switch', 'dvr', 'nvr', 'other-network']).optional(),
   device_category: z.enum(['server', 'network']).optional(),
+  is_domain_controller: z.boolean().optional(),
 })
 
 async function serversRoutes(fastify: FastifyInstance): Promise<void> {
@@ -100,6 +101,8 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.delete('/servers/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     await db.updateTable('servers').set({ is_active: false, updated_at: new Date() }).where('id', '=', id).execute()
+    // Deactivate all key assignments for this server so keys are not blocked from deletion
+    await db.updateTable('key_assignments').set({ is_active: false }).where('server_id', '=', id).execute()
     await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'server.deleted', resource: 'server', resourceId: id, request: req })
     reply.code(204).send()
   })

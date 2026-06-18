@@ -26,16 +26,46 @@ export default function Keys() {
   const [editForm, setEditForm] = useState({ name: '', description: '', rotation_policy: 'manual' })
   const [editError, setEditError] = useState('')
 
+  type OrphanRow = { key_id: string; key_name: string; server_id: string; linux_user: string; server_name: string | null; server_active: boolean | null }
+  const [orphans, setOrphans] = useState<OrphanRow[]>([])
+  const [cleaningOrphans, setCleaningOrphans] = useState(false)
+  const [orphanConfirm, setOrphanConfirm] = useState(false)
+  const [orphanResult, setOrphanResult] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<SshKey | null>(null)
+  const [deleteError, setDeleteError] = useState('')
+  const [revertTarget, setRevertTarget] = useState<ArchivedKey | null>(null)
+  const [purgeTarget, setPurgeTarget] = useState<ArchivedKey | null>(null)
+  const [archiveActionError, setArchiveActionError] = useState('')
+  const [selectedActive, setSelectedActive] = useState<Set<string>>(new Set())
+  const [selectedArchived, setSelectedArchived] = useState<Set<string>>(new Set())
+  const [bulkDeleteError, setBulkDeleteError] = useState('')
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [showBulkActiveConfirm, setShowBulkActiveConfirm] = useState(false)
+  const [showBulkArchivedConfirm, setShowBulkArchivedConfirm] = useState(false)
+
   const load = () => {
     api.get<SshKey[]>('/keys').then(setKeys).catch(() => {})
     api.get<ArchivedKey[]>('/keys/archived').then(setArchivedKeys).catch(() => {})
-    api.get<{ data: Assignment[] } | Assignment[]>('/assignments').then((r) => setAssignments(Array.isArray(r) ? r : (r as { data: Assignment[] }).data ?? [])).catch(() => {})
+    api.get<{ data: Assignment[] } | Assignment[]>('/assignments?limit=1000').then((r) => setAssignments(Array.isArray(r) ? r : (r as { data: Assignment[] }).data ?? [])).catch(() => {})
     api.get<Server[]>('/servers').then(setServers).catch(() => {})
+    api.get<OrphanRow[]>('/keys/orphaned-assignments').then(setOrphans).catch(() => {})
   }
   useEffect(() => {
     load()
     api.get<User>('/auth/me').then(setCurrentUser).catch(() => {})
   }, [])
+
+  const cleanupOrphans = async () => {
+    setCleaningOrphans(true)
+    setOrphanResult('')
+    try {
+      const r = await api.post<{ cleaned: number }>('/keys/cleanup-orphans')
+      setOrphanResult(`Cleaned up ${r.cleaned} orphaned assignment(s).`)
+      setOrphanConfirm(false)
+      load()
+    } catch (err: unknown) { setOrphanResult((err as Error).message) }
+    finally { setCleaningOrphans(false) }
+  }
 
   useEffect(() => {
     if (!downloadDropOpen) return
@@ -69,7 +99,6 @@ export default function Keys() {
   }
 
   const rotateKey = async (id: string) => {
-    if (!confirm('Rotate this key? The new key pair will be pushed to all assigned servers, then the old one removed.')) return
     setRotating(id)
     setRotateResult(null)
     try {
@@ -102,41 +131,84 @@ export default function Keys() {
     } catch (err: unknown) { setEditError((err as Error).message) }
   }
 
-  const deleteKey = async (k: SshKey) => {
-    const assignCount = assignments.filter((a) => a.key_id === k.id && a.is_active).length
-    const isMgmt = servers.some((s) => s.management_key_id === k.id)
-    if (assignCount > 0) { alert(`Cannot delete: key has ${assignCount} active assignment(s). Revoke them first.`); return }
-    if (isMgmt) { alert(`Cannot delete: key is the management key for one or more servers. Decommission those servers first.`); return }
-    if (!confirm(`Delete key "${k.name}"? This cannot be undone.`)) return
+  const deleteKey = async () => {
+    if (!deleteTarget) return
+    setDeleteError('')
     try {
-      await api.delete(`/keys/${k.id}`)
+      await api.delete(`/keys/${deleteTarget.id}`)
+      setDeleteTarget(null)
       load()
     } catch (err: unknown) {
       const e = err as Error & { data?: { error?: string } }
-      alert(e.data?.error ?? e.message)
+      setDeleteError(e.data?.error ?? e.message)
     }
   }
 
+  const bulkDeleteActive = async () => {
+    setBulkDeleting(true)
+    setBulkDeleteError('')
+    const errors: string[] = []
+    for (const id of selectedActive) {
+      try { await api.delete(`/keys/${id}`) }
+      catch (err: unknown) {
+        const e = err as Error & { data?: { error?: string } }
+        const k = keys.find(k => k.id === id)
+        errors.push(`${k?.name ?? id}: ${e.data?.error ?? e.message}`)
+      }
+    }
+    setBulkDeleting(false)
+    setShowBulkActiveConfirm(false)
+    setSelectedActive(new Set())
+    if (errors.length) setBulkDeleteError(errors.join(' | '))
+    load()
+  }
+
+  const bulkPurgeArchived = async () => {
+    setBulkDeleting(true)
+    setBulkDeleteError('')
+    const errors: string[] = []
+    for (const id of selectedArchived) {
+      try { await api.delete(`/keys/archived/${id}`) }
+      catch (err: unknown) {
+        const e = err as Error & { data?: { error?: string } }
+        const k = archivedKeys.find(k => k.id === id)
+        errors.push(`${k?.name ?? id}: ${e.data?.error ?? e.message}`)
+      }
+    }
+    setBulkDeleting(false)
+    setShowBulkArchivedConfirm(false)
+    setSelectedArchived(new Set())
+    if (errors.length) setBulkDeleteError(errors.join(' | '))
+    load()
+  }
+
+  const toggleActive = (id: string) => setSelectedActive(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+  const toggleArchived = (id: string) => setSelectedArchived(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+  const toggleAllActive = () => setSelectedActive(prev => prev.size === keys.length ? new Set() : new Set(keys.map(k => k.id)))
+  const toggleAllArchived = () => setSelectedArchived(prev => prev.size === archivedKeys.length ? new Set() : new Set(archivedKeys.map(k => k.id)))
+
   const revertKey = async (k: ArchivedKey) => {
-    if (!confirm(`Revert rotation of "${k.name}"?\n\nThis will push the OLD key back to all assigned servers and remove the current (newer) key. Only do this if the rotation caused problems.`)) return
+    setArchiveActionError('')
     setReverting(k.id)
     try {
       await api.post(`/keys/${k.id}/revert`)
+      setRevertTarget(null)
       load()
       setTab('active')
     } catch (err: unknown) {
-      alert((err as Error).message)
+      setArchiveActionError((err as Error).message)
     } finally {
       setReverting(null)
     }
   }
 
   const purgeKey = async (k: ArchivedKey) => {
-    if (!confirm(`Permanently delete archived key "${k.name}"?\n\nThe encrypted private key will be gone forever. This cannot be undone.`)) return
+    setArchiveActionError('')
     try {
       await api.delete(`/keys/archived/${k.id}`)
+      setPurgeTarget(null)
       load()
-    } catch (err: unknown) { alert((err as Error).message) }
+    } catch (err: unknown) { setArchiveActionError((err as Error).message) }
   }
 
   const isPpk = importForm.private_key.trimStart().startsWith('PuTTY-User-Key-File-')
@@ -154,6 +226,36 @@ export default function Keys() {
 
   return (
     <div className="p-6 space-y-4">
+      {(orphans.length > 0 || orphanResult) && (
+        <div className="bg-yellow-900/40 border border-yellow-700 rounded-xl px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-yellow-300 font-medium text-sm">⚠ Orphaned key assignments detected</p>
+              <p className="text-yellow-400/80 text-xs mt-0.5">
+                {orphans.length} assignment(s) still marked active but point to deleted servers:&nbsp;
+                {[...new Set(orphans.map(o => o.key_name))].join(', ')}
+              </p>
+            </div>
+            {!orphanConfirm && (
+              <button onClick={() => { setOrphanConfirm(true); setOrphanResult('') }}
+                className="shrink-0 px-3 py-1.5 bg-yellow-700 hover:bg-yellow-600 text-white rounded-lg text-xs font-medium transition-colors">
+                Clean up
+              </button>
+            )}
+          </div>
+          {orphanConfirm && (
+            <div className="flex items-center gap-3 pt-1 border-t border-yellow-700/50">
+              <p className="text-yellow-300 text-xs flex-1">Remove all {orphans.length} orphaned assignment(s)? This cannot be undone.</p>
+              <button onClick={() => setOrphanConfirm(false)} className="px-3 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white text-xs transition-colors">Cancel</button>
+              <button onClick={cleanupOrphans} disabled={cleaningOrphans}
+                className="px-3 py-1 rounded bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-xs font-medium transition-colors">
+                {cleaningOrphans ? 'Cleaning…' : 'Yes, clean up'}
+              </button>
+            </div>
+          )}
+          {orphanResult && <p className="text-green-400 text-xs pt-1 border-t border-yellow-700/50">{orphanResult}</p>}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">SSH Keys</h1>
         <div className="flex gap-2">
@@ -189,20 +291,39 @@ export default function Keys() {
             <div className="bg-gray-900 border border-gray-800 rounded-xl px-3 py-5 text-center text-gray-500">No archived keys.</div>
           )}
           {archivedKeys.length > 0 && (
+            <>
+            {selectedArchived.size > 0 && (
+              <div className="flex items-center gap-3 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 mb-2">
+                <span className="text-gray-300 text-sm">{selectedArchived.size} selected</span>
+                <button onClick={() => { setBulkDeleteError(''); setShowBulkArchivedConfirm(true) }}
+                  className="px-3 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors">
+                  Delete Now Selected
+                </button>
+                <button onClick={() => setSelectedArchived(new Set())} className="px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">
+                  Clear
+                </button>
+                {bulkDeleteError && <span className="text-red-400 text-xs flex-1">{bulkDeleteError}</span>}
+              </div>
+            )}
             <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-              <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 780 }}>
+              <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 800 }}>
                 <colgroup>
-                  <col style={{ width: '20%' }} />  {/* Name */}
-                  <col style={{ width: '8%'  }} />  {/* Type */}
-                  <col style={{ width: '18%' }} />  {/* Fingerprint */}
-                  <col style={{ width: '9%'  }} />  {/* Reason */}
+                  <col style={{ width: '3%'  }} />  {/* Checkbox */}
+                  <col style={{ width: '18%' }} />  {/* Name */}
+                  <col style={{ width: '7%'  }} />  {/* Type */}
+                  <col style={{ width: '16%' }} />  {/* Fingerprint */}
+                  <col style={{ width: '8%'  }} />  {/* Reason */}
                   <col style={{ width: '9%'  }} />  {/* Created */}
                   <col style={{ width: '9%'  }} />  {/* Archived */}
-                  <col style={{ width: '10%' }} />  {/* Auto-purge in */}
-                  <col style={{ width: '17%' }} />  {/* Actions */}
+                  <col style={{ width: '9%'  }} />  {/* Auto-purge in */}
+                  <col style={{ width: '21%' }} />  {/* Actions */}
                 </colgroup>
                 <thead className="bg-gray-800/50">
                   <tr className="text-left text-gray-500 text-xs uppercase tracking-wide font-medium">
+                    <th className="px-3 py-2">
+                      <input type="checkbox" checked={archivedKeys.length > 0 && selectedArchived.size === archivedKeys.length}
+                        onChange={toggleAllArchived} className="accent-indigo-500 cursor-pointer" />
+                    </th>
                     <th className="px-3 py-2">Name</th>
                     <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">Fingerprint</th>
@@ -215,7 +336,10 @@ export default function Keys() {
                 </thead>
                 <tbody className="divide-y divide-gray-800">
                   {archivedKeys.map((k) => (
-                    <tr key={k.id} className="hover:bg-gray-800/30">
+                    <tr key={k.id} className={`hover:bg-gray-800/30 ${selectedArchived.has(k.id) ? 'bg-indigo-950/30' : ''}`}>
+                      <td className="px-3 py-2">
+                        <input type="checkbox" checked={selectedArchived.has(k.id)} onChange={() => toggleArchived(k.id)} className="accent-indigo-500 cursor-pointer" />
+                      </td>
                       <td className="px-3 py-2 text-white font-medium">
                         {k.name}
                         {k.description && <p className="text-xs text-gray-500 font-normal">{k.description}</p>}
@@ -232,19 +356,44 @@ export default function Keys() {
                         </span>
                       </td>
                       <td className="px-3 py-2">
-                        <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', alignItems: 'center' }}>
-                          {k.archive_reason === 'rotated' && k.successor_key_id && (
-                            <button onClick={() => revertKey(k)} disabled={reverting === k.id}
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                          {k.archive_reason === 'rotated' && k.successor_key_id && revertTarget?.id !== k.id && (
+                            <button onClick={() => { setArchiveActionError(''); setRevertTarget(k) }} disabled={reverting === k.id}
                               className="px-2 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-50"
                               style={{ whiteSpace: 'nowrap' }}>
-                              {reverting === k.id ? 'Reverting…' : '↩ Revert'}
+                              ↩ Revert
                             </button>
                           )}
-                          <button onClick={() => purgeKey(k)}
-                            className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors"
-                            style={{ whiteSpace: 'nowrap' }}>
-                            Delete Now
-                          </button>
+                          {revertTarget?.id === k.id && (
+                            <div className="flex flex-col gap-1">
+                              <span className="text-yellow-400 text-xs">Push OLD key back to servers?</span>
+                              {archiveActionError && <span className="text-red-400 text-xs">{archiveActionError}</span>}
+                              <div className="flex gap-1">
+                                <button onClick={() => revertKey(k)} disabled={reverting === k.id}
+                                  className="px-2 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-50">
+                                  {reverting === k.id ? 'Reverting…' : 'Yes, revert'}
+                                </button>
+                                <button onClick={() => { setRevertTarget(null); setArchiveActionError('') }} className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">Cancel</button>
+                              </div>
+                            </div>
+                          )}
+                          {purgeTarget?.id !== k.id && (
+                            <button onClick={() => { setArchiveActionError(''); setPurgeTarget(k) }}
+                              className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors"
+                              style={{ whiteSpace: 'nowrap' }}>
+                              Delete Now
+                            </button>
+                          )}
+                          {purgeTarget?.id === k.id && (
+                            <div className="flex flex-col gap-1">
+                              <span className="text-yellow-400 text-xs">Permanently delete "{k.name}"?</span>
+                              {archiveActionError && <span className="text-red-400 text-xs">{archiveActionError}</span>}
+                              <div className="flex gap-1">
+                                <button onClick={() => purgeKey(k)} className="px-2 py-1 text-xs rounded bg-red-600 hover:bg-red-500 text-white transition-colors">Yes, delete</button>
+                                <button onClick={() => { setPurgeTarget(null); setArchiveActionError('') }} className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">Cancel</button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -252,6 +401,7 @@ export default function Keys() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
       )}
@@ -281,12 +431,28 @@ export default function Keys() {
         </div>
       )}
 
+
+      {selectedActive.size > 0 && (
+        <div className="flex items-center gap-3 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2">
+          <span className="text-gray-300 text-sm">{selectedActive.size} selected</span>
+          <button onClick={() => { setBulkDeleteError(''); setShowBulkActiveConfirm(true) }}
+            className="px-3 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors">
+            Delete Selected
+          </button>
+          <button onClick={() => setSelectedActive(new Set())} className="px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">
+            Clear
+          </button>
+          {bulkDeleteError && <span className="text-red-400 text-xs flex-1">{bulkDeleteError}</span>}
+        </div>
+      )}
+
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-        <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 780 }}>
+        <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 800 }}>
           <colgroup>
-            <col style={{ width: '18%' }} />  {/* Name */}
-            <col style={{ width: '8%'  }} />  {/* Type */}
-            <col style={{ width: '17%' }} />  {/* Fingerprint */}
+            <col style={{ width: '3%'  }} />  {/* Checkbox */}
+            <col style={{ width: '17%' }} />  {/* Name */}
+            <col style={{ width: '7%'  }} />  {/* Type */}
+            <col style={{ width: '16%' }} />  {/* Fingerprint */}
             <col style={{ width: '10%' }} />  {/* In Use */}
             <col style={{ width: '8%'  }} />  {/* Rotation */}
             <col style={{ width: '9%'  }} />  {/* Next Rotation */}
@@ -295,6 +461,11 @@ export default function Keys() {
           </colgroup>
           <thead className="bg-gray-800/50">
             <tr className="text-left text-gray-500 text-xs uppercase tracking-wide font-medium">
+              <th className="px-3 py-2">
+                <input type="checkbox" checked={keys.length > 0 && selectedActive.size === keys.length}
+                  onChange={toggleAllActive}
+                  className="accent-indigo-500 cursor-pointer" />
+              </th>
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Type</th>
               <th className="px-3 py-2">Fingerprint</th>
@@ -307,8 +478,9 @@ export default function Keys() {
           </thead>
           <tbody className="divide-y divide-gray-800">
             {keys.map((k) => {
-              const activeAssignCount = assignments.filter((a) => a.key_id === k.id && a.is_active).length
-              const isMgmtKey = servers.some((s) => s.management_key_id === k.id)
+              const activeAssignCount = assignments.filter((a) => a.key_id === k.id && a.is_active && servers.some(s => s.id === a.server_id)).length
+              const isMgmtKey = servers.some((s) => s.management_key_id === k.id && s.is_active)
+              const orphanCount = orphans.filter(o => o.key_id === k.id).length
               const inUse = activeAssignCount > 0 || isMgmtKey
 
               const now = Date.now()
@@ -317,7 +489,10 @@ export default function Keys() {
               const isDueSoon = !isOverdue && nextRot !== null && nextRot - now < 3 * 24 * 60 * 60 * 1000 // within 3 days
 
               return (
-                <tr key={k.id} className={`hover:bg-gray-800/30 ${isOverdue ? 'bg-red-950/20' : ''}`}>
+                <tr key={k.id} className={`hover:bg-gray-800/30 ${isOverdue ? 'bg-red-950/20' : ''} ${selectedActive.has(k.id) ? 'bg-indigo-950/30' : ''}`}>
+                  <td className="px-3 py-2">
+                    <input type="checkbox" checked={selectedActive.has(k.id)} onChange={() => toggleActive(k.id)} className="accent-indigo-500 cursor-pointer" />
+                  </td>
                   <td className="px-3 py-2 text-white font-medium">
                     {k.name}
                     {k.description && <p className="text-xs text-gray-500 font-normal">{k.description}</p>}
@@ -328,7 +503,8 @@ export default function Keys() {
                     <div className="flex flex-col gap-1">
                       {activeAssignCount > 0 && <Badge label={`${activeAssignCount} assignment${activeAssignCount > 1 ? 's' : ''}`} variant="ok" />}
                       {isMgmtKey && <Badge label="mgmt key" variant="low" />}
-                      {!inUse && <span className="text-gray-600 text-xs">—</span>}
+                      {orphanCount > 0 && <Badge label={`${orphanCount} orphaned`} variant="high" />}
+                      {!inUse && orphanCount === 0 && <span className="text-gray-600 text-xs">—</span>}
                     </div>
                   </td>
                   <td className="px-3 py-2 text-gray-300">{k.rotation_policy}</td>
@@ -393,9 +569,8 @@ export default function Keys() {
                         style={{ whiteSpace: 'nowrap' }}>
                         Edit
                       </button>
-                      <button onClick={() => deleteKey(k)} disabled={inUse}
-                        title={inUse ? (isMgmtKey ? 'Management key — decommission server first' : 'Has active assignments — revoke them first') : undefined}
-                        className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      <button onClick={() => { setDeleteError(''); setDeleteTarget(k) }}
+                        className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors"
                         style={{ whiteSpace: 'nowrap' }}>
                         Delete
                       </button>
@@ -405,11 +580,75 @@ export default function Keys() {
               )
             })}
             {keys.length === 0 && (
-              <tr><td colSpan={7} className="px-3 py-5 text-center text-gray-500">No keys yet.</td></tr>
+              <tr><td colSpan={9} className="px-3 py-5 text-center text-gray-500">No keys yet.</td></tr>
             )}
           </tbody>
         </table>
       </div>
+
+      </>}
+      {/* ── Modals (outside tab blocks so they render regardless of active tab) ── */}
+
+      {/* Bulk Delete Active Keys Modal */}
+      {showBulkActiveConfirm && (
+        <Modal title="Delete Selected Keys" onClose={() => setShowBulkActiveConfirm(false)}>
+          <div className="space-y-4">
+            <p className="text-gray-300 text-sm">Archive <span className="font-semibold text-white">{selectedActive.size} key{selectedActive.size > 1 ? 's' : ''}</span>? Keys with active assignments will be skipped and shown as errors.</p>
+            {bulkDeleteError && <p className="text-red-400 text-sm bg-red-900/30 border border-red-800 rounded px-3 py-2">{bulkDeleteError}</p>}
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setShowBulkActiveConfirm(false)} className="px-4 py-2 text-sm rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">Cancel</button>
+              <button onClick={bulkDeleteActive} disabled={bulkDeleting} className="px-4 py-2 text-sm rounded bg-red-600 hover:bg-red-500 text-white transition-colors font-medium disabled:opacity-50">
+                {bulkDeleting ? 'Deleting…' : `Yes, delete ${selectedActive.size}`}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk Purge Archived Keys Modal */}
+      {showBulkArchivedConfirm && (
+        <Modal title="Permanently Delete Selected" onClose={() => setShowBulkArchivedConfirm(false)}>
+          <div className="space-y-4">
+            <p className="text-gray-300 text-sm">Permanently delete <span className="font-semibold text-white">{selectedArchived.size} archived key{selectedArchived.size > 1 ? 's' : ''}</span>? This cannot be undone.</p>
+            {bulkDeleteError && <p className="text-red-400 text-sm bg-red-900/30 border border-red-800 rounded px-3 py-2">{bulkDeleteError}</p>}
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setShowBulkArchivedConfirm(false)} className="px-4 py-2 text-sm rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">Cancel</button>
+              <button onClick={bulkPurgeArchived} disabled={bulkDeleting} className="px-4 py-2 text-sm rounded bg-red-600 hover:bg-red-500 text-white transition-colors font-medium disabled:opacity-50">
+                {bulkDeleting ? 'Deleting…' : `Yes, delete ${selectedArchived.size}`}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete Key Modal */}
+      {deleteTarget && (
+        <Modal title={`Delete Key — ${deleteTarget.name}`} onClose={() => { setDeleteTarget(null); setDeleteError('') }}>
+          <div className="space-y-4">
+            {orphans.filter(o => o.key_id === deleteTarget.id).length > 0 && (
+              <p className="text-yellow-400 text-sm">
+                {orphans.filter(o => o.key_id === deleteTarget.id).length} orphaned assignment(s) from deleted servers will be auto-cleaned.
+              </p>
+            )}
+            <p className="text-gray-300 text-sm">
+              Archive key <span className="font-semibold text-white">"{deleteTarget.name}"</span>? It will be moved to the archived tab and permanently purged after 30 days.
+            </p>
+            {deleteError && (
+              <p className="text-red-400 text-sm bg-red-900/30 border border-red-800 rounded px-3 py-2">{deleteError}</p>
+            )}
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => { setDeleteTarget(null); setDeleteError('') }}
+                className="px-4 py-2 text-sm rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">
+                Cancel
+              </button>
+              <button onClick={deleteKey}
+                className="px-4 py-2 text-sm rounded bg-red-600 hover:bg-red-500 text-white transition-colors font-medium">
+                Yes, delete
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Edit Key Modal */}
       {editKey && (
@@ -547,7 +786,6 @@ export default function Keys() {
           </form>
         </Modal>
       )}
-      </>}
     </div>
   )
 }

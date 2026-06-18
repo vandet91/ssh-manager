@@ -37,10 +37,103 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
-      const query = z.object({ linux_user: z.string().optional() }).parse(req.query)
+      const query = z.object({ linux_user: z.string().optional(), credential_id: z.string().uuid().optional() }).parse(req.query)
       const sessionUser = req.session.user
 
-      // Find valid assignment
+      // ── Password-based auth via server_credential ──────────────────────────
+      if (query.credential_id) {
+        const cred = await (db as any)
+          .selectFrom('server_credentials')
+          .selectAll()
+          .where('id', '=', query.credential_id)
+          .where('server_id', '=', serverId)
+          .where('is_archived', '=', false)
+          .executeTakeFirst() as any
+        if (!cred || !cred.linux_user) {
+          send({ type: 'error', message: 'Credential not found' })
+          ws.close(4003)
+          return
+        }
+
+        const server = await db.selectFrom('servers').selectAll().where('id', '=', serverId).executeTakeFirst()
+        if (!server) { send({ type: 'error', message: 'Server not found' }); ws.close(4004); return }
+
+        const vaultKey = getVaultKey()
+        const password = decryptSecret(cred.password_enc, vaultKey)
+        const linuxUser = cred.linux_user as string
+
+        const sshClient = new Client()
+        await new Promise<void>((resolve, reject) => {
+          sshClient.once('ready', resolve).once('error', reject).connect({
+            host: server.hostname,
+            port: server.ssh_port,
+            username: linuxUser,
+            password,
+            readyTimeout: 15000,
+          })
+        })
+
+        const recordingId = crypto.randomUUID()
+        const castPath = path.join(config.RECORDINGS_STORAGE_PATH, `${recordingId}.cast`)
+        fs.mkdirSync(config.RECORDINGS_STORAGE_PATH, { recursive: true })
+        const startTime = Date.now()
+        const castStream = fs.createWriteStream(castPath, { flags: 'a' })
+        let cols = 80; let rows = 24
+
+        const writeHeader = () => {
+          castStream.write(JSON.stringify({ version: 2, width: cols, height: rows, timestamp: Math.floor(startTime / 1000), title: `${server.name} - ${linuxUser}` }) + '\n')
+        }
+
+        const [recordRow] = await db.insertInto('session_recordings').values({
+          user_id: sessionUser!.id, server_id: serverId, linux_user: linuxUser, cast_file_path: castPath,
+        }).returningAll().execute()
+
+        await writeAuditLog({ userId: sessionUser!.id, userEmail: sessionUser!.email, action: 'terminal.session.started', serverId, request: req })
+
+        sshClient.shell({ term: 'xterm-256color', cols, rows }, (err, stream) => {
+          if (err) { send({ type: 'error', message: err.message }); sshClient.end(); return }
+          writeHeader()
+          send({ type: 'connected', serverName: server.name, linuxUser, key_name: 'password' })
+
+          let idleTimer: NodeJS.Timeout | null = null
+          const resetIdle = () => {
+            if (idleTimer) clearTimeout(idleTimer)
+            idleTimer = setTimeout(() => { send({ type: 'disconnected' }); stream.end(); sshClient.end() }, config.TERMINAL_IDLE_TIMEOUT_MIN * 60 * 1000)
+          }
+          resetIdle()
+
+          stream.on('data', (data: Buffer) => {
+            const text = data.toString('utf8')
+            send({ type: 'output', data: text })
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(6)
+            castStream.write(JSON.stringify([Number(elapsed), 'o', text]) + '\n')
+          })
+
+          stream.on('close', () => {
+            if (idleTimer) clearTimeout(idleTimer)
+            ws.close(); sshClient.end()
+            const duration = Math.floor((Date.now() - startTime) / 1000)
+            castStream.end(async () => {
+              const size = fs.statSync(castPath).size
+              await db.updateTable('session_recordings').set({ ended_at: new Date(), duration_s: duration, cast_size_bytes: size }).where('id', '=', recordRow.id).execute()
+            })
+            writeAuditLog({ userId: sessionUser!.id, userEmail: sessionUser!.email, action: 'terminal.session.ended', serverId })
+          })
+
+          ws.on('message', (rawMsg: unknown) => {
+            try {
+              const msg: WsMessage = JSON.parse(String(rawMsg))
+              if (msg.type === 'input') { resetIdle(); stream.write(msg.data) }
+              else if (msg.type === 'resize') { cols = msg.cols; rows = msg.rows; stream.setWindow(rows, cols, 0, 0) }
+            } catch { /* ignore */ }
+          })
+
+          ws.on('close', () => { if (idleTimer) clearTimeout(idleTimer); stream.end(); sshClient.end() })
+        })
+        return
+      }
+
+      // ── Key-based auth ─────────────────────────────────────────────────────
       let linuxUser = query.linux_user
       let assignmentQuery = db.selectFrom('key_assignments')
         .selectAll()

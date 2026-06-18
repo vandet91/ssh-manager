@@ -789,6 +789,12 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
                   </Btn>
                 </div>
               )}
+              {renameTarget.type==='file'&&(
+                <Btn bg='#0e7490' onClick={()=>{
+                  const fp=join(curPath,renameTarget.name)
+                  window.location.href=`/api/servers/${serverId}/fs/download?path=${encodeURIComponent(fp)}`
+                }} full>⬇ Download</Btn>
+              )}
               <Btn bg='#b91c1c' onClick={()=>{setDeleteTgt(renameTarget);setRenameTarget(null)}} full>
                 🗑 Delete {renameTarget.type==='dir'?'folder':'file'}
               </Btn>
@@ -1051,7 +1057,7 @@ export default function FileManager() {
   useEffect(() => { localStorage.setItem(LS_TABS, JSON.stringify(tabs)) }, [tabs])
   useEffect(() => { localStorage.setItem(LS_ACTIVE, activeId) }, [activeId])
 
-  useEffect(() => { api.get<Server[]>('/servers').then(setServers).catch(()=>{}) }, [])
+  useEffect(() => { api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type !== 'windows'))).catch(()=>{}) }, [])
 
   // ── Drag state ────────────────────────────────────────────────────────────
   const dragInfoRef = useRef<DragInfo|null>(null)

@@ -5,7 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon } from '@xterm/addon-search'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
-import { api, Server, Assignment } from '../api/client'
+import { api, Server, Assignment, ServerCredential } from '../api/client'
 import '@xterm/xterm/css/xterm.css'
 
 const MIN_FONT = 10
@@ -17,6 +17,7 @@ type TabState = {
   id: string
   selectedServer: string
   selectedUser: string
+  selectedCredentialId: string
   connected: boolean
   connecting: boolean
   status: string
@@ -38,6 +39,7 @@ function makeTab(): TabState {
     id: crypto.randomUUID(),
     selectedServer: '',
     selectedUser: '',
+    selectedCredentialId: '',
     connected: false,
     connecting: false,
     status: '',
@@ -58,6 +60,7 @@ function makeTab(): TabState {
 export default function Terminal() {
   const [servers, setServers] = useState<Server[]>([])
   const [assignments, setAssignments] = useState<Assignment[]>([])
+  const [credsByServer, setCredsByServer] = useState<Record<string, ServerCredential[]>>({})
   const [tabs, setTabs] = useState<TabState[]>(() => [makeTab()])
   const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id)
   const [showCmdPanel, setShowCmdPanel] = useState(false)
@@ -83,6 +86,14 @@ export default function Terminal() {
     api.get<Server[]>('/servers').then(setServers).catch(() => {})
     api.get<Assignment[]>('/assignments').then(setAssignments).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    const sid = activeTab?.selectedServer
+    if (!sid || credsByServer[sid] !== undefined) return
+    api.get<ServerCredential[]>(`/servers/${sid}/credentials`)
+      .then(creds => setCredsByServer(prev => ({ ...prev, [sid]: creds })))
+      .catch(() => setCredsByServer(prev => ({ ...prev, [sid]: [] })))
+  }, [activeTab?.selectedServer])
 
   useEffect(() => {
     if (!showCmdPanel) return
@@ -176,20 +187,49 @@ export default function Terminal() {
     // (handles servers set up before the key_assignment was auto-created)
     if (tab.selectedServer) {
       const srv = servers.find((s) => s.id === tab.selectedServer)
-      if (srv?.management_linux_user && srv.management_key_id && !seen.has(srv.management_linux_user)) {
-        result.unshift({
-          id: '__mgmt__',
-          server_id: srv.id,
-          key_id: srv.management_key_id,
-          linux_user: srv.management_linux_user,
-          can_terminal: true,
-          is_active: true,
-          user_id: '',
-        } as Assignment)
+      if (srv?.management_linux_user && srv.management_key_id) {
+        const mgmtLower = srv.management_linux_user.toLowerCase()
+        const alreadyIn = [...seen].some(u => u.toLowerCase() === mgmtLower)
+        if (!alreadyIn) {
+          // Prefer the casing stored in a credential if one exists for this user
+          const credMatch = (credsByServer[tab.selectedServer] ?? [])
+            .find(c => c.linux_user && c.linux_user.toLowerCase() === mgmtLower && !c.is_archived)
+          const displayUser = credMatch?.linux_user ?? srv.management_linux_user
+          result.unshift({
+            id: '__mgmt__',
+            server_id: srv.id,
+            key_id: srv.management_key_id,
+            linux_user: displayUser,
+            can_terminal: true,
+            is_active: true,
+            user_id: '',
+          } as Assignment)
+        }
       }
     }
 
     return result
+  }
+
+  function credUsersFor(tab: TabState): ServerCredential[] {
+    if (!tab.selectedServer) return []
+    const creds = credsByServer[tab.selectedServer] ?? []
+    const saList = serverAssignmentsFor(tab)
+    const srv = servers.find(s => s.id === tab.selectedServer)
+    // Case-insensitive set of users already covered by key assignments or management key
+    const keyUsers = new Set([
+      ...saList.map(a => a.linux_user.toLowerCase()),
+      ...(srv?.management_linux_user ? [srv.management_linux_user.toLowerCase()] : []),
+    ])
+    const seen = new Set<string>()
+    return creds.filter(c => {
+      if (!['linux', 'windows'].includes(c.category)) return false
+      if (c.is_archived || !c.linux_user) return false
+      const lu = c.linux_user.toLowerCase()
+      if (keyUsers.has(lu) || seen.has(lu)) return false
+      seen.add(lu)
+      return true
+    })
   }
 
   function tabLabel(tab: TabState) {
@@ -215,7 +255,9 @@ export default function Terminal() {
     const tab = tabs.find((t) => t.id === tabId)
     if (!tab || !tab.selectedServer || tab.connecting) return
     const saList = serverAssignmentsFor(tab)
-    if (saList.length > 1 && !tab.selectedUser) return
+    const credList = credUsersFor(tab)
+    const totalUsers = saList.length + credList.length
+    if (totalUsers > 1 && !tab.selectedUser) return
 
     updateTab(tabId, { connecting: true })
 
@@ -262,8 +304,11 @@ export default function Terminal() {
     fitRefs.current[tabId]    = fitAddon
     searchRefs.current[tabId] = searchAddon
 
-    const linuxUser = tab.selectedUser || (saList.length === 1 ? saList[0].linux_user : '')
-    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/terminal/${tab.selectedServer}${linuxUser ? `?linux_user=${linuxUser}` : ''}`
+    const singleCred = saList.length === 0 && credList.length === 1 ? credList[0] : null
+    const linuxUser = tab.selectedUser || (saList.length === 1 ? saList[0].linux_user : '') || (singleCred?.linux_user ?? '')
+    const credentialId = tab.selectedCredentialId || (singleCred?.id ?? '')
+    const credParam = credentialId ? `&credential_id=${credentialId}` : ''
+    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/terminal/${tab.selectedServer}${linuxUser ? `?linux_user=${linuxUser}${credParam}` : ''}`
     const ws = new WebSocket(wsUrl)
     wsRefs.current[tabId] = ws
 
@@ -428,12 +473,26 @@ export default function Terminal() {
       {activeTab && (() => {
         const tab = activeTab
         const saList = serverAssignmentsFor(tab)
-        const canConnect = tab.selectedServer && (saList.length <= 1 || tab.selectedUser)
+        const credList = credUsersFor(tab)
+        const totalUsers = saList.length + credList.length
+        const canConnect = tab.selectedServer && (totalUsers <= 1 || tab.selectedUser)
+        // Encode value: key users = "k|linux_user", cred users = "c|credId|linux_user"
+        const dropdownValue = tab.selectedCredentialId
+          ? `c|${tab.selectedCredentialId}|${tab.selectedUser}`
+          : (tab.selectedUser ? `k|${tab.selectedUser}` : '')
+        const handleUserChange = (val: string) => {
+          if (val.startsWith('c|')) {
+            const [, credId, lu] = val.split('|')
+            updateTab(tab.id, { selectedUser: lu, selectedCredentialId: credId })
+          } else {
+            updateTab(tab.id, { selectedUser: val.replace(/^k\|/, ''), selectedCredentialId: '' })
+          }
+        }
         return (
           <div className="flex items-center gap-2 px-4 py-2 bg-gray-900/80 border-b border-gray-800 flex-wrap shrink-0">
             <select
               value={tab.selectedServer}
-              onChange={(e) => updateTab(tab.id, { selectedServer: e.target.value, selectedUser: '', usedKey: '', status: '' })}
+              onChange={(e) => updateTab(tab.id, { selectedServer: e.target.value, selectedUser: '', selectedCredentialId: '', usedKey: '', status: '' })}
               disabled={tab.connected || tab.connecting}
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
             >
@@ -441,17 +500,26 @@ export default function Terminal() {
               {servers.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.hostname})</option>)}
             </select>
 
-            {tab.selectedServer && saList.length > 0 && (
+            {tab.selectedServer && totalUsers > 0 && (
               <select
-                value={tab.selectedUser}
-                onChange={(e) => updateTab(tab.id, { selectedUser: e.target.value })}
+                value={dropdownValue}
+                onChange={(e) => handleUserChange(e.target.value)}
                 disabled={tab.connected || tab.connecting}
                 className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
               >
-                {saList.length === 1
-                  ? <option value={saList[0].linux_user}>{saList[0].linux_user}</option>
-                  : <><option value="">— user —</option>{saList.map((a) => <option key={a.id} value={a.linux_user}>{a.linux_user}</option>)}</>
-                }
+                {totalUsers === 1 && saList.length === 1 && (
+                  <option value={`k|${saList[0].linux_user}`}>{saList[0].linux_user}</option>
+                )}
+                {totalUsers === 1 && credList.length === 1 && (
+                  <option value={`c|${credList[0].id}|${credList[0].linux_user}`}>{credList[0].linux_user} (password)</option>
+                )}
+                {totalUsers > 1 && (
+                  <>
+                    <option value="">— user —</option>
+                    {saList.map((a) => <option key={a.id} value={`k|${a.linux_user}`}>{a.linux_user}</option>)}
+                    {credList.map((c) => <option key={c.id} value={`c|${c.id}|${c.linux_user}`}>{c.linux_user} (password)</option>)}
+                  </>
+                )}
               </select>
             )}
 

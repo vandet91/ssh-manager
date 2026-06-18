@@ -23,7 +23,10 @@ async function securityRoutes(fastify: FastifyInstance): Promise<void> {
 
   // POST /security/scan/all
   fastify.post('/security/scan/all', { preHandler: requirePermission('security:scan') }, async () => {
-    const servers = await db.selectFrom('servers').select(['id']).where('is_active', '=', true).execute()
+    const servers = await db.selectFrom('servers').select(['id'])
+      .where('is_active', '=', true)
+      .where((eb) => eb.or([eb('os_type', '!=', 'windows'), eb('os_type', 'is', null)]))
+      .execute()
 
     if (!securityQueue) {
       const { queue } = startSecurityWorker()

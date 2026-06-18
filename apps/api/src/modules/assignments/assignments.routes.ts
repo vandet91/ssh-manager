@@ -40,9 +40,28 @@ async function assignmentsRoutes(fastify: FastifyInstance): Promise<void> {
     const query = z.object({ page: z.coerce.number().default(1), limit: z.coerce.number().default(50) }).parse(req.query)
     const user = req.session.user!
 
-    let qb = db.selectFrom('key_assignments').selectAll()
+    const db2 = db as any
+    let qb = db2.selectFrom('key_assignments')
+      .leftJoin('servers', 'servers.id', 'key_assignments.server_id')
+      .leftJoin('ssh_keys', 'ssh_keys.id', 'key_assignments.key_id')
+      .select([
+        'key_assignments.id',
+        'key_assignments.user_id',
+        'key_assignments.key_id',
+        'key_assignments.server_id',
+        'key_assignments.linux_user',
+        'key_assignments.can_terminal',
+        'key_assignments.expires_at',
+        'key_assignments.is_active',
+        'key_assignments.created_at',
+        'key_assignments.granted_by',
+        'servers.name as server_name',
+        'servers.is_active as server_is_active',
+        'ssh_keys.name as key_name',
+        'ssh_keys.is_active as key_is_active',
+      ])
     // Developers see only their own assignments
-    if (user.role === 'developer') qb = qb.where('user_id', '=', user.id)
+    if (user.role === 'developer') qb = qb.where('key_assignments.user_id', '=', user.id)
 
     return qb.limit(query.limit).offset((query.page - 1) * query.limit).execute()
   })

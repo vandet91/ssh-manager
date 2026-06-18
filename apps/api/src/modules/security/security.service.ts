@@ -38,6 +38,10 @@ export async function runSecurityScan(serverId: string): Promise<void> {
     log.warn({ serverId }, 'Server not found or no management key')
     return
   }
+  if (server.os_type === 'windows') {
+    log.info({ serverId }, 'Skipping security scan for Windows server (use PingCastle)')
+    return
+  }
 
   let benchmarkResult
   try {

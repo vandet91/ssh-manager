@@ -8,7 +8,6 @@ import Keys from './pages/Keys'
 import Assignments from './pages/Assignments'
 import Terminal from './pages/Terminal'
 import Logs from './pages/Logs'
-import Security from './pages/Security'
 import Users from './pages/Users'
 import Layout from './components/Layout'
 import Settings from './pages/Settings'
@@ -19,6 +18,8 @@ import NetworkDevices from './pages/NetworkDevices'
 import Share from './pages/Share'
 import ShareCenter from './pages/ShareCenter'
 import CommandLibrary from './pages/CommandLibrary'
+import Vault from './pages/Vault'
+import Domain from './pages/Domain'
 
 export type Theme = 'github' | 'proxmox'
 
@@ -71,8 +72,9 @@ function App() {
             <Route path="/network-devices" element={<NetworkDevices />} />
             <Route path="/share" element={<Share />} />
             <Route path="/commands" element={<CommandLibrary />} />
+            <Route path="/vault"    element={<Vault />} />
+            <Route path="/domain"   element={<Domain />} />
             <Route path="/logs"      element={<Logs />} />
-            <Route path="/security"  element={<Security />} />
             <Route path="/migration" element={<Migration />} />
             <Route path="/filemanager" element={<FileManager />} />
             <Route path="/users"     element={<Users />} />

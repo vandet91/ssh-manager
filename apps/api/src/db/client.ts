@@ -180,6 +180,25 @@ export interface PingcastleReportTable {
   uploaded_at: ColumnType<Date, never, never>
 }
 
+export interface VaultEntryTable {
+  id: Generated<string>
+  title: string
+  type: Opt<string>
+  category: string | null
+  ou: string | null
+  tags: Opt<string[]>
+  username: string | null
+  password_enc: string | null
+  url: string | null
+  notes: string | null
+  server_credential_id: string | null
+  is_archived: Opt<boolean>
+  archived_at: Date | null
+  created_by: string | null
+  created_at: ColumnType<Date, never, never>
+  updated_at: Opt<Date>
+}
+
 export interface Database {
   users: UserTable
   servers: ServerTable
@@ -192,6 +211,7 @@ export interface Database {
   server_credentials: ServerCredentialTable
   migration_snapshots: MigrationSnapshotTable
   pingcastle_reports: PingcastleReportTable
+  vault_entries: VaultEntryTable
 }
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })

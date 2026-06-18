@@ -515,7 +515,7 @@ export default function Migration() {
       api.get<Server[]>('/servers').catch(() => [] as Server[]),
       api.get<MigrationSnapshotMeta[]>('/migration/snapshots').catch(() => [] as MigrationSnapshotMeta[]),
     ])
-    setServers(svrs)
+    setServers(svrs.filter(s => s.os_type !== 'windows'))
     setSnapshots(snaps)
   }
 

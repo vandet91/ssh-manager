@@ -158,7 +158,7 @@ export default function CommandLibrary() {
   }
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: 960, margin: '0 auto', fontFamily: 'system-ui, sans-serif' }}>
+    <div style={{ padding: '20px 24px', maxWidth: 960, width: '100%', margin: '0 auto', fontFamily: 'system-ui, sans-serif', boxSizing: 'border-box' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
         <div>
@@ -169,24 +169,24 @@ export default function CommandLibrary() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {cmds.length === 0 && !loading && (
-            <button onClick={seed} disabled={seeding} style={btn('#1f6feb')}>
+            <button onClick={seed} disabled={seeding} style={btn('accent')}>
               {seeding ? '⏳ Seeding…' : '⚡ Load defaults'}
             </button>
           )}
-          <button onClick={seedMore} disabled={seedingMore} style={btn('#6e40c9')} title="Add missing built-in commands (AD, GPO, DNS, DHCP…)">
+          <button onClick={seedMore} disabled={seedingMore} style={btn('purple')} title="Add missing built-in commands (AD, GPO, DNS, DHCP…)">
             {seedingMore ? '⏳ Loading…' : '➕ Load more defaults'}
           </button>
-          <button onClick={openAdd} style={btn('#238636')}>+ Add command</button>
+          <button onClick={openAdd} style={btn('success')}>+ Add command</button>
         </div>
       </div>
 
       {/* OS toggle */}
-      <div style={{ display: 'flex', gap: 0, marginBottom: 16, border: '1px solid #30363d', borderRadius: 8, overflow: 'hidden', width: 'fit-content' }}>
+      <div style={{ display: 'flex', marginBottom: 16, border: '1px solid var(--border-med)', borderRadius: 8, width: 'fit-content', overflow: 'hidden' }}>
         {(['windows', 'linux'] as OS[]).map(o => (
           <button key={o} onClick={() => { setOs(o); setCategory('All') }}
             style={{ padding: '7px 22px', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: 13,
-              background: os === o ? '#1f6feb' : 'transparent',
-              color: os === o ? '#fff' : '#8b949e' }}>
+              background: os === o ? 'var(--btn-accent-bg)' : 'transparent',
+              color: os === o ? '#fff' : 'var(--text-secondary)' }}>
             {o === 'windows' ? '🪟 Windows' : '🐧 Linux'}
           </button>
         ))}
@@ -200,9 +200,9 @@ export default function CommandLibrary() {
           {categories.map(cat => (
             <button key={cat} onClick={() => setCategory(cat)}
               style={{ padding: '4px 12px', borderRadius: 999, border: '1px solid', fontSize: 12, cursor: 'pointer', fontWeight: 500,
-                borderColor: category === cat ? '#1f6feb' : '#30363d',
-                background: category === cat ? '#1f6feb22' : 'transparent',
-                color: category === cat ? '#58a6ff' : '#8b949e' }}>
+                borderColor: category === cat ? 'var(--accent-hex)' : 'var(--border-med)',
+                background: category === cat ? 'rgba(var(--accent)/0.12)' : 'transparent',
+                color: category === cat ? 'var(--accent-hex)' : 'var(--text-secondary)' }}>
               {cat}
             </button>
           ))}
@@ -211,7 +211,7 @@ export default function CommandLibrary() {
 
       {/* Count + pagination info */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <p style={{ fontSize: 12, color: '#8b949e', margin: 0 }}>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
           {visible.length} command{visible.length !== 1 ? 's' : ''}
           {totalPages > 1 && ` — page ${page} of ${totalPages}`}
         </p>
@@ -220,9 +220,9 @@ export default function CommandLibrary() {
 
       {/* Command list */}
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: '#8b949e' }}>Loading…</div>
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>Loading…</div>
       ) : visible.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 60, color: '#8b949e' }}>
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
           {cmds.length === 0
             ? <span>No commands yet. Click <strong>⚡ Load defaults</strong> to seed built-in commands.</span>
             : 'No commands match your filter.'}
@@ -231,19 +231,19 @@ export default function CommandLibrary() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minHeight: `${PAGE_SIZE * 56}px` }}>
           {paged.map((c: Cmd) => (
             <div key={c.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
-              background: '#161b22', border: '1px solid #21262d', borderRadius: 8 }}>
+              background: 'var(--bg-panel)', border: '1px solid var(--border-weak)', borderRadius: 8 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3' }}>{c.label}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{c.label}</span>
                   <span style={tagColor(c.category)}>{c.category}</span>
                 </div>
-                <code style={{ display: 'block', fontSize: 12, color: '#79c0ff', wordBreak: 'break-all', fontFamily: 'monospace', marginBottom: c.description ? 3 : 0 }}>
+                <code style={{ display: 'block', fontSize: 12, color: 'var(--accent-lite-hex)', wordBreak: 'break-all', fontFamily: 'monospace', marginBottom: c.description ? 3 : 0 }}>
                   {c.command}
                 </code>
-                {c.description && <span style={{ fontSize: 11, color: '#8b949e' }}>{c.description}</span>}
+                {c.description && <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{c.description}</span>}
               </div>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0, paddingTop: 2 }}>
-                <button onClick={() => copy(c.command, c.id)} style={btn(copied === c.id ? '#238636' : '#21262d')}>
+                <button onClick={() => copy(c.command, c.id)} style={btn(copied === c.id ? 'success' : 'default')}>
                   {copied === c.id ? '✓ Copied' : '📋 Copy'}
                 </button>
                 <button onClick={async () => {
@@ -255,12 +255,12 @@ export default function CommandLibrary() {
                     setTimeout(() => setPinned(null), 1500)
                   } catch {}
                 }} disabled={pinnedCmds.has(c.command)}
-                style={btn(pinnedCmds.has(c.command) ? '#238636' : pinned === c.id ? '#238636' : '#21262d')}
+                style={btn(pinnedCmds.has(c.command) || pinned === c.id ? 'success' : 'default')}
                 title={pinnedCmds.has(c.command) ? 'Already in sticky notes' : `Add to ${c.os} sticky notes`}>
                   {pinnedCmds.has(c.command) ? '✓ Pinned' : pinned === c.id ? '✓ Added' : '📌 Pin'}
                 </button>
-                <button onClick={() => openEdit(c)} style={btn('#21262d')}>✏️</button>
-                <button onClick={() => del(c.id)} style={btn('#6e1010')}>🗑</button>
+                <button onClick={() => openEdit(c)} style={btn('default')}>✏️</button>
+                <button onClick={() => del(c.id)} style={btn('danger')}>🗑</button>
               </div>
             </div>
           ))}
@@ -277,8 +277,8 @@ export default function CommandLibrary() {
       {/* Add/Edit modal */}
       {showForm && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
-          <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 12, padding: 24, width: 520, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#e6edf3' }}>{editing ? 'Edit command' : 'Add command'}</h2>
+          <div style={{ background: 'var(--modal-bg)', border: '1px solid var(--modal-border)', borderRadius: 12, padding: 24, width: 520, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--text-heading)' }}>{editing ? 'Edit command' : 'Add command'}</h2>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div>
@@ -314,14 +314,14 @@ export default function CommandLibrary() {
                 rows={3} style={{ ...inp, resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }} />
             </div>
             <div>
-              <label style={lbl}>Description <span style={{ fontWeight: 400, color: '#6b7280' }}>(optional)</span></label>
+              <label style={lbl}>Description <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(optional)</span></label>
               <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What this command does" style={inp} />
             </div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowForm(false)} style={btn('#21262d')}>Cancel</button>
+              <button onClick={() => setShowForm(false)} style={btn('default')}>Cancel</button>
               <button onClick={save} disabled={saving || !form.label || !form.command || (!form.category && !customCat)}
-                style={btn('#1f6feb')}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Add command'}</button>
+                style={btn('accent')}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Add command'}</button>
             </div>
           </div>
         </div>
@@ -334,19 +334,21 @@ function Paginator({ page, totalPages, pageSlots, setPage }: {
   page: number; totalPages: number; pageSlots: number[]; setPage: (p: number) => void
 }) {
   const b = (active: boolean, disabled = false): React.CSSProperties => ({
-    padding: '5px 0', width: 34, textAlign: 'center', borderRadius: 6, border: 'none',
-    background: active ? '#1f6feb' : '#21262d', color: active ? '#fff' : '#8b949e',
+    padding: '5px 0', width: 34, textAlign: 'center', borderRadius: 6,
+    border: '1px solid var(--border-med)',
+    background: active ? 'var(--btn-accent-bg)' : 'var(--bg-panel-alt)',
+    color: active ? '#fff' : 'var(--text-secondary)',
     cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 600,
     opacity: disabled ? 0.4 : 1, flexShrink: 0,
   })
   return (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
       <button onClick={() => setPage(Math.max(1, page - 1))} disabled={page === 1} style={b(false, page === 1)}>‹</button>
-      {pageSlots[0] > 1 && <span style={{ color: '#8b949e', fontSize: 12, width: 34, textAlign: 'center' }}>…</span>}
+      {pageSlots[0] > 1 && <span style={{ color: 'var(--text-muted)', fontSize: 12, width: 34, textAlign: 'center' }}>…</span>}
       {pageSlots.map(p => (
         <button key={p} onClick={() => setPage(p)} style={b(p === page)}>{p}</button>
       ))}
-      {pageSlots[pageSlots.length - 1] < totalPages && <span style={{ color: '#8b949e', fontSize: 12, width: 34, textAlign: 'center' }}>…</span>}
+      {pageSlots[pageSlots.length - 1] < totalPages && <span style={{ color: 'var(--text-muted)', fontSize: 12, width: 34, textAlign: 'center' }}>…</span>}
       <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page === totalPages} style={b(false, page === totalPages)}>›</button>
     </div>
   )
@@ -354,12 +356,20 @@ function Paginator({ page, totalPages, pageSlots, setPage }: {
 
 const inp: React.CSSProperties = {
   width: '100%', padding: '6px 10px', borderRadius: 6,
-  border: '1px solid #30363d', background: '#0d1117',
-  color: '#e6edf3', fontSize: 13, outline: 'none', boxSizing: 'border-box',
+  border: '1px solid var(--input-border)', background: 'var(--input-bg)',
+  color: 'var(--input-text)', fontSize: 13, outline: 'none', boxSizing: 'border-box',
 }
 const lbl: React.CSSProperties = {
-  display: 'block', fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 4,
+  display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4,
 }
-function btn(bg: string): React.CSSProperties {
-  return { padding: '5px 12px', borderRadius: 6, border: 'none', background: bg, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }
+function btn(variant: 'default' | 'accent' | 'success' | 'danger' | 'purple'): React.CSSProperties {
+  const map = {
+    default: { bg: 'var(--bg-panel-alt)', border: 'var(--border-med)', color: 'var(--text-primary)' },
+    accent:  { bg: 'var(--btn-accent-bg)', border: 'var(--btn-accent-border)', color: 'var(--btn-accent-text)' },
+    success: { bg: '#238636', border: 'rgba(35,134,54,0.5)', color: '#fff' },
+    danger:  { bg: '#6e1010', border: 'rgba(110,16,16,0.5)', color: '#fff' },
+    purple:  { bg: '#6e40c9', border: 'rgba(110,64,201,0.5)', color: '#fff' },
+  }
+  const v = map[variant]
+  return { padding: '5px 12px', borderRadius: 6, border: `1px solid ${v.border}`, background: v.bg, color: v.color, fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }
 }
