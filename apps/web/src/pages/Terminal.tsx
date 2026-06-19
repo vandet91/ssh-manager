@@ -354,12 +354,22 @@ export default function Terminal() {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols, rows }))
     })
 
+    // Auto-copy selected text to clipboard when selection changes
+    term.onSelectionChange(() => {
+      const sel = term.getSelection()
+      if (sel) navigator.clipboard.writeText(sel).catch(() => {})
+    })
+
+    // Right-click to paste — use term.paste() for instant, properly-escaped paste
     el?.addEventListener('contextmenu', async (e) => {
       e.preventDefault()
       try {
         const text = await navigator.clipboard.readText()
-        if (text && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: text }))
-      } catch { /* denied */ }
+        if (text) term.paste(text)
+      } catch {
+        const text = window.prompt('Paste text here (clipboard access denied):')
+        if (text) term.paste(text)
+      }
     })
 
     const onResize = () => fitAddon.fit()

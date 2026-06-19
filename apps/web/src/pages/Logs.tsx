@@ -160,7 +160,7 @@ export default function Logs() {
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-56" />
           </div>
           <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-            <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 560 }}>
+            <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 560 }}>
               <colgroup>
                 <col style={{ width: '20%' }} />
                 <col style={{ width: '20%' }} />
@@ -197,7 +197,7 @@ export default function Logs() {
       {tab === 'sessions' && (
         <div className="space-y-4">
           <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-            <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 580 }}>
+            <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 580 }}>
               <colgroup>
                 <col style={{ width: '20%' }} />
                 <col style={{ width: '14%' }} />

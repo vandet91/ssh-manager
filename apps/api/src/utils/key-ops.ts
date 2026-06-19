@@ -25,7 +25,7 @@ export async function appendKeyToServer(
       // Linux
       const hd = homeDir(linuxUser)
       const escapedKey = publicKeyLine.replace(/'/g, "'\\''")
-      await sshExec(client, `grep -qxF '${escapedKey}' ${hd}/.ssh/authorized_keys || echo '${escapedKey}' | sudo tee -a ${hd}/.ssh/authorized_keys`)
+      await sshExec(client, `grep -qxF '${escapedKey}' ${hd}/.ssh/authorized_keys 2>/dev/null || (echo '${escapedKey}' >> ${hd}/.ssh/authorized_keys 2>/dev/null || echo '${escapedKey}' | sudo tee -a ${hd}/.ssh/authorized_keys > /dev/null)`)
     }
   })
 }
@@ -67,10 +67,11 @@ export async function pushKeyToServer(
       }
 
       const hd = homeDir(linuxUser)
-      await sshExec(client, `sudo mkdir -p ${hd}/.ssh && sudo chmod 700 ${hd}/.ssh && sudo chown ${linuxUser}:${linuxUser} ${hd}/.ssh`)
-      await sshExec(client, `sudo touch ${hd}/.ssh/authorized_keys && sudo chmod 600 ${hd}/.ssh/authorized_keys && sudo chown ${linuxUser}:${linuxUser} ${hd}/.ssh/authorized_keys`)
+      // Try direct first (works when management user owns the dir), fall back to sudo (needed for other users)
+      await sshExec(client, `(mkdir -p ${hd}/.ssh && chmod 700 ${hd}/.ssh) 2>/dev/null || (sudo mkdir -p ${hd}/.ssh && sudo chmod 700 ${hd}/.ssh && sudo chown ${linuxUser}:${linuxUser} ${hd}/.ssh)`)
+      await sshExec(client, `(touch ${hd}/.ssh/authorized_keys && chmod 600 ${hd}/.ssh/authorized_keys) 2>/dev/null || (sudo touch ${hd}/.ssh/authorized_keys && sudo chmod 600 ${hd}/.ssh/authorized_keys && sudo chown ${linuxUser}:${linuxUser} ${hd}/.ssh/authorized_keys)`)
       const escapedKey = publicKey.replace(/'/g, "'\\''")
-      await sshExec(client, `grep -qxF '${escapedKey}' ${hd}/.ssh/authorized_keys || echo '${escapedKey}' | sudo tee -a ${hd}/.ssh/authorized_keys`)
+      await sshExec(client, `grep -qxF '${escapedKey}' ${hd}/.ssh/authorized_keys 2>/dev/null || (echo '${escapedKey}' >> ${hd}/.ssh/authorized_keys 2>/dev/null || echo '${escapedKey}' | sudo tee -a ${hd}/.ssh/authorized_keys > /dev/null)`)
     }
   })
 }

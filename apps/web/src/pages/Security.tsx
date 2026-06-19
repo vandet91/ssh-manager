@@ -113,7 +113,7 @@ export default function Security() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" style={{ alignItems: 'start' }}>
         {/* Server list */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-          <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 260 }}>
+          <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 260 }}>
             <colgroup>
               <col style={{ width: '40%' }} />
               <col style={{ width: '30%' }} />

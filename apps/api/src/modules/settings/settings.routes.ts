@@ -1,8 +1,39 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import * as crypto from 'crypto'
 import { db } from '../../db/client'
 import { requireAuth, requirePermission } from '../../middleware/auth'
 import { writeAuditLog } from '../../utils/audit'
+import { decryptSecret, encryptSecret, getVaultKey } from '../../utils/vault'
+
+function deriveKey(passphrase: string, salt: Buffer): Buffer {
+  return crypto.pbkdf2Sync(passphrase, salt, 200_000, 32, 'sha256')
+}
+
+function encryptPayload(plaintext: string, passphrase: string): string {
+  const salt = crypto.randomBytes(16)
+  const iv   = crypto.randomBytes(12)
+  const key  = deriveKey(passphrase, salt)
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return JSON.stringify({
+    v: 1,
+    salt: salt.toString('hex'),
+    iv:   iv.toString('hex'),
+    tag:  tag.toString('hex'),
+    data: encrypted.toString('hex'),
+  })
+}
+
+function decryptPayload(envelope: string, passphrase: string): string {
+  const { v, salt, iv, tag, data } = JSON.parse(envelope)
+  if (v !== 1) throw new Error('Unsupported vault export version')
+  const key = deriveKey(passphrase, Buffer.from(salt, 'hex'))
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'hex'))
+  decipher.setAuthTag(Buffer.from(tag, 'hex'))
+  return decipher.update(Buffer.from(data, 'hex')) + decipher.final('utf8')
+}
 
 export const passwordPolicySchema = z.object({
   min_length: z.number().int().min(6).max(128),
@@ -316,6 +347,109 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     } catch (err: any) {
       return reply.code(400).send({ error: err.message })
     }
+  })
+
+  // GET /settings/vault/export — export all credentials encrypted with passphrase
+  fastify.get('/settings/vault/export', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+    const { passphrase } = z.object({ passphrase: z.string().min(8) }).parse(req.query)
+    const vaultKey = getVaultKey()
+
+    const servers = await (db as any).selectFrom('servers').select(['id', 'name', 'host']).orderBy('name').execute()
+    const allCreds = await (db as any).selectFrom('server_credentials')
+      .select(['id', 'server_id', 'category', 'label', 'linux_user', 'service_name', 'service_username', 'notes', 'password_enc', 'is_archived'])
+      .execute()
+
+    const payload = {
+      exported_at: new Date().toISOString(),
+      servers: (servers as any[]).map((s: any) => ({
+        name: s.name,
+        host: s.host,
+        credentials: (allCreds as any[])
+          .filter((c: any) => c.server_id === s.id && !c.is_archived)
+          .map((c: any) => ({
+            label:            c.label,
+            category:         c.category,
+            linux_user:       c.linux_user,
+            service_name:     c.service_name,
+            service_username: c.service_username,
+            notes:            c.notes,
+            password:         decryptSecret(c.password_enc, vaultKey),
+          })),
+      })).filter((s: any) => s.credentials.length > 0),
+    }
+
+    const envelope = encryptPayload(JSON.stringify(payload), passphrase)
+
+    await writeAuditLog({
+      userId: (req.session.user as any)!.id, userEmail: (req.session.user as any)!.email,
+      action: 'vault.exported', resource: 'vault', resourceId: undefined,
+      details: { server_count: payload.servers.length }, request: req,
+    })
+
+    reply.header('Content-Disposition', `attachment; filename="vault-export-${new Date().toISOString().slice(0,10)}.pvd"`)
+    reply.header('Content-Type', 'application/octet-stream')
+    return reply.send(Buffer.from(envelope))
+  })
+
+  // POST /settings/vault/import — import credentials from encrypted export file
+  fastify.post('/settings/vault/import', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+    const body = z.object({
+      passphrase: z.string().min(1),
+      data: z.string().min(1),         // raw file content (sent as base64 string from frontend)
+      mode: z.enum(['skip', 'overwrite']).default('skip'),
+    }).parse(req.body)
+
+    let payload: any
+    try {
+      const json = decryptPayload(body.data, body.passphrase)
+      payload = JSON.parse(json)
+    } catch {
+      return reply.code(400).send({ error: 'Wrong passphrase or corrupted file' })
+    }
+
+    const vaultKey = getVaultKey()
+    const servers = await (db as any).selectFrom('servers').select(['id', 'name', 'host']).execute()
+
+    let imported = 0, skipped = 0
+
+    for (const exportedServer of (payload.servers ?? [])) {
+      const server = (servers as any[]).find((s: any) =>
+        s.host === exportedServer.host || s.name === exportedServer.name
+      )
+      if (!server) { skipped += (exportedServer.credentials?.length ?? 0); continue }
+
+      for (const cred of (exportedServer.credentials ?? [])) {
+        if (body.mode === 'skip') {
+          const existing = await db.selectFrom('server_credentials')
+            .select('id')
+            .where('server_id', '=', server.id)
+            .where('label', '=', cred.label)
+            .where('is_archived', '=', false)
+            .executeTakeFirst()
+          if (existing) { skipped++; continue }
+        }
+
+        await db.insertInto('server_credentials').values({
+          server_id:        server.id,
+          category:         cred.category ?? 'linux',
+          label:            cred.label,
+          linux_user:       cred.linux_user ?? null,
+          service_name:     cred.service_name ?? null,
+          service_username: cred.service_username ?? null,
+          notes:            cred.notes ?? null,
+          password_enc:     encryptSecret(cred.password, vaultKey),
+        }).execute()
+        imported++
+      }
+    }
+
+    await writeAuditLog({
+      userId: (req.session.user as any)!.id, userEmail: (req.session.user as any)!.email,
+      action: 'vault.imported', resource: 'vault', resourceId: undefined,
+      details: { imported, skipped }, request: req,
+    })
+
+    return { ok: true, imported, skipped }
   })
 }
 

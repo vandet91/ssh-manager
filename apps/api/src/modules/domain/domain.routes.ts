@@ -24,7 +24,6 @@ function psEncoded(script: string): string {
 
 /** Strip CLIXML envelope and return just the first meaningful error sentence. */
 function cleanPsError(raw: string): string {
-  // Not CLIXML — return as-is but trim noise lines
   if (!raw.includes('#< CLIXML')) {
     const lines = raw.split('\n').map(l => l.trim()).filter(l =>
       l && !l.startsWith('+') && !l.startsWith('At line:') &&
@@ -46,6 +45,59 @@ function cleanPsError(raw: string): string {
     .filter(l => l && !l.startsWith('+') && !l.startsWith('At line:') &&
                  !l.startsWith('CategoryInfo') && !l.startsWith('FullyQualified'))
   return lines[0] ?? raw.trim()
+}
+
+/** Map raw AD/PowerShell error text to a plain-English message. */
+function friendlyAdError(raw: string, context?: string): string {
+  const s = raw.toLowerCase()
+  // Connectivity
+  if (s.includes('the server is not operational') || s.includes('unable to contact') || s.includes('rpc server is unavailable'))
+    return 'Cannot reach the domain controller. Check that it is online and accessible.'
+  if (s.includes('timeout') || s.includes('timed out'))
+    return 'The operation timed out. The domain controller may be slow or unreachable.'
+  if (s.includes('network path was not found') || s.includes('no such host'))
+    return 'Domain controller hostname could not be resolved. Check DNS settings.'
+  // Auth / permissions
+  if (s.includes('access is denied') || s.includes('insufficient access rights') || s.includes('insufficient privilege'))
+    return 'Permission denied. Make sure the management account has the required Active Directory permissions.'
+  if (s.includes('logon failure') || s.includes('invalid credentials') || s.includes('wrong password'))
+    return 'Authentication failed. Check the management account username and password.'
+  if (s.includes('account is locked') || s.includes('account has been locked'))
+    return 'The management account is locked out. Unlock it before retrying.'
+  // Object existence
+  if (s.includes('cannot find an object with identity') || s.includes('no such object') || s.includes('object does not exist'))
+    return `${context ?? 'The object'} was not found in Active Directory.`
+  if (s.includes('already exists') || s.includes('object class violation') && s.includes('duplicate'))
+    return `${context ?? 'An object'} with that name already exists.`
+  if (s.includes('naming violation') || s.includes('invalid dn syntax'))
+    return 'The name contains invalid characters. Use only letters, numbers, hyphens, and spaces.'
+  // Password policy
+  if (s.includes('password does not meet') || s.includes('password policy') || s.includes('password history'))
+    return 'The new password does not meet the domain password policy (minimum length, complexity, or history requirements).'
+  if (s.includes('password too short'))
+    return 'Password is too short. Check the domain minimum password length policy.'
+  // Account state
+  if (s.includes('account is disabled'))
+    return 'This account is currently disabled.'
+  if (s.includes('account expired') || s.includes('account has expired'))
+    return 'This account has expired.'
+  if (s.includes('must change password') || s.includes('password must be changed'))
+    return 'The user must change their password at next logon.'
+  // Group errors
+  if (s.includes('is already a member') || s.includes('member already exists'))
+    return 'This user is already a member of the group.'
+  if (s.includes('is not a member') || s.includes('member does not exist'))
+    return 'This user is not a member of the group.'
+  if (s.includes('cannot delete a protected') || s.includes('protected from deletion'))
+    return 'This object is protected from deletion. Remove the protection flag in AD first.'
+  // Module missing
+  if (s.includes('get-aduser') && s.includes('not recognized') || s.includes('activedirectory') && s.includes('not loaded'))
+    return 'The Active Directory PowerShell module is not installed on the domain controller. Install RSAT-AD-PowerShell.'
+  if (s.includes('is not recognized as the name') || s.includes('command not found'))
+    return 'A required PowerShell command was not found on the domain controller.'
+  // Generic fallback — still cleaner than raw PS output
+  const cleaned = cleanPsError(raw).slice(0, 200)
+  return cleaned || 'An unexpected error occurred. Please try again or check the domain controller logs.'
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -185,7 +237,7 @@ Write-Output "SERVICES:$($svcResults -join ',')"
     try {
       const health = await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
-        if (r.stderr && !r.stdout.trim()) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.stderr && !r.stdout.trim()) throw new Error(friendlyAdError(r.stderr, 'Domain health check'))
 
         const kv: Record<string, string> = {}
         for (const line of r.stdout.split('\n')) {
@@ -306,7 +358,7 @@ if ($sources.Count -eq 0) {
       const users = await withServerSsh(serverId, async (client) => {
         const result = await sshExec(client, psEncoded(GET_USERS_SCRIPT))
         if (result.stderr && result.stdout.trim() === '') {
-          throw new Error(result.stderr.slice(0, 300))
+          throw new Error(friendlyAdError(result.stderr, 'User list'))
         }
         return parseUsers(result.stdout)
       })
@@ -341,7 +393,7 @@ if ($sources.Count -eq 0) {
     try {
       await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(`Unlock-ADAccount -Identity '${samAccountName}'`))
-        if (r.code !== 0 && r.stderr) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Unlock account'))
       })
 
       await writeAuditLog({
@@ -380,7 +432,7 @@ if ($sources.Count -eq 0) {
     try {
       await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(psCmd))
-        if (r.code !== 0 && r.stderr) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Reset password'))
       })
 
       // ── Sync stored credentials that belong to this AD account ───────────────
@@ -476,7 +528,7 @@ if ($sources.Count -eq 0) {
     try {
       await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(psCmd))
-        if (r.code !== 0 && r.stderr) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Set account status'))
       })
 
       await writeAuditLog({
@@ -508,7 +560,7 @@ if ($sources.Count -eq 0) {
     try {
       await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(psCmd))
-        if (r.code !== 0 && r.stderr) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Set password policy'))
       })
 
       await writeAuditLog({
@@ -549,7 +601,7 @@ Write-Output "BADPWD:$($u.BadLogonCount)"
     try {
       const detail = await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
-        if (r.stderr && !r.stdout) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.stderr && !r.stdout) throw new Error(friendlyAdError(r.stderr, 'User detail'))
         const lines: Record<string, string> = {}
         for (const line of r.stdout.split('\n')) {
           const idx = line.indexOf(':')
@@ -588,7 +640,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
     try {
       const groups = await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
-        if (r.stderr && !r.stdout) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.stderr && !r.stdout) throw new Error(friendlyAdError(r.stderr, 'Group list'))
         return r.stdout.split('\n').filter(Boolean).map(line => {
           const [name, scope, category, ...descParts] = line.split('|')
           return { name: name ?? '', scope: scope ?? '', category: category ?? '', description: descParts.join('|') ?? '' }
@@ -611,7 +663,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
     try {
       await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(`Add-ADGroupMember -Identity '${groupName}' -Members '${samAccountName}'`))
-        if (r.code !== 0 && r.stderr) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Add to group'))
       })
       await writeAuditLog({
         userId: req.session.user!.id, userEmail: req.session.user!.email,
@@ -635,7 +687,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
     try {
       await withServerSsh(serverId, async (client) => {
         const r = await sshExec(client, psEncoded(`Remove-ADGroupMember -Identity '${groupName}' -Members '${samAccountName}' -Confirm:$false`))
-        if (r.code !== 0 && r.stderr) throw new Error(cleanPsError(r.stderr).slice(0, 400))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Remove from group'))
       })
       await writeAuditLog({
         userId: req.session.user!.id, userEmail: req.session.user!.email,
@@ -645,6 +697,247 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
       return { ok: true }
     } catch (err: any) {
       return reply.code(502).send({ error: err.message ?? 'Failed to remove from group' })
+    }
+  })
+
+  // GET /domain/:serverId/group-members — list members of a specific group
+  fastify.get('/domain/:serverId/group-members', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+    const { groupName } = z.object({ groupName: z.string().min(1).max(256) }).parse(req.query)
+
+    const script = `
+Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
+  Write-Output "$($_.SamAccountName)|$($_.Name)|$($_.objectClass)"
+}
+`.trim()
+
+    try {
+      const members = await withServerSsh(serverId, async (client) => {
+        const r = await sshExec(client, psEncoded(script))
+        if (r.stderr && !r.stdout) throw new Error(friendlyAdError(r.stderr, 'Group members'))
+        return r.stdout.split('\n').filter(Boolean).map(line => {
+          const [samAccountName, name, type] = line.split('|')
+          return { samAccountName: samAccountName ?? '', name: name ?? '', type: type?.trim() ?? 'user' }
+        })
+      })
+      return { members }
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message ?? 'Failed to get group members' })
+    }
+  })
+
+  // POST /domain/:serverId/create-group — create a new AD security group
+  fastify.post('/domain/:serverId/create-group', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+    const { name, scope, description } = z.object({
+      name:        z.string().min(1).max(256).regex(/^[^'"&|<>]+$/, 'Invalid characters in group name'),
+      scope:       z.enum(['Global', 'Universal', 'DomainLocal']).default('Global'),
+      description: z.string().max(1000).optional(),
+    }).parse(req.body)
+
+    const script = description
+      ? `New-ADGroup -Name '${name}' -GroupScope ${scope} -GroupCategory Security -Description '${description.replace(/'/g, '')}'`
+      : `New-ADGroup -Name '${name}' -GroupScope ${scope} -GroupCategory Security`
+
+    try {
+      await withServerSsh(serverId, async (client) => {
+        const r = await sshExec(client, psEncoded(script))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Create group'))
+      })
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'domain.create_group', resource: 'domain_group', resourceId: undefined,
+        details: { serverId, name, scope, description }, request: req,
+      })
+      return { ok: true }
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message ?? 'Failed to create group' })
+    }
+  })
+
+  // POST /domain/:serverId/update-group — rename a group and/or update its description
+  fastify.post('/domain/:serverId/update-group', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+    const { currentName, newName, description } = z.object({
+      currentName: z.string().min(1).max(256),
+      newName:     z.string().min(1).max(256).regex(/^[^'"&|<>]+$/, 'Invalid characters').optional(),
+      description: z.string().max(1000).optional(),
+    }).parse(req.body)
+
+    const steps: string[] = []
+    if (newName && newName !== currentName) {
+      steps.push(
+        `$g = Get-ADGroup -Identity '${currentName}'`,
+        `Rename-ADObject -Identity $g.DistinguishedName -NewName '${newName}'`,
+        `Set-ADGroup -Identity '${newName}' -SamAccountName '${newName}'`,
+      )
+    }
+    if (description !== undefined) {
+      const target = (newName && newName !== currentName) ? newName : currentName
+      steps.push(`Set-ADGroup -Identity '${target}' -Description '${description.replace(/'/g, '')}'`)
+    }
+    if (steps.length === 0) return { ok: true }
+
+    try {
+      await withServerSsh(serverId, async (client) => {
+        const r = await sshExec(client, psEncoded(steps.join('\n')))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Update group'))
+      })
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'domain.update_group', resource: 'domain_group', resourceId: undefined,
+        details: { serverId, currentName, newName, description }, request: req,
+      })
+      return { ok: true }
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message ?? 'Failed to update group' })
+    }
+  })
+
+  // POST /domain/:serverId/delete-group — delete a non-privileged AD group
+  fastify.post('/domain/:serverId/delete-group', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+    const { groupName } = z.object({ groupName: z.string().min(1).max(256) }).parse(req.body)
+
+    const PROTECTED = new Set([
+      'Domain Admins', 'Enterprise Admins', 'Schema Admins', 'Administrators',
+      'Account Operators', 'Backup Operators', 'Print Operators', 'Server Operators',
+      'Group Policy Creator Owners', 'DNSAdmins', 'DHCP Administrators',
+      'Domain Users', 'Domain Computers', 'Domain Guests', 'Domain Controllers',
+      'Read-only Domain Controllers', 'Cert Publishers', 'Protected Users',
+    ])
+    if (PROTECTED.has(groupName)) {
+      return reply.code(403).send({ error: `Cannot delete protected group: ${groupName}` })
+    }
+
+    try {
+      await withServerSsh(serverId, async (client) => {
+        const r = await sshExec(client, psEncoded(`Remove-ADGroup -Identity '${groupName}' -Confirm:$false`))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Delete group'))
+      })
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'domain.delete_group', resource: 'domain_group', resourceId: undefined,
+        details: { serverId, groupName }, request: req,
+      })
+      return { ok: true }
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message ?? 'Failed to delete group' })
+    }
+  })
+
+  // GET /domain/:serverId/computers — list all AD-joined computers
+  fastify.get('/domain/:serverId/computers', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+    const script = `
+$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
+Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSystem,LastLogonDate,Enabled,PrimaryGroupID |
+  ForEach-Object {
+    [PSCustomObject]@{
+      Name              = $_.Name
+      DNSHostName       = $_.DNSHostName
+      IPv4Address       = $_.IPv4Address
+      OperatingSystem   = $_.OperatingSystem
+      LastLogonDate     = if ($_.LastLogonDate) { $_.LastLogonDate.ToString('yyyy-MM-dd HH:mm') } else { $null }
+      Enabled           = $_.Enabled
+      IsDomainController = ($_.PrimaryGroupID -eq 516 -or $_.PrimaryGroupID -eq 521)
+    }
+  } | ConvertTo-Json -Compress
+`.trim()
+    try {
+      const output = await withServerSsh(serverId, async (client) => {
+        const r = await sshExec(client, psEncoded(script))
+        return r.stdout.trim()
+      })
+      let computers: object[] = []
+      if (output && output !== 'null') {
+        const parsed = JSON.parse(output)
+        computers = Array.isArray(parsed) ? parsed : [parsed]
+      }
+      return { computers }
+    } catch (err: any) {
+      return reply.code(502).send({ error: friendlyAdError(err.message ?? '', 'Computer list') })
+    }
+  })
+
+  // POST /domain/:serverId/set-computer-enabled — enable or disable a computer account
+  fastify.post('/domain/:serverId/set-computer-enabled', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+    const { name, enabled } = z.object({ name: z.string().min(1).max(256), enabled: z.boolean() }).parse(req.body)
+    const psCmd = enabled
+      ? `Enable-ADAccount -Identity (Get-ADComputer -Identity '${name}')`
+      : `Disable-ADAccount -Identity (Get-ADComputer -Identity '${name}')`
+    try {
+      await withServerSsh(serverId, async (client) => {
+        const r = await sshExec(client, psEncoded(psCmd))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Set computer status'))
+      })
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: enabled ? 'domain.enable_computer' : 'domain.disable_computer',
+        resource: 'domain_computer', resourceId: undefined,
+        details: { serverId, name }, request: req,
+      })
+      return { ok: true }
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message ?? 'Failed to update computer account' })
+    }
+  })
+
+  // POST /domain/:serverId/delete-computer — remove a computer account from AD
+  fastify.post('/domain/:serverId/delete-computer', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+    const { name } = z.object({ name: z.string().min(1).max(256) }).parse(req.body)
+    try {
+      await withServerSsh(serverId, async (client) => {
+        const r = await sshExec(client, psEncoded(`Remove-ADComputer -Identity '${name}' -Confirm:$false`))
+        if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Delete computer'))
+      })
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'domain.delete_computer', resource: 'domain_computer', resourceId: undefined,
+        details: { serverId, name }, request: req,
+      })
+      return { ok: true }
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message ?? 'Failed to delete computer account' })
+    }
+  })
+
+  // GET /domain/:serverId/sessions — active logon sessions on the DC
+  fastify.get('/domain/:serverId/sessions', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+
+    try {
+      const raw = await withServerSsh(serverId, async (client) => {
+        const r = await sshExec(client, 'qwinsta 2>&1')
+        return r.stdout
+      })
+
+      // qwinsta header: SESSIONNAME  USERNAME  ID  STATE  TYPE  DEVICE
+      // Parse by fixed column positions from the header line
+      const lines = raw.split('\n').map(l => l.replace(/\r$/, ''))
+      const header = lines[0] ?? ''
+      const colUsername    = header.indexOf('USERNAME')
+      const colId          = header.indexOf('ID')
+      const colState       = header.indexOf('STATE')
+      const colIdleTime    = header.indexOf('IDLE TIME')
+
+      const sessions = lines.slice(1).flatMap(line => {
+        if (!line.trim()) return []
+        const sessionName = line.slice(1, colUsername).trim()
+        const username    = colId > 0 ? line.slice(colUsername, colId).trim() : ''
+        const id          = colState > 0 ? line.slice(colId, colState).trim() : ''
+        const state       = colIdleTime > 0 ? line.slice(colState, colIdleTime).trim() : line.slice(colState).trim()
+        const idleTime    = colIdleTime > 0 ? line.slice(colIdleTime).split(/\s+/)[0]?.trim() ?? '' : ''
+        if (!username || state === 'Listen' || state === 'Idle') return []
+        return [{ username, sessionName, id, state, idleTime }]
+      })
+
+      return { sessions }
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message ?? 'Failed to fetch sessions' })
     }
   })
 }

@@ -789,12 +789,10 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
                   </Btn>
                 </div>
               )}
-              {renameTarget.type==='file'&&(
-                <Btn bg='#0e7490' onClick={()=>{
-                  const fp=join(curPath,renameTarget.name)
-                  window.location.href=`/api/servers/${serverId}/fs/download?path=${encodeURIComponent(fp)}`
-                }} full>⬇ Download</Btn>
-              )}
+              <Btn bg='#0e7490' onClick={()=>{
+                const fp=join(curPath,renameTarget.name)
+                window.location.href=`/api/servers/${serverId}/fs/download?path=${encodeURIComponent(fp)}`
+              }} full>⬇ Download {renameTarget.type==='dir'?'(.tar.gz)':''}</Btn>
               <Btn bg='#b91c1c' onClick={()=>{setDeleteTgt(renameTarget);setRenameTarget(null)}} full>
                 🗑 Delete {renameTarget.type==='dir'?'folder':'file'}
               </Btn>

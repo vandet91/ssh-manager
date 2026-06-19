@@ -112,11 +112,47 @@ async function assignmentsRoutes(fastify: FastifyInstance): Promise<void> {
     return assignment
   })
 
+  // PATCH /assignments/:id — update linux_user, can_terminal, expires_at
+  fastify.patch('/assignments/:id', { preHandler: requirePermission('assignments:write') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const body = z.object({
+      linux_user:  z.string().min(1).max(64).optional(),
+      can_terminal: z.boolean().optional(),
+      expires_at:  z.string().nullable().optional(),
+    }).parse(req.body)
+
+    const assignment = await db.selectFrom('key_assignments').selectAll().where('id', '=', id).executeTakeFirst()
+    if (!assignment) return reply.code(404).send({ error: 'Assignment not found' })
+    if (!assignment.is_active) return reply.code(400).send({ error: 'Cannot edit a revoked assignment' })
+
+    const updates: Record<string, unknown> = {}
+    if (body.linux_user !== undefined) updates.linux_user = body.linux_user
+    if (body.can_terminal !== undefined) updates.can_terminal = body.can_terminal
+    if (body.expires_at !== undefined) updates.expires_at = body.expires_at ? new Date(body.expires_at) : null
+
+    if (Object.keys(updates).length > 0) {
+      await db.updateTable('key_assignments').set(updates).where('id', '=', id).execute()
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'assignment.updated', resource: 'key_assignment', resourceId: id,
+        serverId: assignment.server_id, details: { ...updates }, request: req,
+      })
+    }
+
+    return { ok: true }
+  })
+
   // DELETE /assignments/:id (revoke)
   fastify.delete('/assignments/:id', { preHandler: requirePermission('assignments:write') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const assignment = await db.selectFrom('key_assignments').selectAll().where('id', '=', id).executeTakeFirst()
     if (!assignment) return reply.code(404).send({ error: 'Assignment not found' })
+
+    // Block revoking the active management key — it would break SSH connectivity
+    const server = await db.selectFrom('servers').select(['management_key_id']).where('id', '=', assignment.server_id).executeTakeFirst()
+    if (server?.management_key_id && server.management_key_id === assignment.key_id) {
+      return reply.code(409).send({ error: 'Cannot revoke the management key — it is the active SSH key for this server. Set a different management key first.' })
+    }
 
     const key = await db.selectFrom('ssh_keys').select(['public_key']).where('id', '=', assignment.key_id).executeTakeFirst()
 

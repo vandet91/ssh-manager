@@ -306,7 +306,7 @@ export default function Keys() {
               </div>
             )}
             <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-              <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 800 }}>
+              <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 800 }}>
                 <colgroup>
                   <col style={{ width: '3%'  }} />  {/* Checkbox */}
                   <col style={{ width: '18%' }} />  {/* Name */}
@@ -447,7 +447,7 @@ export default function Keys() {
       )}
 
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-        <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 800 }}>
+        <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 800 }}>
           <colgroup>
             <col style={{ width: '3%'  }} />  {/* Checkbox */}
             <col style={{ width: '17%' }} />  {/* Name */}

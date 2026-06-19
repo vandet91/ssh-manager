@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { api } from '../api/client'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -31,7 +31,28 @@ type UserDetail = {
 
 type AdGroup = { name: string; scope: string; category: string; description: string }
 
-type Tab = 'locked' | 'password_issues' | 'disabled' | 'all'
+type Tab = 'locked' | 'password_issues' | 'disabled' | 'all' | 'sessions' | 'computers' | 'groups'
+
+type AdGroupMember = { samAccountName: string; name: string; type: string }
+
+type AdComputer = {
+  Name: string
+  DNSHostName: string | null
+  IPv4Address: string | null
+  OperatingSystem: string | null
+  LastLogonDate: string | null
+  Enabled: boolean
+  IsDomainController: boolean
+  online?: boolean
+}
+
+type Session = {
+  username: string
+  sessionName: string
+  id: string
+  state: string
+  idleTime: string
+}
 
 type DomainHealth = {
   domain: string
@@ -53,6 +74,29 @@ const PRIVILEGED_GROUPS = new Set([
   'Domain Admins', 'Enterprise Admins', 'Schema Admins', 'Administrators',
   'Account Operators', 'Backup Operators', 'Print Operators', 'Server Operators',
   'Group Policy Creator Owners', 'DNSAdmins', 'DHCP Administrators',
+])
+
+// All built-in Windows/AD groups — read-only (member management only, no edit/delete)
+const DEFAULT_WINDOWS_GROUPS = new Set([
+  // Privileged
+  'Domain Admins', 'Enterprise Admins', 'Schema Admins', 'Administrators',
+  'Account Operators', 'Backup Operators', 'Print Operators', 'Server Operators',
+  'Group Policy Creator Owners', 'DNSAdmins', 'DHCP Administrators',
+  // Domain defaults
+  'Domain Users', 'Domain Computers', 'Domain Guests', 'Domain Controllers',
+  'Read-only Domain Controllers', 'Cloneable Domain Controllers', 'Protected Users',
+  'Cert Publishers', 'RAS and IAS Servers', 'Allowed RODC Password Replication Group',
+  'Denied RODC Password Replication Group', 'Enterprise Read-only Domain Controllers',
+  'Key Admins', 'Enterprise Key Admins',
+  // Local built-in
+  'Users', 'Guests', 'Remote Desktop Users', 'Network Configuration Operators',
+  'Performance Monitor Users', 'Performance Log Users', 'Distributed COM Users',
+  'IIS_IUSRS', 'Cryptographic Operators', 'Event Log Readers',
+  'Certificate Service DCOM Access', 'Access Control Assistance Operators',
+  'Remote Management Users', 'Hyper-V Administrators', 'Storage Replica Administrators',
+  'RDS Remote Access Servers', 'RDS Endpoint Servers', 'RDS Management Servers',
+  'Windows Authorization Access Group', 'Terminal Server License Servers',
+  'Incoming Forest Trust Builders', 'Pre-Windows 2000 Compatible Access',
 ])
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -851,6 +895,430 @@ function UserRow({ user, serverId, onRefresh }: {
   )
 }
 
+// ── Groups Panel ──────────────────────────────────────────────────────────────
+
+function GroupsPanel({ serverId }: { serverId: string }) {
+  const [groups, setGroups] = useState<AdGroup[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const [showCreate, setShowCreate] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newScope, setNewScope] = useState<'Global' | 'Universal' | 'DomainLocal'>('Global')
+  const [newDesc, setNewDesc] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState('')
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
+  const [members, setMembers] = useState<Record<string, AdGroupMember[]>>({})
+  const [membersLoading, setMembersLoading] = useState<string | null>(null)
+  const [addSam, setAddSam] = useState<Record<string, string>>({})
+  const [addBusy, setAddBusy] = useState<string | null>(null)
+  const [addError, setAddError] = useState<Record<string, string>>({})
+  const [removeBusy, setRemoveBusy] = useState<string | null>(null)
+  const [editGroup, setEditGroup] = useState<AdGroup | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editDesc, setEditDesc] = useState('')
+  const [editBusy, setEditBusy] = useState(false)
+  const [editError, setEditError] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [deleteInput, setDeleteInput] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+
+  const load = async () => {
+    setLoading(true); setError('')
+    try {
+      const g = await api.get<AdGroup[]>(`/domain/${serverId}/groups`)
+      setGroups(g)
+    } catch (e: any) { setError(e.data?.error ?? 'Failed to load groups') }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [serverId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const createGroup = async () => {
+    if (!newName.trim()) return
+    setCreating(true); setCreateError('')
+    try {
+      await api.post(`/domain/${serverId}/create-group`, { name: newName.trim(), scope: newScope, description: newDesc.trim() || undefined })
+      setNewName(''); setNewDesc(''); setShowCreate(false)
+      await load()
+    } catch (e: any) { setCreateError(e.data?.error ?? 'Failed to create group') }
+    setCreating(false)
+  }
+
+  const deleteGroup = async (name: string) => {
+    if (deleteInput !== name) return
+    setDeleteBusy(true); setDeleteError('')
+    try {
+      await api.post(`/domain/${serverId}/delete-group`, { groupName: name })
+      setConfirmDelete(null); setDeleteInput('')
+      setGroups(g => g.filter(x => x.name !== name))
+      if (expandedGroup === name) setExpandedGroup(null)
+    } catch (e: any) { setDeleteError(e.data?.error ?? 'Failed to delete group') }
+    setDeleteBusy(false)
+  }
+
+  const loadMembers = async (groupName: string) => {
+    if (members[groupName]) return
+    setMembersLoading(groupName)
+    try {
+      const res = await api.get<{ members: AdGroupMember[] }>(`/domain/${serverId}/group-members?groupName=${encodeURIComponent(groupName)}`)
+      setMembers(m => ({ ...m, [groupName]: res.members }))
+    } catch { setMembers(m => ({ ...m, [groupName]: [] })) }
+    setMembersLoading(null)
+  }
+
+  const openEdit = (g: AdGroup) => {
+    setEditGroup(g); setEditName(g.name); setEditDesc(g.description ?? ''); setEditError('')
+  }
+
+  const saveEdit = async () => {
+    if (!editGroup) return
+    setEditBusy(true); setEditError('')
+    try {
+      await api.post(`/domain/${serverId}/update-group`, {
+        currentName: editGroup.name,
+        newName: editName !== editGroup.name ? editName : undefined,
+        description: editDesc,
+      })
+      setGroups(gs => gs.map(g => g.name === editGroup.name ? { ...g, name: editName, description: editDesc } : g))
+      if (expandedGroup === editGroup.name && editName !== editGroup.name) setExpandedGroup(editName)
+      setEditGroup(null)
+    } catch (e: any) { setEditError(e.data?.error ?? 'Failed to update group') }
+    setEditBusy(false)
+  }
+
+  const toggleExpand = (name: string) => {
+    if (expandedGroup === name) { setExpandedGroup(null); return }
+    setExpandedGroup(name)
+    loadMembers(name)
+  }
+
+  const addMember = async (groupName: string) => {
+    const sam = (addSam[groupName] ?? '').trim()
+    if (!sam) return
+    setAddBusy(groupName); setAddError(e => ({ ...e, [groupName]: '' }))
+    try {
+      await api.post(`/domain/${serverId}/add-to-group`, { samAccountName: sam, groupName })
+      setMembers(m => ({ ...m, [groupName]: [...(m[groupName] ?? []), { samAccountName: sam, name: sam, type: 'user' }] }))
+      setAddSam(s => ({ ...s, [groupName]: '' }))
+    } catch (e: any) { setAddError(err => ({ ...err, [groupName]: e.data?.error ?? 'Failed' })) }
+    setAddBusy(null)
+  }
+
+  const removeMember = async (groupName: string, sam: string) => {
+    setRemoveBusy(sam)
+    try {
+      await api.post(`/domain/${serverId}/remove-from-group`, { samAccountName: sam, groupName })
+      setMembers(m => ({ ...m, [groupName]: (m[groupName] ?? []).filter(x => x.samAccountName !== sam) }))
+    } catch (e: any) { alert(e.data?.error ?? 'Failed') }
+    setRemoveBusy(null)
+  }
+
+  const nonPrivileged = groups.filter(g => !PRIVILEGED_GROUPS.has(g.name))
+  const privilegedCount = groups.length - nonPrivileged.length
+  const filtered = nonPrivileged.filter(g =>
+    g.name.toLowerCase().includes(search.toLowerCase()) ||
+    (g.description ?? '').toLowerCase().includes(search.toLowerCase())
+  )
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search groups…"
+          className="px-3 py-2 rounded-lg border text-sm w-64"
+          style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }} />
+        <span className="text-sm ml-auto" style={{ color: 'var(--text-muted)' }}>
+          {filtered.length} group{filtered.length !== 1 ? 's' : ''}
+          {privilegedCount > 0 && <> · <span style={{ color: '#f87171' }}>{privilegedCount} privileged (read-only)</span></>}
+        </span>
+        <button onClick={() => setShowCreate(v => !v)}
+          className="px-4 py-2 rounded-lg text-sm font-medium text-white"
+          style={{ background: 'var(--btn-accent-bg)' }}>
+          + Create Group
+        </button>
+        <button onClick={load} disabled={loading}
+          className="px-3 py-2 rounded-lg text-sm border disabled:opacity-50 hover:opacity-80"
+          style={{ background: 'var(--bg-panel-alt)', borderColor: 'var(--border-med)', color: 'var(--text-primary)' }}>
+          ↺
+        </button>
+      </div>
+
+      {/* Create form */}
+      {showCreate && (
+        <div className="rounded-xl border p-4 space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-med)' }}>
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-heading)' }}>New Security Group</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-2">
+              <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>Group Name *</label>
+              <input value={newName} onChange={e => setNewName(e.target.value)}
+                placeholder="e.g. IT-Helpdesk"
+                className="w-full px-3 py-2 rounded-lg border text-sm"
+                style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }} />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>Scope</label>
+              <select value={newScope} onChange={e => setNewScope(e.target.value as any)}
+                className="w-full px-3 py-2 rounded-lg border text-sm"
+                style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }}>
+                <option value="Global">Global</option>
+                <option value="Universal">Universal</option>
+                <option value="DomainLocal">Domain Local</option>
+              </select>
+            </div>
+            <div className="sm:col-span-3">
+              <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>Description (optional)</label>
+              <input value={newDesc} onChange={e => setNewDesc(e.target.value)}
+                placeholder="Group description"
+                className="w-full px-3 py-2 rounded-lg border text-sm"
+                style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }} />
+            </div>
+          </div>
+          {createError && <p className="text-xs text-red-400">{createError}</p>}
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => { setShowCreate(false); setCreateError(''); setNewName(''); setNewDesc('') }}
+              className="px-4 py-2 rounded-lg text-sm border"
+              style={{ background: 'var(--bg-panel-alt)', borderColor: 'var(--border-med)', color: 'var(--text-primary)' }}>Cancel</button>
+            <button onClick={createGroup} disabled={creating || !newName.trim()}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+              style={{ background: 'var(--btn-accent-bg)' }}>
+              {creating ? 'Creating…' : 'Create Group'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && <p className="text-sm text-red-400 px-1">{error}</p>}
+
+      {/* Group list */}
+      {loading ? (
+        <div className="flex flex-col items-center gap-3 py-16">
+          <div style={{ width: 28, height: 28, border: '3px solid var(--border-med)', borderTopColor: 'var(--accent-hex)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading groups…</span>
+        </div>
+      ) : (
+        <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-med)' }}>
+          {filtered.length === 0 ? (
+            <div className="px-4 py-10 text-sm text-center" style={{ color: 'var(--text-muted)' }}>
+              {search ? 'No groups match your search.' : 'No non-privileged groups found.'}
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ background: 'var(--bg-panel-alt)', borderBottom: '1px solid var(--border-med)' }}>
+                  <th className="w-8" />
+                  {['Group Name', 'Scope', 'Description', 'Actions'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide"
+                      style={{ color: 'var(--text-muted)' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody style={{ background: 'var(--bg-panel)' }}>
+                {filtered.map((g) => (
+                  <React.Fragment key={g.name}>
+                    <tr className="border-b transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
+                      style={{ borderColor: 'var(--border-weak)' }}>
+                      <td className="px-3 py-3 w-8">
+                        <button onClick={() => toggleExpand(g.name)}
+                          className="w-6 h-6 flex items-center justify-center rounded text-xs transition-colors hover:bg-black/10 dark:hover:bg-white/10"
+                          style={{ color: 'var(--text-muted)' }}>
+                          {expandedGroup === g.name ? '▼' : '▶'}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{g.name}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs px-2 py-0.5 rounded font-medium"
+                          style={{ background: 'var(--bg-panel-alt)', color: 'var(--text-muted)', border: '1px solid var(--border-weak)' }}>
+                          {g.scope}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-xs max-w-xs" style={{ color: 'var(--text-muted)' }}>
+                        {g.description || '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        {DEFAULT_WINDOWS_GROUPS.has(g.name) ? (
+                          <span className="text-xs px-2 py-0.5 rounded"
+                            style={{ background: 'var(--bg-panel-alt)', color: 'var(--text-muted)', border: '1px solid var(--border-weak)' }}>
+                            Built-in
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <button onClick={() => openEdit(g)}
+                              className="px-2.5 py-1 rounded text-xs font-medium border hover:opacity-80 transition-opacity"
+                              style={{ background: 'var(--bg-panel-alt)', borderColor: 'var(--border-med)', color: 'var(--text-primary)' }}>
+                              ✏️ Edit
+                            </button>
+                            <button onClick={() => { setConfirmDelete(g.name); setDeleteInput(''); setDeleteError('') }}
+                              className="px-2.5 py-1 rounded text-xs font-medium border hover:opacity-80 transition-opacity"
+                              style={{ background: '#7f1d1d22', borderColor: '#f8714844', color: '#f87171' }}>
+                              🗑 Delete
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+
+                    {/* Expanded members panel */}
+                    {expandedGroup === g.name && (
+                      <tr key={g.name + '-members'} style={{ borderBottom: '1px solid var(--border-med)' }}>
+                        <td />
+                        <td colSpan={4} style={{ background: 'var(--bg-panel-alt)', padding: '16px 20px' }}>
+                          <div className="space-y-3">
+                            <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                              Members {members[g.name] ? `(${members[g.name].length})` : ''}
+                            </p>
+
+                            {/* Add member */}
+                            <div className="flex gap-2">
+                              <input
+                                value={addSam[g.name] ?? ''}
+                                onChange={e => setAddSam(s => ({ ...s, [g.name]: e.target.value }))}
+                                onKeyDown={e => { if (e.key === 'Enter') addMember(g.name) }}
+                                placeholder="SAM account name (e.g. john.doe)"
+                                className="flex-1 px-3 py-1.5 rounded-lg border text-sm"
+                                style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }} />
+                              <button onClick={() => addMember(g.name)}
+                                disabled={addBusy === g.name || !(addSam[g.name] ?? '').trim()}
+                                className="px-3 py-1.5 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                                style={{ background: 'var(--btn-accent-bg)' }}>
+                                {addBusy === g.name ? '…' : '+ Add'}
+                              </button>
+                            </div>
+                            {addError[g.name] && <p className="text-xs text-red-400">{addError[g.name]}</p>}
+
+                            {/* Member list */}
+                            {membersLoading === g.name ? (
+                              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading members…</p>
+                            ) : (members[g.name] ?? []).length === 0 ? (
+                              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No members.</p>
+                            ) : (
+                              <div className="flex flex-wrap gap-1.5">
+                                {(members[g.name] ?? []).map(m => (
+                                  <span key={m.samAccountName}
+                                    className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full border text-xs"
+                                    style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-med)', color: 'var(--text-secondary)' }}>
+                                    {m.type === 'group' ? '👥 ' : m.type === 'computer' ? '🖥 ' : '👤 '}
+                                    {m.samAccountName}
+                                    <button onClick={() => removeMember(g.name, m.samAccountName)}
+                                      disabled={removeBusy === m.samAccountName}
+                                      className="ml-0.5 w-4 h-4 flex items-center justify-center rounded-full hover:bg-red-500/20 hover:text-red-400 disabled:opacity-40 transition-colors"
+                                      style={{ color: 'var(--text-muted)' }}>
+                                      {removeBusy === m.samAccountName ? '…' : '×'}
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Edit group modal */}
+      {editGroup && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="rounded-xl border p-6 w-[440px] space-y-4"
+            style={{ background: 'var(--modal-bg)', borderColor: 'var(--modal-border)' }}>
+            <h2 className="text-base font-bold" style={{ color: 'var(--text-heading)' }}>✏️ Edit Group</h2>
+            <div>
+              <label className="text-xs font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>Group Name</label>
+              <input value={editName} onChange={e => setEditName(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border text-sm"
+                style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }} />
+            </div>
+            <div>
+              <label className="text-xs font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>Description</label>
+              <input value={editDesc} onChange={e => setEditDesc(e.target.value)}
+                placeholder="Optional description"
+                className="w-full px-3 py-2 rounded-lg border text-sm"
+                style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }} />
+            </div>
+            {editError && <p className="text-xs text-red-400">{editError}</p>}
+            <div className="flex gap-2 justify-end pt-1">
+              <button onClick={() => setEditGroup(null)}
+                className="px-4 py-2 rounded-lg text-sm border"
+                style={{ background: 'var(--bg-panel-alt)', borderColor: 'var(--border-med)', color: 'var(--text-primary)' }}>
+                Cancel
+              </button>
+              <button onClick={saveEdit} disabled={editBusy || !editName.trim()}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                style={{ background: 'var(--btn-accent-bg)' }}>
+                {editBusy ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Type-to-confirm delete dialog */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="rounded-xl border p-6 w-[440px] space-y-4"
+            style={{ background: 'var(--modal-bg)', borderColor: 'var(--modal-border)' }}>
+            <div className="flex items-start gap-3">
+              <span className="text-xl mt-0.5">🗑</span>
+              <div>
+                <h2 className="text-base font-bold" style={{ color: 'var(--text-heading)' }}>Delete Group</h2>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  This will permanently delete the group from Active Directory. Members will <strong>not</strong> be deleted.
+                </p>
+              </div>
+            </div>
+            <div className="px-3 py-2 rounded-lg border font-mono text-sm"
+              style={{ background: '#7f1d1d22', borderColor: '#f8714844', color: '#f87171' }}>
+              {confirmDelete}
+            </div>
+            <div>
+              <label className="text-xs font-semibold block mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                Type the group name to confirm:
+              </label>
+              <input
+                autoFocus
+                value={deleteInput}
+                onChange={e => { setDeleteInput(e.target.value); setDeleteError('') }}
+                onKeyDown={e => { if (e.key === 'Enter' && deleteInput === confirmDelete) deleteGroup(confirmDelete) }}
+                placeholder={confirmDelete}
+                className="w-full px-3 py-2 rounded-lg border text-sm font-mono"
+                style={{ background: 'var(--input-bg)', borderColor: deleteInput && deleteInput !== confirmDelete ? '#f87171' : 'var(--input-border)', color: 'var(--input-text)' }} />
+              {deleteInput && deleteInput !== confirmDelete && (
+                <p className="text-xs text-red-400 mt-1">Name does not match.</p>
+              )}
+            </div>
+            {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
+            <div className="flex gap-2 justify-end pt-1">
+              <button onClick={() => { setConfirmDelete(null); setDeleteInput(''); setDeleteError('') }}
+                className="px-4 py-2 rounded-lg text-sm border"
+                style={{ background: 'var(--bg-panel-alt)', borderColor: 'var(--border-med)', color: 'var(--text-primary)' }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteGroup(confirmDelete)}
+                disabled={deleteInput !== confirmDelete || deleteBusy}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40"
+                style={{ background: '#c0392b' }}>
+                {deleteBusy ? 'Deleting…' : 'Delete Group'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Domain() {
@@ -908,6 +1376,7 @@ export default function Domain() {
   // Reload when tab or server changes (skip initial empty selectedId)
   useEffect(() => {
     if (!selectedId) return
+    if (tab === 'sessions' || tab === 'computers' || tab === 'groups') return
     loadUsers(selectedId, tab)
   }, [tab, selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -938,12 +1407,78 @@ export default function Domain() {
 
   const selectedServer = servers.find(s => s.id === selectedId)
 
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [sessionsError, setSessionsError] = useState('')
+
+  const loadSessions = useCallback(async (serverId: string) => {
+    setSessionsLoading(true)
+    setSessionsError('')
+    try {
+      const res = await api.get<{ sessions: Session[] }>(`/domain/${serverId}/sessions`)
+      setSessions(res.sessions)
+    } catch (err: unknown) {
+      setSessionsError((err as Error).message)
+    } finally {
+      setSessionsLoading(false)
+    }
+  }, [])
+
+  const [computers, setComputers] = useState<AdComputer[]>([])
+  const [computersLoading, setComputersLoading] = useState(false)
+  const [computersError, setComputersError] = useState('')
+  const [pingingAll, setPingingAll] = useState(false)
+  const [psexecTarget, setPsexecTarget] = useState<AdComputer | null>(null)
+  const [computerActionBusy, setComputerActionBusy] = useState<string | null>(null)
+  const [confirmDeleteComputer, setConfirmDeleteComputer] = useState<string | null>(null)
+  const [deleteComputerInput, setDeleteComputerInput] = useState('')
+  const [deleteComputerBusy, setDeleteComputerBusy] = useState(false)
+  const [deleteComputerError, setDeleteComputerError] = useState('')
+
+  const loadComputers = useCallback(async (serverId: string) => {
+    setComputersLoading(true); setComputersError('')
+    try {
+      const res = await api.get<{ computers: AdComputer[] }>(`/domain/${serverId}/computers`)
+      setComputers(res.computers)
+    } catch (err: unknown) {
+      setComputersError((err as Error).message)
+    } finally {
+      setComputersLoading(false)
+    }
+  }, [])
+
+  const pingAllComputers = useCallback(async (list: AdComputer[]) => {
+    const hosts = list.map(c => c.IPv4Address ?? c.DNSHostName ?? c.Name).filter(Boolean) as string[]
+    if (!hosts.length) return
+    setPingingAll(true)
+    try {
+      const res = await api.post<{ results: { host: string; online: boolean }[] }>('/psexec/ping-many', { hosts })
+      const map = Object.fromEntries(res.results.map(r => [r.host, r.online]))
+      setComputers(prev => prev.map(c => {
+        const host = c.IPv4Address ?? c.DNSHostName ?? c.Name
+        return { ...c, online: host ? map[host] : undefined }
+      }))
+    } finally {
+      setPingingAll(false)
+    }
+  }, [])
+
   const tabConfig: { key: Tab; label: string; color: string }[] = [
     { key: 'locked',          label: '🔴 Locked',          color: '#f97316' },
     { key: 'password_issues', label: '⚠️ Password Issues',  color: '#eab308' },
     { key: 'disabled',        label: '🚫 Disabled',         color: '#ef4444' },
     { key: 'all',             label: '👥 All Users',        color: 'var(--accent-hex)' },
+    { key: 'groups',          label: '🗂 Groups',            color: '#a78bfa' },
+    { key: 'sessions',        label: '🟢 Active Sessions',  color: '#22c55e' },
+    { key: 'computers',       label: '🖥 Computers',         color: '#818cf8' },
   ]
+
+  // Auto-ping once computers load
+  useEffect(() => {
+    if (tab === 'computers' && computers.length > 0 && !pingingAll) {
+      pingAllComputers(computers)
+    }
+  }, [computers]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleStatus = (key: string) =>
     setStatusFilter(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
@@ -1022,7 +1557,11 @@ export default function Domain() {
       {/* Tabs */}
       <div className="flex text-sm">
         {tabConfig.map((t, i, arr) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => {
+            setTab(t.key)
+            if (t.key === 'sessions' && selectedId) loadSessions(selectedId)
+            if (t.key === 'computers' && selectedId) loadComputers(selectedId)
+          }}
             className={[
               'px-4 py-2 border-y border-r font-medium transition-colors',
               i === 0 ? 'border-l rounded-l-lg' : '',
@@ -1037,88 +1576,332 @@ export default function Domain() {
         ))}
       </div>
 
-      {/* Filters row */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <input value={search} onChange={e => handleSearch(e.target.value)}
-          placeholder="Search by name, SAM, or email…"
-          className="px-3 py-2 rounded-lg border text-sm w-64"
-          style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }} />
+      {/* Groups Panel */}
+      {tab === 'groups' && selectedId && <GroupsPanel serverId={selectedId} />}
 
-        {/* OU filter — all tabs */}
-        {uniqueOUs.length > 0 && (
-          <select value={ouFilter} onChange={e => setOuFilter(e.target.value)}
-            className="px-3 py-2 rounded-lg border text-sm"
-            style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }}>
-            <option value="">All OUs</option>
-            {uniqueOUs.map(ou => <option key={ou} value={ou}>{ouLabel(ou)}</option>)}
-          </select>
-        )}
+      {/* Filters + table (user tabs only) */}
+      {tab !== 'groups' && tab !== 'sessions' && tab !== 'computers' && (<>
+        <div className="flex items-center gap-3 flex-wrap">
+          <input value={search} onChange={e => handleSearch(e.target.value)}
+            placeholder="Search by name, SAM, or email…"
+            className="px-3 py-2 rounded-lg border text-sm w-64"
+            style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }} />
 
-        {/* Status filter chips — All Users tab only */}
-        {tab === 'all' && (
-          <div className="flex gap-1.5 flex-wrap">
-            {STATUS_OPTIONS.map(s => (
-              <button key={s.key} onClick={() => toggleStatus(s.key)}
-                className="px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors"
-                style={statusFilter.includes(s.key)
-                  ? { background: 'var(--accent-hex)', color: '#fff', borderColor: 'var(--accent-hex)' }
-                  : { background: 'var(--bg-panel)', borderColor: 'var(--border-med)', color: 'var(--text-secondary)' }
-                }>{s.label}</button>
-            ))}
+          {uniqueOUs.length > 0 && (
+            <select value={ouFilter} onChange={e => setOuFilter(e.target.value)}
+              className="px-3 py-2 rounded-lg border text-sm"
+              style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }}>
+              <option value="">All OUs</option>
+              {uniqueOUs.map(ou => <option key={ou} value={ou}>{ouLabel(ou)}</option>)}
+            </select>
+          )}
+
+          {tab === 'all' && (
+            <div className="flex gap-1.5 flex-wrap">
+              {STATUS_OPTIONS.map(s => (
+                <button key={s.key} onClick={() => toggleStatus(s.key)}
+                  className="px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors"
+                  style={statusFilter.includes(s.key)
+                    ? { background: 'var(--accent-hex)', color: '#fff', borderColor: 'var(--accent-hex)' }
+                    : { background: 'var(--bg-panel)', borderColor: 'var(--border-med)', color: 'var(--text-secondary)' }
+                  }>{s.label}</button>
+              ))}
+            </div>
+          )}
+
+          {filteredUsers.length > 0 && (
+            <span className="text-sm ml-auto" style={{ color: 'var(--text-muted)' }}>
+              {filteredUsers.length}{allUsers.length !== filteredUsers.length ? ` / ${allUsers.length}` : ''} users
+            </span>
+          )}
+        </div>
+
+        {error && (
+          <div className="px-4 py-3 rounded-xl border border-red-800/40 bg-red-900/10 text-red-400 text-sm space-y-1">
+            <p className="font-medium">Failed to connect to domain controller</p>
+            <p className="text-xs font-mono opacity-80">{error}</p>
+            <p className="text-xs opacity-70">Make sure the AD PowerShell module (RSAT-AD-PowerShell) is installed on the DC and the management user has AD read/write permissions.</p>
           </div>
         )}
 
-        {filteredUsers.length > 0 && (
-          <span className="text-sm ml-auto" style={{ color: 'var(--text-muted)' }}>
-            {filteredUsers.length}{allUsers.length !== filteredUsers.length ? ` / ${allUsers.length}` : ''} users
-          </span>
+        {!error && (
+          <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-med)' }}>
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ background: 'var(--bg-panel-alt)', borderBottom: '1px solid var(--border-med)' }}>
+                  <th className="w-8" />
+                  {['User', 'Status', 'Pwd Last Set', 'Last Logon', 'OU', 'Actions'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide"
+                      style={{ color: 'var(--text-muted)' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody style={{ background: 'var(--bg-panel)' }}>
+                {loading ? (
+                  <tr><td colSpan={7} className="px-4 py-16 text-center" style={{ color: 'var(--text-muted)' }}>
+                    <div className="flex flex-col items-center gap-2">
+                      <div style={{ width: 28, height: 28, border: '3px solid var(--border-med)', borderTopColor: 'var(--accent-hex)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+                      <span className="text-sm">Querying domain controller…</span>
+                    </div>
+                  </td></tr>
+                ) : filteredUsers.length === 0 ? (
+                  <tr><td colSpan={7} className="px-4 py-16 text-center" style={{ color: 'var(--text-muted)' }}>
+                    {tab === 'locked' && '✅ No locked accounts'}
+                    {tab === 'disabled' && '✅ No disabled accounts'}
+                    {tab === 'password_issues' && '✅ No password issues'}
+                    {tab === 'all' && (search || ouFilter || statusFilter.length > 0 ? 'No users match your filters.' : 'No users found.')}
+                  </td></tr>
+                ) : (
+                  filteredUsers.map(u => (
+                    <UserRow key={u.samAccountName} user={u} serverId={selectedId} onRefresh={load} />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         )}
-      </div>
+      </>)}
 
-      {/* Error */}
-      {error && (
-        <div className="px-4 py-3 rounded-xl border border-red-800/40 bg-red-900/10 text-red-400 text-sm space-y-1">
-          <p className="font-medium">Failed to connect to domain controller</p>
-          <p className="text-xs font-mono opacity-80">{error}</p>
-          <p className="text-xs opacity-70">Make sure the AD PowerShell module (RSAT-AD-PowerShell) is installed on the DC and the management user has AD read/write permissions.</p>
+      {/* Sessions Panel */}
+      {tab === 'sessions' && selectedId && (
+        <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-med)' }}>
+          <div className="flex items-center justify-between px-4 py-3 border-b" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-med)' }}>
+            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Active Sessions on DC</span>
+            <button onClick={() => loadSessions(selectedId)} disabled={sessionsLoading}
+              className="px-3 py-1 text-xs rounded-lg border transition-colors disabled:opacity-50"
+              style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-med)', color: 'var(--text-secondary)' }}>
+              {sessionsLoading ? '⏳ Loading…' : '🔄 Refresh'}
+            </button>
+          </div>
+          {sessionsError ? (
+            <div className="px-4 py-6 text-sm text-center" style={{ color: 'var(--text-muted)' }}>{sessionsError}</div>
+          ) : sessionsLoading ? (
+            <div className="px-4 py-10 flex flex-col items-center gap-2" style={{ color: 'var(--text-muted)' }}>
+              <div style={{ width: 28, height: 28, border: '3px solid var(--border-med)', borderTopColor: '#22c55e', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+              <span className="text-sm">Querying sessions…</span>
+            </div>
+          ) : sessions.length === 0 ? (
+            <div className="px-4 py-10 text-sm text-center" style={{ color: 'var(--text-muted)' }}>No active sessions found</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs uppercase" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>
+                  <th className="px-4 py-2 text-left">Username</th>
+                  <th className="px-4 py-2 text-left">Session</th>
+                  <th className="px-4 py-2 text-left">ID</th>
+                  <th className="px-4 py-2 text-left">State</th>
+                  <th className="px-4 py-2 text-left">Idle Time</th>
+                </tr>
+              </thead>
+              <tbody style={{ background: 'var(--bg-panel)' }}>
+                {sessions.map((s, i) => (
+                  <tr key={i} className="border-t" style={{ borderColor: 'var(--border-weak)' }}>
+                    <td className="px-4 py-3 font-mono font-medium" style={{ color: 'var(--text-primary)' }}>{s.username}</td>
+                    <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{s.sessionName || '—'}</td>
+                    <td className="px-4 py-3" style={{ color: 'var(--text-muted)' }}>{s.id}</td>
+                    <td className="px-4 py-3">
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium"
+                        style={s.state === 'Active'
+                          ? { background: 'rgba(34,197,94,0.15)', color: '#22c55e' }
+                          : { background: 'rgba(234,179,8,0.15)', color: '#eab308' }}>
+                        {s.state}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3" style={{ color: 'var(--text-muted)' }}>{s.idleTime || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 
-      {/* Table */}
-      {!error && (
+      {/* Computers Panel */}
+      {tab === 'computers' && selectedId && (
         <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-med)' }}>
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ background: 'var(--bg-panel-alt)', borderBottom: '1px solid var(--border-med)' }}>
-                <th className="w-8" />
-                {['User', 'Status', 'Pwd Last Set', 'Last Logon', 'OU', 'Actions'].map(h => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide"
-                    style={{ color: 'var(--text-muted)' }}>{h}</th>
+          <div className="flex items-center justify-between px-4 py-3 border-b" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-med)' }}>
+            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              AD Computers {computers.length > 0 && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({computers.length})</span>}
+            </span>
+            <div className="flex items-center gap-2">
+              {pingingAll && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>⏳ Pinging…</span>}
+              <button onClick={() => loadComputers(selectedId)} disabled={computersLoading}
+                className="px-3 py-1 text-xs rounded-lg border transition-colors disabled:opacity-50"
+                style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-med)', color: 'var(--text-secondary)' }}>
+                {computersLoading ? '⏳ Loading…' : '🔄 Refresh'}
+              </button>
+            </div>
+          </div>
+          {computersError ? (
+            <div className="px-4 py-6 text-sm text-center" style={{ color: 'var(--text-muted)' }}>{computersError}</div>
+          ) : computersLoading ? (
+            <div className="px-4 py-10 flex flex-col items-center gap-2" style={{ color: 'var(--text-muted)' }}>
+              <div style={{ width: 28, height: 28, border: '3px solid var(--border-med)', borderTopColor: '#818cf8', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+              <span className="text-sm">Querying Active Directory…</span>
+            </div>
+          ) : computers.length === 0 ? (
+            <div className="px-4 py-10 text-sm text-center" style={{ color: 'var(--text-muted)' }}>No computers found</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs uppercase" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>
+                  <th className="px-4 py-2 text-left">Status</th>
+                  <th className="px-4 py-2 text-left">Name</th>
+                  <th className="px-4 py-2 text-left">IP Address</th>
+                  <th className="px-4 py-2 text-left">OS</th>
+                  <th className="px-4 py-2 text-left">Last Logon</th>
+                  <th className="px-4 py-2 text-left">Action</th>
+                </tr>
+              </thead>
+              <tbody style={{ background: 'var(--bg-panel)' }}>
+                {computers.map((c, i) => (
+                  <tr key={i} className="border-t" style={{ borderColor: 'var(--border-weak)' }}>
+                    <td className="px-4 py-3">
+                      {c.online === undefined ? (
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>—</span>
+                      ) : c.online ? (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>● Online</span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>● Offline</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-mono font-medium text-sm" style={{ color: 'var(--text-primary)' }}>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {c.Name}
+                        {c.IsDomainController && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: '#818cf822', color: '#818cf8', border: '1px solid #818cf844' }}>DC</span>}
+                        {!c.Enabled && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>Disabled</span>}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>{c.IPv4Address || '—'}</td>
+                    <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{c.OperatingSystem || '—'}</td>
+                    <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {c.LastLogonDate || '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          disabled={!c.online}
+                          onClick={() => {
+                            const target = c.IPv4Address ?? c.DNSHostName ?? c.Name
+                            window.open(`/psexec?target=${encodeURIComponent(target)}`, '_self')
+                          }}
+                          className="px-2 py-1 text-xs rounded border transition-colors disabled:opacity-30"
+                          style={{ borderColor: 'var(--border-med)', background: c.online ? '#818cf833' : 'transparent', color: c.online ? '#818cf8' : 'var(--text-muted)', cursor: c.online ? 'pointer' : 'not-allowed' }}>
+                          ⚡ Remote Exec
+                        </button>
+                        {!c.IsDomainController && (
+                          <>
+                            <button
+                              disabled={computerActionBusy === c.Name}
+                              onClick={async () => {
+                                setComputerActionBusy(c.Name)
+                                try {
+                                  await api.post(`/domain/${selectedId}/set-computer-enabled`, { name: c.Name, enabled: !c.Enabled })
+                                  setComputers(prev => prev.map(x => x.Name === c.Name ? { ...x, Enabled: !c.Enabled } : x))
+                                } catch (e: any) { alert(e.data?.error ?? 'Failed') }
+                                setComputerActionBusy(null)
+                              }}
+                              className="px-2 py-1 text-xs rounded border transition-colors disabled:opacity-40"
+                              style={c.Enabled
+                                ? { background: '#7f1d1d22', borderColor: '#f8714844', color: '#f87171' }
+                                : { background: '#14532d22', borderColor: '#4ade8044', color: '#4ade80' }}>
+                              {computerActionBusy === c.Name ? '…' : c.Enabled ? '🚫 Disable' : '✅ Enable'}
+                            </button>
+                            <button
+                              onClick={() => { setConfirmDeleteComputer(c.Name); setDeleteComputerInput(''); setDeleteComputerError('') }}
+                              className="px-2 py-1 text-xs rounded border transition-colors"
+                              style={{ background: '#7f1d1d22', borderColor: '#f8714844', color: '#f87171' }}>
+                              🗑
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
                 ))}
-              </tr>
-            </thead>
-            <tbody style={{ background: 'var(--bg-panel)' }}>
-              {loading ? (
-                <tr><td colSpan={7} className="px-4 py-16 text-center" style={{ color: 'var(--text-muted)' }}>
-                  <div className="flex flex-col items-center gap-2">
-                    <div style={{ width: 28, height: 28, border: '3px solid var(--border-med)', borderTopColor: 'var(--accent-hex)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-                    <span className="text-sm">Querying domain controller…</span>
-                  </div>
-                </td></tr>
-              ) : filteredUsers.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-16 text-center" style={{ color: 'var(--text-muted)' }}>
-                  {tab === 'locked' && '✅ No locked accounts'}
-                  {tab === 'disabled' && '✅ No disabled accounts'}
-                  {tab === 'password_issues' && '✅ No password issues'}
-                  {tab === 'all' && (search || ouFilter || statusFilter.length > 0 ? 'No users match your filters.' : 'No users found.')}
-                </td></tr>
-              ) : (
-                filteredUsers.map(u => (
-                  <UserRow key={u.samAccountName} user={u} serverId={selectedId} onRefresh={load} />
-                ))
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Delete computer confirmation */}
+      {confirmDeleteComputer && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="rounded-xl border p-6 w-[440px] space-y-4"
+            style={{ background: 'var(--modal-bg)', borderColor: 'var(--modal-border)' }}>
+            <div className="flex items-start gap-3">
+              <span className="text-xl mt-0.5">🗑</span>
+              <div>
+                <h2 className="text-base font-bold" style={{ color: 'var(--text-heading)' }}>Delete Computer Account</h2>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  This will permanently remove the computer account from Active Directory. The machine itself will not be affected until it tries to authenticate.
+                </p>
+              </div>
+            </div>
+            <div className="px-3 py-2 rounded-lg border font-mono text-sm"
+              style={{ background: '#7f1d1d22', borderColor: '#f8714844', color: '#f87171' }}>
+              {confirmDeleteComputer}
+            </div>
+            <div>
+              <label className="text-xs font-semibold block mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                Type the computer name to confirm:
+              </label>
+              <input autoFocus value={deleteComputerInput}
+                onChange={e => { setDeleteComputerInput(e.target.value); setDeleteComputerError('') }}
+                onKeyDown={async e => {
+                  if (e.key === 'Enter' && deleteComputerInput === confirmDeleteComputer) {
+                    setDeleteComputerBusy(true)
+                    try {
+                      await api.post(`/domain/${selectedId}/delete-computer`, { name: confirmDeleteComputer })
+                      setComputers(prev => prev.filter(x => x.Name !== confirmDeleteComputer))
+                      setConfirmDeleteComputer(null)
+                    } catch (err: any) { setDeleteComputerError(err.data?.error ?? 'Failed') }
+                    setDeleteComputerBusy(false)
+                  }
+                }}
+                placeholder={confirmDeleteComputer}
+                className="w-full px-3 py-2 rounded-lg border text-sm font-mono"
+                style={{ background: 'var(--input-bg)', borderColor: deleteComputerInput && deleteComputerInput !== confirmDeleteComputer ? '#f87171' : 'var(--input-border)', color: 'var(--input-text)' }} />
+              {deleteComputerInput && deleteComputerInput !== confirmDeleteComputer && (
+                <p className="text-xs text-red-400 mt-1">Name does not match.</p>
               )}
-            </tbody>
-          </table>
+            </div>
+            {deleteComputerError && <p className="text-xs text-red-400">{deleteComputerError}</p>}
+            <div className="flex gap-2 justify-end pt-1">
+              <button onClick={() => setConfirmDeleteComputer(null)}
+                className="px-4 py-2 rounded-lg text-sm border"
+                style={{ background: 'var(--bg-panel-alt)', borderColor: 'var(--border-med)', color: 'var(--text-primary)' }}>
+                Cancel
+              </button>
+              <button
+                disabled={deleteComputerInput !== confirmDeleteComputer || deleteComputerBusy}
+                onClick={async () => {
+                  setDeleteComputerBusy(true)
+                  try {
+                    await api.post(`/domain/${selectedId}/delete-computer`, { name: confirmDeleteComputer })
+                    setComputers(prev => prev.filter(x => x.Name !== confirmDeleteComputer))
+                    setConfirmDeleteComputer(null)
+                  } catch (err: any) { setDeleteComputerError(err.data?.error ?? 'Failed') }
+                  setDeleteComputerBusy(false)
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40"
+                style={{ background: '#c0392b' }}>
+                {deleteComputerBusy ? 'Deleting…' : 'Delete Account'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PsExec quick launch modal */}
+      {psexecTarget && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setPsexecTarget(null)}>
+          <div className="bg-gray-800 border border-gray-700 rounded-xl p-5 w-full max-w-xs space-y-3 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-white font-semibold text-sm">⚡ PsExec → {psexecTarget.Name}</h3>
+            <p className="text-xs text-gray-400">Opening PsExec with target <span className="font-mono text-white">{psexecTarget.IPv4Address ?? psexecTarget.DNSHostName ?? psexecTarget.Name}</span></p>
+            <button onClick={() => setPsexecTarget(null)} className="w-full px-3 py-2 text-xs rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-700">Cancel</button>
+          </div>
         </div>
       )}
     </div>

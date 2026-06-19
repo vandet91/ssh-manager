@@ -88,7 +88,7 @@ export default function Servers() {
   const [addError, setAddError] = useState('')
 
   const [editServer, setEditServer] = useState<Server | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '' })
+  const [editForm, setEditForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '', management_linux_user: '' })
   const [editError, setEditError] = useState('')
 
   const [setupServerId, setSetupServerId] = useState<string | null>(null)
@@ -177,6 +177,19 @@ export default function Servers() {
   const [editCredPwd, setEditCredPwd] = useState('')
   const [editCredWorking, setEditCredWorking] = useState(false)
   const [showArchivedCreds, setShowArchivedCreds] = useState(false)
+  const [confirmPurgeAll, setConfirmPurgeAll] = useState(false)
+  const [confirmRevokeKey, setConfirmRevokeKey] = useState<{ linux_user: string; key_body: string } | null>(null)
+  const [revokeWorking, setRevokeWorking] = useState(false)
+  const [enableRootSshWorking, setEnableRootSshWorking] = useState(false)
+  const [enableRootSshResult, setEnableRootSshResult] = useState<{ ok: boolean; steps: string[] } | null>(null)
+  const [sshdStatus, setSshdStatus] = useState<{ permitRootLogin: string; rootLocked: boolean } | null>(null)
+  const [sshdStatusLoading, setSshdStatusLoading] = useState(false)
+  const [activateRootWorking, setActivateRootWorking] = useState(false)
+  const [activateRootResult, setActivateRootResult] = useState<{ ok: boolean; steps: string[] } | null>(null)
+  const [activateRootPassword, setActivateRootPassword] = useState('')
+  const [activateRootPrompt, setActivateRootPrompt] = useState(false)
+  const [permitLoginWorking, setPermitLoginWorking] = useState(false)
+  const [permitLoginResult, setPermitLoginResult] = useState<{ ok: boolean; steps: string[]; value?: string } | null>(null)
   const [verifyingCred, setVerifyingCred] = useState<string | null>(null)
   const [verifyCredResult, setVerifyCredResult] = useState<Record<string, 'match' | 'mismatch' | 'error'>>({})
   const [openCredMenu, setOpenCredMenu] = useState<string | null>(null)
@@ -263,16 +276,16 @@ export default function Servers() {
 
   const openEdit = (s: Server) => {
     setEditServer(s)
-    setEditForm({ name: s.name, hostname: s.hostname, ssh_port: s.ssh_port, environment: s.environment, os_type: (s.os_type ?? 'linux') as OsType, is_domain_controller: s.is_domain_controller ?? false, domain_name: s.tags?.domain_name ?? '' })
+    setEditForm({ name: s.name, hostname: s.hostname, ssh_port: s.ssh_port, environment: s.environment, os_type: (s.os_type ?? 'linux') as OsType, is_domain_controller: s.is_domain_controller ?? false, domain_name: s.tags?.domain_name ?? '', management_linux_user: s.management_linux_user ?? '' })
     setEditError('')
   }
 
   const saveEdit = async (e: React.FormEvent) => {
     e.preventDefault(); setEditError('')
     try {
-      const { domain_name, ...rest } = editForm
+      const { domain_name, management_linux_user, ...rest } = editForm
       const existing = editServer!.tags ?? {}
-      const payload = { ...rest, tags: { ...existing, domain_name: domain_name || undefined } }
+      const payload = { ...rest, tags: { ...existing, domain_name: domain_name || undefined }, management_linux_user: management_linux_user || undefined }
       await api.patch(`/servers/${editServer!.id}`, payload)
       setEditServer(null)
       load()
@@ -377,7 +390,7 @@ export default function Servers() {
       : 'Archive this RDP credential? It will be hidden but not deleted.'
     if (!confirm(msg)) return
     await api.delete(`/servers/${serverId}/rdp-credentials/${credId}`, { permanent: isArchived })
-    await loadWinCreds(serverId)
+    await Promise.all([loadWinCreds(serverId), loadCredentials(serverId)])
   }
 
   const revealWinPassword = async (serverId: string, credId: string) => {
@@ -463,8 +476,23 @@ export default function Servers() {
       if (s.management_key_id) refreshInfo(s.id).catch(() => {})
     } else {
       setInfoTab('overview')
+      setSshdStatus(null)
+      setActivateRootResult(null)
+      setPermitLoginResult(null)
+      setEnableRootSshResult(null)
       await Promise.all([refreshInfo(s.id), loadCredentials(s.id)])
+      loadSshdStatus(s.id)
     }
+  }
+
+  const loadSshdStatus = async (serverId: string) => {
+    setSshdStatus(null)
+    setSshdStatusLoading(true)
+    try {
+      const data = await api.get<{ permitRootLogin: string; rootLocked: boolean }>(`/servers/${serverId}/sshd-status`)
+      setSshdStatus(data)
+    } catch { /* non-fatal */ }
+    finally { setSshdStatusLoading(false) }
   }
 
   const loadRecommendations = async (serverId: string) => {
@@ -615,10 +643,13 @@ export default function Servers() {
     finally { setEditCredWorking(false) }
   }
 
-  const deleteCredential = async (serverId: string, credId: string) => {
+  const deleteCredential = async (serverId: string, credId: string, permanent = false) => {
     try {
-      await api.delete(`/servers/${serverId}/credentials/${credId}`)
-      await loadCredentials(serverId)
+      await api.delete(`/servers/${serverId}/credentials/${credId}`, permanent ? { permanent: true } : undefined)
+      await Promise.all([
+        loadCredentials(serverId),
+        infoServer?.os_type === 'windows' ? loadWinCreds(serverId) : Promise.resolve(),
+      ])
       setRevealedPasswords((p) => { const n = { ...p }; delete n[credId]; return n })
       setConfirmDeleteCred(null)
     } catch (err: unknown) { alert((err as Error).message) }
@@ -646,22 +677,22 @@ export default function Servers() {
   const purgeAllArchivedCredentials = async (serverId: string) => {
     const archivedList = credentials.filter((c) => c.is_archived)
     if (archivedList.length === 0) return
-    if (!confirm(`Permanently delete all ${archivedList.length} archived password(s) for this server?\n\nThis cannot be undone.`)) return
+    setConfirmPurgeAll(false)
     try {
-      await Promise.all(archivedList.map((c) => api.delete(`/servers/${serverId}/credentials/${c.id}`)))
+      await Promise.allSettled(archivedList.map((c) => api.delete(`/servers/${serverId}/credentials/${c.id}`)))
       await loadCredentials(serverId)
       setRevealedPasswords((p) => {
         const n = { ...p }
         archivedList.forEach((c) => delete n[c.id])
         return n
       })
-    } catch (err: unknown) { alert((err as Error).message) }
+    } catch (err: any) { console.error('Purge failed', err) }
   }
 
-  const setAsManagementKey = async (serverId: string, keyId: string) => {
+  const setAsManagementKey = async (serverId: string, keyId: string, linuxUser?: string) => {
     setSetMgmtKeyWorking(true)
     try {
-      const res = await api.patch<{ ok: boolean; key_name: string }>(`/servers/${serverId}/management-key`, { key_id: keyId })
+      const res = await api.patch<{ ok: boolean; key_name: string }>(`/servers/${serverId}/management-key`, { key_id: keyId, ...(linuxUser ? { linux_user: linuxUser } : {}) })
       alert(`✓ Management key updated to "${res.key_name}"`)
       load()
       await refreshInfo(serverId)
@@ -670,11 +701,12 @@ export default function Servers() {
   }
 
   const revokeAuthorizedKey = async (serverId: string, linux_user: string, key_body: string) => {
-    if (!confirm(`Remove this key from ${linux_user}'s authorized_keys on the server? This cannot be undone.`)) return
+    setRevokeWorking(true)
     try {
       await api.delete(`/servers/${serverId}/authorized-keys`, { linux_user, key_body })
       await refreshInfo(serverId)
     } catch (err: unknown) { alert((err as Error).message) }
+    finally { setRevokeWorking(false); setConfirmRevokeKey(null) }
   }
 
   const testConnection = async (id: string) => {
@@ -833,18 +865,7 @@ export default function Servers() {
       {/* overflow-x:auto lets the table scroll on narrow screens without
           breaking the outer layout; min-width keeps columns stable */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-        <table className="w-full text-xs" style={{ minWidth: 860, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
-          <colgroup>
-            <col style={{ width: '13%' }} />  {/* Name          */}
-            <col style={{ width: '7%'  }} />  {/* OS            */}
-            <col style={{ width: '10%' }} />  {/* Host          */}
-            <col style={{ width: '14%' }} />  {/* Hostname      */}
-            <col style={{ width: '7%'  }} />  {/* Env           */}
-            <col style={{ width: '8%'  }} />  {/* Status        */}
-            <col style={{ width: '7%'  }} />  {/* Added         */}
-            <col style={{ width: '8%'  }} />  {/* Last Connected */}
-            <col style={{ width: '26%' }} />  {/* Actions       */}
-          </colgroup>
+        <table className="w-full text-xs" style={{ minWidth: 900, tableLayout: 'auto', borderCollapse: 'collapse' }}>
           <thead className="bg-gray-800/50">
             <tr className="text-left text-gray-500 text-xs uppercase tracking-wide font-medium" style={{ borderBottom: '1px solid var(--border-med)' }}>
               <th className="px-3 py-2">Name</th>
@@ -863,26 +884,26 @@ export default function Servers() {
               <tr key={s.id} className="hover:bg-gray-800/30 transition-colors"
                 style={{ borderBottom: '1px solid var(--border-weak)' }}>
                 <td className="px-3 py-2 text-white font-medium" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
                   {s.os_type === 'windows'
-                    ? <span className="inline-flex items-center gap-1 text-xs text-blue-300 bg-blue-900/30 border border-blue-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>🪟 Windows</span>
+                    ? <span className="inline-flex items-center gap-1 text-xs text-blue-300 bg-blue-900/30 border border-blue-700/40 rounded px-1.5 py-0.5 font-medium">🪟 Win</span>
                     : s.os_type === 'linux'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-green-300 bg-green-900/30 border border-green-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>🐧 Linux</span>
+                      ? <span className="inline-flex items-center gap-1 text-xs text-green-300 bg-green-900/30 border border-green-700/40 rounded px-1.5 py-0.5 font-medium">🐧 Linux</span>
                     : s.os_type === 'router'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-orange-300 bg-orange-900/30 border border-orange-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>📡 Router</span>
+                      ? <span className="inline-flex items-center gap-1 text-xs text-orange-300 bg-orange-900/30 border border-orange-700/40 rounded px-1.5 py-0.5 font-medium">📡 Router</span>
                     : s.os_type === 'access-point'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-purple-300 bg-purple-900/30 border border-purple-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>📶 AP</span>
+                      ? <span className="inline-flex items-center gap-1 text-xs text-purple-300 bg-purple-900/30 border border-purple-700/40 rounded px-1.5 py-0.5 font-medium">📶 AP</span>
                     : s.os_type === 'switch'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-cyan-300 bg-cyan-900/30 border border-cyan-700/40 rounded px-1.5 py-0.5 font-medium" style={{ whiteSpace: 'nowrap' }}>🔀 Switch</span>
+                      ? <span className="inline-flex items-center gap-1 text-xs text-cyan-300 bg-cyan-900/30 border border-cyan-700/40 rounded px-1.5 py-0.5 font-medium">🔀 Switch</span>
                       : <span className="text-xs text-gray-500">—</span>
                   }
                 </td>
-                <td className="px-3 py-2" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
                   <HostBadge type={s.host_type} detail={s.host_type_detail} />
                 </td>
                 <td className="px-3 py-2 text-gray-300 font-mono text-xs" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.hostname}:{s.ssh_port}</td>
-                <td className="px-3 py-2"><Badge label={s.environment} /></td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}><Badge label={s.environment} /></td>
+                <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
                   {s.os_type === 'windows'
                     ? s.windows_rdp_ready
                       ? <Badge label="RDP Ready" variant="ok" />
@@ -893,8 +914,8 @@ export default function Servers() {
                         ? <Badge label="Ready" variant="ok" />
                         : <Badge label="Unverified" variant="medium" />}
                 </td>
-                <td className="px-3 py-2 text-gray-400 text-xs" title={new Date(s.created_at).toLocaleString()}>{new Date(s.created_at).toLocaleDateString()}</td>
-                <td className="px-3 py-2 text-gray-400 text-xs">{s.last_connected_at ? new Date(s.last_connected_at).toLocaleDateString() : <span className="text-gray-600">Never</span>}</td>
+                <td className="px-3 py-2 text-gray-400 text-xs" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }} title={new Date(s.created_at).toLocaleString()}>{new Date(s.created_at).toLocaleDateString()}</td>
+                <td className="px-3 py-2 text-gray-400 text-xs" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>{s.last_connected_at ? new Date(s.last_connected_at).toLocaleDateString() : <span className="text-gray-600">—</span>}</td>
                 <td className="px-3 py-2">
                   <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', alignItems: 'center' }}>
                     {s.os_type === 'windows' ? (
@@ -1111,6 +1132,15 @@ export default function Servers() {
                 </select>
               </label>
             </div>
+            {editForm.os_type === 'linux' && (
+              <label className="block">
+                <span className="text-sm text-gray-400">SSH Username <span className="text-gray-600">(management user, e.g. root or vandet)</span></span>
+                <input type="text" value={editForm.management_linux_user}
+                  onChange={(e) => setEditForm((f) => ({ ...f, management_linux_user: e.target.value }))}
+                  placeholder="root"
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </label>
+            )}
             {editForm.os_type === 'windows' && (
               <div className="space-y-2">
                 <label className="flex items-center gap-3 cursor-pointer select-none p-3 rounded-lg bg-gray-800 border border-gray-700">
@@ -1456,6 +1486,33 @@ export default function Servers() {
                       </button>
                     )}
                   </div>
+                  {/* PermitRootLogin status / alert — Linux only */}
+                  {serverInfo.os_type !== 'windows' && (
+                    sshdStatusLoading ? (
+                      <div className="bg-gray-800 rounded-lg p-3 text-xs text-gray-500 animate-pulse">Reading sshd config…</div>
+                    ) : sshdStatus && (
+                      <div className={`rounded-lg p-3 space-y-1 ${sshdStatus.permitRootLogin === 'yes' ? 'bg-orange-900/30 border border-orange-700/50' : 'bg-gray-800'}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Root Login (sshd)</p>
+                          <span className={`text-xs font-mono px-2 py-0.5 rounded ${
+                            sshdStatus.permitRootLogin === 'yes' ? 'bg-orange-700/60 text-orange-200' :
+                            sshdStatus.permitRootLogin === 'prohibit-password' ? 'bg-green-900/50 text-green-300' :
+                            'bg-gray-700 text-gray-300'
+                          }`}>{sshdStatus.permitRootLogin}</span>
+                        </div>
+                        {sshdStatus.rootLocked && (
+                          <p className="text-xs text-amber-400">⚠ Root account is locked (no password set)</p>
+                        )}
+                        {sshdStatus.permitRootLogin === 'yes' && (
+                          <p className="text-xs text-orange-300">⚠ Root can log in with password — consider hardening to <span className="font-mono">prohibit-password</span> after SSH key is set up</p>
+                        )}
+                        {sshdStatus.permitRootLogin === 'prohibit-password' && (
+                          <p className="text-xs text-green-400">✓ Root login via SSH key only (recommended)</p>
+                        )}
+                      </div>
+                    )
+                  )}
+
                   <div className="bg-gray-800 rounded-lg p-3 space-y-2" style={{ overflow: 'hidden' }}>
                     <p className="text-gray-400 text-xs font-medium uppercase tracking-wide flex items-center gap-1.5">
                       {serverInfo.os_type === 'windows' ? '🪟' : '🐧'} Operating System
@@ -1557,15 +1614,19 @@ export default function Servers() {
                   {credLoading && <p className="text-center text-gray-500 text-sm py-4">Loading…</p>}
                   {credentials.filter(c => ['linux','windows'].includes(c.category) && !c.is_archived).map(c => {
                     const isRevealed = !!revealedPasswords[c.id]
+                    const verifyState = verifyCredResult[c.id]
                     return (
                       <div key={c.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <p className="text-sm font-medium text-white">🐧 {c.label}</p>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-sm font-medium text-white">🐧 {c.label}</p>
+                              {c.category === 'windows' && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 font-medium">RDP+SSH</span>}
+                            </div>
                             {c.linux_user && <p className="text-xs text-gray-400 mt-0.5">User: <span className="text-gray-200 font-mono">{c.linux_user}</span></p>}
                             {c.notes && <p className="text-xs text-gray-500 mt-0.5">{c.notes}</p>}
                           </div>
-                          <div className="flex gap-1.5 shrink-0">
+                          <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
                             <button onClick={() => copyPasswordSilently(infoServer!.id, c.id, 'linux')}
                               className={`px-2 py-0.5 text-xs rounded transition-colors ${copiedCred === c.id ? 'bg-green-700 text-white' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
                               {copiedCred === c.id ? '✓ Copied' : '📋 Copy'}
@@ -1574,10 +1635,28 @@ export default function Servers() {
                               className="px-2 py-0.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors">
                               {isRevealed ? 'Hide' : '🔍 Reveal'}
                             </button>
+                            <button
+                              onClick={() => verifyCredential(infoServer!.id, c.id)}
+                              disabled={verifyingCred === c.id}
+                              className={`px-2 py-0.5 text-xs rounded transition-colors disabled:opacity-50 ${
+                                verifyState === 'match' ? 'bg-green-800 text-green-200' :
+                                verifyState === 'mismatch' ? 'bg-red-800 text-red-200' :
+                                verifyState === 'error' ? 'bg-yellow-800 text-yellow-200' :
+                                'bg-gray-600 hover:bg-gray-500 text-white'}`}>
+                              {verifyingCred === c.id ? '⏳' :
+                               verifyState === 'match' ? '✓ Matches' :
+                               verifyState === 'mismatch' ? '✗ Mismatch' :
+                               verifyState === 'error' ? '⚠ Error' : '🔎 Verify'}
+                            </button>
                             <button onClick={() => promptDeleteCred(c.id)}
                               className="px-2 py-0.5 text-xs rounded bg-red-800 hover:bg-red-700 text-white transition-colors">Archive</button>
                           </div>
                         </div>
+                        {verifyState === 'mismatch' && (
+                          <p className="text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded px-2 py-1">
+                            ⚠ Stored password does not match the server — it may have been changed outside SSH Manager. Update it here to stay in sync.
+                          </p>
+                        )}
                         {isRevealed && (
                           <span className="font-mono text-xs text-green-300 bg-gray-900 px-2 py-1 rounded select-all block break-all">{revealedPasswords[c.id]}</span>
                         )}
@@ -1611,13 +1690,146 @@ export default function Servers() {
               )}
               {infoTab === 'users' && infoServer?.os_type !== 'windows' && (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
                     <p className="text-xs text-gray-500">Linux users with uid ≥ 1000 (and root). Click a row to push an SSH key or delete.</p>
-                    <button onClick={() => { setShowAddUser(true); setPushKeyTarget(null) }}
-                      className="px-3 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium">
-                      + Add User
-                    </button>
+                    <div className="flex gap-2 flex-wrap">
+                      {/* Ubuntu: Activate root (unlock password) */}
+                      {sshdStatus?.rootLocked && (
+                        activateRootPrompt ? (
+                          <div className="flex items-center gap-1">
+                            <input type="password" autoFocus placeholder="new root password"
+                              value={activateRootPassword} onChange={e => setActivateRootPassword(e.target.value)}
+                              onKeyDown={async e => {
+                                if (e.key === 'Escape') { setActivateRootPrompt(false); setActivateRootPassword('') }
+                                if (e.key === 'Enter' && activateRootPassword) {
+                                  setActivateRootPrompt(false); setActivateRootWorking(true); setActivateRootResult(null)
+                                  try {
+                                    const res = await api.post<{ ok: boolean; steps: string[] }>(`/servers/${infoServer!.id}/root/activate`, { root_password: activateRootPassword })
+                                    setActivateRootResult(res)
+                                    if (res.ok) loadSshdStatus(infoServer!.id)
+                                  } catch (err: any) {
+                                    setActivateRootResult({ ok: false, steps: [err?.data?.error ?? err?.message ?? 'Failed'] })
+                                  } finally { setActivateRootWorking(false); setActivateRootPassword('') }
+                                }
+                              }}
+                              className="px-2 py-0.5 text-xs rounded bg-gray-900 border border-purple-700 text-white w-36 focus:outline-none" />
+                            <button disabled={!activateRootPassword || activateRootWorking}
+                              onClick={async () => {
+                                setActivateRootPrompt(false); setActivateRootWorking(true); setActivateRootResult(null)
+                                try {
+                                  const res = await api.post<{ ok: boolean; steps: string[] }>(`/servers/${infoServer!.id}/root/activate`, { root_password: activateRootPassword })
+                                  setActivateRootResult(res)
+                                  if (res.ok) loadSshdStatus(infoServer!.id)
+                                } catch (err: any) {
+                                  setActivateRootResult({ ok: false, steps: [err?.data?.error ?? err?.message ?? 'Failed'] })
+                                } finally { setActivateRootWorking(false); setActivateRootPassword('') }
+                              }}
+                              className="px-2 py-0.5 text-xs rounded bg-purple-700 hover:bg-purple-600 text-white disabled:opacity-50">→</button>
+                            <button onClick={() => { setActivateRootPrompt(false); setActivateRootPassword('') }}
+                              className="px-2 py-0.5 text-xs rounded bg-gray-700 text-gray-300 hover:bg-gray-600">✕</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => { setActivateRootResult(null); setActivateRootPrompt(true) }}
+                            disabled={activateRootWorking}
+                            title="Root account is locked — run sudo passwd root to set a root password and unlock the account"
+                            className="px-3 py-1 text-xs rounded bg-purple-700/40 hover:bg-purple-700/60 text-purple-300 transition-colors font-medium disabled:opacity-50">
+                            {activateRootWorking ? '⏳ Working…' : '🔓 Activate Root'}
+                          </button>
+                        )
+                      )}
+                      {/* Setup Root SSH — push management key to root */}
+                      <button
+                        onClick={async () => {
+                          setEnableRootSshResult(null)
+                          setEnableRootSshWorking(true)
+                          try {
+                            const res = await api.post<{ ok: boolean; steps: string[] }>(`/servers/${infoServer!.id}/enable-root-ssh`, {})
+                            setEnableRootSshResult(res)
+                            if (res.ok) loadSshdStatus(infoServer!.id)
+                          } catch (err: any) {
+                            setEnableRootSshResult({ ok: false, steps: [err?.data?.error ?? err?.message ?? 'Failed'] })
+                          } finally { setEnableRootSshWorking(false) }
+                        }}
+                        disabled={enableRootSshWorking}
+                        title="Uses the root vault credential to elevate privileges and push the management SSH key to /root/.ssh/authorized_keys"
+                        className="px-3 py-1 text-xs rounded bg-amber-700/40 hover:bg-amber-700/60 text-amber-300 transition-colors font-medium disabled:opacity-50">
+                        {enableRootSshWorking ? '⏳ Working…' : '🔑 Setup Root SSH'}
+                      </button>
+                      {/* PermitRootLogin controls */}
+                      {sshdStatus && sshdStatus.permitRootLogin !== 'yes' && (
+                        <button
+                          onClick={async () => {
+                            setPermitLoginResult(null); setPermitLoginWorking(true)
+                            try {
+                              const res = await api.post<{ ok: boolean; steps: string[]; value: string }>(`/servers/${infoServer!.id}/root/permit-login`, { value: 'yes' })
+                              setPermitLoginResult(res)
+                              if (res.ok) loadSshdStatus(infoServer!.id)
+                            } catch (err: any) {
+                              setPermitLoginResult({ ok: false, steps: [err?.data?.error ?? err?.message ?? 'Failed'] })
+                            } finally { setPermitLoginWorking(false) }
+                          }}
+                          disabled={permitLoginWorking}
+                          title="Set PermitRootLogin yes — allows root password SSH login (needed to push SSH key to root)"
+                          className="px-3 py-1 text-xs rounded bg-orange-700/40 hover:bg-orange-700/60 text-orange-300 transition-colors font-medium disabled:opacity-50">
+                          {permitLoginWorking ? '⏳' : '🔓 Allow Root Password Login'}
+                        </button>
+                      )}
+                      {sshdStatus && sshdStatus.permitRootLogin === 'yes' && (
+                        <button
+                          onClick={async () => {
+                            setPermitLoginResult(null); setPermitLoginWorking(true)
+                            try {
+                              const res = await api.post<{ ok: boolean; steps: string[]; value: string }>(`/servers/${infoServer!.id}/root/permit-login`, { value: 'prohibit-password' })
+                              setPermitLoginResult(res)
+                              if (res.ok) loadSshdStatus(infoServer!.id)
+                            } catch (err: any) {
+                              setPermitLoginResult({ ok: false, steps: [err?.data?.error ?? err?.message ?? 'Failed'] })
+                            } finally { setPermitLoginWorking(false) }
+                          }}
+                          disabled={permitLoginWorking}
+                          title="Set PermitRootLogin prohibit-password — SSH key only for root (recommended)"
+                          className="px-3 py-1 text-xs rounded bg-green-700/40 hover:bg-green-700/60 text-green-300 transition-colors font-medium disabled:opacity-50">
+                          {permitLoginWorking ? '⏳' : '🛡 Harden Root (Key Only)'}
+                        </button>
+                      )}
+                      <button onClick={() => { setShowAddUser(true); setPushKeyTarget(null) }}
+                        className="px-3 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium">
+                        + Add User
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Result panels */}
+                  {activateRootResult && (
+                    <div className={`rounded-lg p-3 text-xs space-y-1 ${activateRootResult.ok ? 'bg-green-900/30 border border-green-700/50' : 'bg-red-900/30 border border-red-700/50'}`}>
+                      <p className={`font-semibold ${activateRootResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+                        {activateRootResult.ok ? '✓ Root activated' : '✗ Failed'}
+                      </p>
+                      {activateRootResult.steps.map((s, i) => <p key={i} className="text-gray-400 font-mono">{s}</p>)}
+                      {activateRootResult.ok && <p className="text-gray-500 pt-1">Root password set. Now add a <strong className="text-white">root</strong> vault credential and click <strong className="text-white">Setup Root SSH</strong>.</p>}
+                    </div>
+                  )}
+                  {permitLoginResult && (
+                    <div className={`rounded-lg p-3 text-xs space-y-1 ${permitLoginResult.ok ? 'bg-green-900/30 border border-green-700/50' : 'bg-red-900/30 border border-red-700/50'}`}>
+                      <p className={`font-semibold ${permitLoginResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+                        {permitLoginResult.ok ? `✓ PermitRootLogin set to ${permitLoginResult.value}` : '✗ Failed'}
+                      </p>
+                      {permitLoginResult.steps.map((s, i) => <p key={i} className="text-gray-400 font-mono">{s}</p>)}
+                    </div>
+                  )}
+                  {enableRootSshResult && (
+                    <div className={`rounded-lg p-3 text-xs space-y-1 ${enableRootSshResult.ok ? 'bg-green-900/30 border border-green-700/50' : 'bg-red-900/30 border border-red-700/50'}`}>
+                      <p className={`font-semibold ${enableRootSshResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+                        {enableRootSshResult.ok ? '✓ Root SSH login enabled' : '✗ Failed'}
+                      </p>
+                      {enableRootSshResult.steps.map((s, i) => (
+                        <p key={i} className="text-gray-400 font-mono">{s}</p>
+                      ))}
+                      {enableRootSshResult.ok && (
+                        <p className="text-gray-500 pt-1">SSH key pushed to root. Now go to <strong className="text-white">Edit Server</strong> and change the SSH username to <span className="font-mono text-white">root</span>.</p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Add User Form */}
                   {showAddUser && (
@@ -1814,46 +2026,82 @@ export default function Servers() {
                   {serverInfo.authorized_keys.map((k, i) => {
                     const isManagementKey = k.db_key_id !== null && k.db_key_id === serverInfo.management_key_id
                     const isArchived = k.is_archived
+                    const userKeyCount = serverInfo.authorized_keys.filter(x => x.linux_user === k.linux_user).length
+                    const canSetMgmt = !isManagementKey && !isArchived && k.is_known && k.db_key_id && userKeyCount > 1
                     const borderClass = isArchived
                       ? 'bg-orange-950/30 border-orange-700/60'
                       : k.is_known ? 'bg-gray-800 border-gray-700'
                       : 'bg-red-950/30 border-red-800/60'
                     return (
-                      <div key={i} className={`rounded-lg border p-3 space-y-1.5 ${borderClass}`}>
-                        {isArchived && (
-                          <div className="flex items-center gap-2 text-orange-400 text-xs bg-orange-900/30 rounded px-2 py-1.5">
-                            <span>⚠</span>
-                            <span><strong>Archived key still on server.</strong> This key was rotated or deleted from the vault but is still authorized on this server. Revoke it to close the access gap.</span>
-                          </div>
-                        )}
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-gray-700 text-indigo-300">{k.key_type}</span>
-                            <span className="text-xs text-gray-400">for <span className="text-white font-medium font-mono">{k.linux_user}</span></span>
+                      <div key={i} className={`rounded-lg border ${borderClass} overflow-hidden`}>
+                        {/* Header row */}
+                        <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                          {/* Left: key type + user + name badges */}
+                          <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-gray-700/80 text-indigo-300 shrink-0">{k.key_type}</span>
+                            <span className="text-xs text-gray-400 shrink-0">for <span className="text-white font-semibold font-mono">{k.linux_user}</span></span>
                             {isArchived ? (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-orange-900/50 text-orange-300 border border-orange-700">🗄 {k.db_key_name} (archived)</span>
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-orange-900/50 text-orange-300 border border-orange-700/60">🗄 {k.db_key_name} (archived)</span>
                             ) : k.is_known ? (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-green-900/50 text-green-400 border border-green-800">✓ {k.db_key_name}</span>
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-green-900/40 text-green-400 border border-green-800/60">✓ {k.db_key_name}</span>
                             ) : (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800">⚠ Unknown key</span>
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/40 text-red-400 border border-red-800/60">⚠ Unknown key</span>
                             )}
                             {isManagementKey && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 border border-blue-800">🔒 Management key</span>
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 border border-blue-800/60">🔒 Management</span>
                             )}
                           </div>
-                          <button
-                            disabled={isManagementKey}
-                            onClick={() => revokeAuthorizedKey(infoServer!.id, k.linux_user, k.key_body)}
-                            title={isManagementKey ? 'Cannot remove — this is the active management key' : 'Remove from authorized_keys'}
-                            className={`shrink-0 px-2 py-1 text-xs rounded transition-colors font-medium ${
-                              isManagementKey ? 'bg-gray-700/40 text-gray-500 cursor-not-allowed'
-                              : isArchived ? 'bg-orange-700 hover:bg-orange-600 text-white cursor-pointer'
-                              : 'bg-red-700 hover:bg-red-600 text-white cursor-pointer'}`}>
-                            Revoke
-                          </button>
+                          {/* Right: action buttons grouped together */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {canSetMgmt && (
+                              <button
+                                disabled={setMgmtKeyWorking}
+                                onClick={() => setAsManagementKey(infoServer!.id, k.db_key_id!, k.linux_user)}
+                                title="Use this key as the management key for SSH connections"
+                                className="px-2 py-1 text-xs rounded border border-blue-700 bg-blue-900/40 hover:bg-blue-700 text-blue-300 hover:text-white cursor-pointer font-medium transition-colors disabled:opacity-50 whitespace-nowrap">
+                                {setMgmtKeyWorking ? '…' : '🔒 Set as Management'}
+                              </button>
+                            )}
+                            {confirmRevokeKey?.key_body === k.key_body && confirmRevokeKey?.linux_user === k.linux_user ? (
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs text-gray-400">Remove?</span>
+                                <button
+                                  disabled={revokeWorking}
+                                  onClick={() => revokeAuthorizedKey(infoServer!.id, k.linux_user, k.key_body)}
+                                  className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white cursor-pointer font-medium disabled:opacity-50">
+                                  {revokeWorking ? '…' : 'Yes'}
+                                </button>
+                                <button
+                                  disabled={revokeWorking}
+                                  onClick={() => setConfirmRevokeKey(null)}
+                                  className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white cursor-pointer font-medium">
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                disabled={isManagementKey}
+                                onClick={() => !isManagementKey && setConfirmRevokeKey({ linux_user: k.linux_user, key_body: k.key_body })}
+                                title={isManagementKey ? 'Cannot remove — this is the active management key' : 'Remove from authorized_keys'}
+                                className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+                                  isManagementKey
+                                    ? 'border border-gray-700 text-gray-600 cursor-not-allowed'
+                                    : isArchived
+                                    ? 'border border-orange-700 bg-orange-900/40 hover:bg-orange-700 text-orange-300 hover:text-white cursor-pointer'
+                                    : 'border border-red-800 bg-red-900/40 hover:bg-red-700 text-red-400 hover:text-white cursor-pointer'}`}>
+                                Revoke
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        {k.comment && <p className="text-xs text-gray-400">Comment: <span className="text-gray-300 font-mono">{k.comment}</span></p>}
-                        <p className="text-xs font-mono text-gray-500 break-all">Fingerprint: <span className="text-gray-400">{k.fingerprint || '—'}</span></p>
+                        {/* Footer: fingerprint + optional comment */}
+                        <div className="px-3 pb-2.5 space-y-0.5">
+                          {isArchived && (
+                            <p className="text-xs text-orange-400/80">⚠ Archived — still on server. Revoke to close the access gap.</p>
+                          )}
+                          {k.comment && <p className="text-xs text-gray-500">Comment: <span className="text-gray-400 font-mono">{k.comment}</span></p>}
+                          <p className="text-xs font-mono text-gray-600 break-all">fp: <span className="text-gray-500">{k.fingerprint || '—'}</span></p>
+                        </div>
                       </div>
                     )
                   })}
@@ -1965,7 +2213,10 @@ export default function Servers() {
                           <>
                             <div className="flex items-start justify-between gap-2">
                               <div>
-                                <p className="text-sm font-medium text-white">🔑 {c.label}</p>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <p className="text-sm font-medium text-white">🔑 {c.label}</p>
+                                  {c.category === 'windows' && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 font-medium">RDP+SSH</span>}
+                                </div>
                                 <p className="text-xs text-gray-400 mt-0.5">
                                   User: <span className="text-gray-200 font-mono">{c.service_username ?? '—'}</span>
                                   {domain && <span className="ml-2">Domain: <span className="text-gray-200 font-mono">{domain}</span></span>}
@@ -2409,12 +2660,14 @@ export default function Servers() {
                           {canApplyToServer && (
                             <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${
                               thisApplyStatus === 'ok' ? 'bg-green-900/30 border border-green-700/40 text-green-300'
-                              : c.last_changed_on_server_at ? 'bg-gray-700/40 text-gray-400'
+                              : c.last_changed_on_server_at || thisVerifyResult === 'match' ? 'bg-gray-700/40 text-gray-400'
                               : 'bg-orange-900/20 border border-orange-700/30 text-orange-400'}`}>
                               {thisApplyStatus === 'ok' ? (
                                 <><span>✓</span><span>Password successfully applied on server just now.</span></>
                               ) : c.last_changed_on_server_at ? (
                                 <><span>✓</span><span>Active on server since <strong>{new Date(c.last_changed_on_server_at).toLocaleString()}</strong></span></>
+                              ) : thisVerifyResult === 'match' ? (
+                                <><span>✓</span><span>Password verified correct on server.</span></>
                               ) : (
                                 <><span>⚠</span><span>Password saved in vault but <strong>not yet applied on server</strong> — click "Apply to Server" to push it.</span></>
                               )}
@@ -2448,12 +2701,21 @@ export default function Servers() {
                           <span className={`transition-transform ${showArchivedCreds ? 'rotate-90' : ''}`}>▶</span>
                           <span>🗄 Archived passwords ({credentials.filter((c) => c.is_archived).length}) — kept for reference</span>
                         </button>
-                        <button
-                          onClick={() => purgeAllArchivedCredentials(infoServer!.id)}
-                          title="Permanently delete all archived passwords for this server"
-                          className="px-2.5 py-1 text-xs rounded bg-red-900/30 hover:bg-red-800/50 text-red-500 hover:text-red-300 transition-colors shrink-0">
-                          🗑 Purge All
-                        </button>
+                        {confirmPurgeAll ? (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="text-xs text-red-400">Delete all?</span>
+                            <button onClick={() => purgeAllArchivedCredentials(infoServer!.id)}
+                              className="px-2 py-0.5 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors">Yes</button>
+                            <button onClick={() => setConfirmPurgeAll(false)}
+                              className="px-2 py-0.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">No</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => setConfirmPurgeAll(true)}
+                            title="Permanently delete all archived passwords for this server"
+                            className="px-2.5 py-1 text-xs rounded bg-red-900/30 hover:bg-red-800/50 text-red-500 hover:text-red-300 transition-colors shrink-0">
+                            🗑 Purge All
+                          </button>
+                        )}
                       </div>
 
                       {showArchivedCreds && (
@@ -3513,7 +3775,7 @@ export default function Servers() {
                 className="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">
                 Cancel
               </button>
-              <button onClick={() => deleteCredential(infoServer!.id, confirmDeleteCred.id)}
+              <button onClick={() => deleteCredential(infoServer!.id, confirmDeleteCred.id, confirmDeleteCred.isArchived)}
                 className={`flex-1 py-2 rounded-lg text-white text-sm font-medium transition-colors ${confirmDeleteCred.isArchived ? 'bg-red-700 hover:bg-red-600' : 'bg-orange-700 hover:bg-orange-600'}`}>
                 {confirmDeleteCred.isArchived ? 'Delete Forever' : 'Archive'}
               </button>

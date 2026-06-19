@@ -1,19 +1,23 @@
 # SSH Manager
 
-A self-hosted web platform for centralizing SSH key management, server credential vault, browser-based terminal, Remote Desktop (RDP), Active Directory management, security auditing, Telegram bot integration, and full audit logging.
+A self-hosted web platform for centralizing SSH key management, server credential vault, browser-based terminal, Remote Desktop (RDP), Active Directory management, remote Windows execution, database connector, security auditing, Telegram bot integration, and full audit logging.
 
 ---
 
 ## Features
 
 - **SSH Key Vault** — AES-256-GCM encrypted keys, Ed25519/RSA-4096 generation, PuTTY PPK import/export, key rotation with automatic scheduler
-- **Server Inventory** — Linux & Windows support, OS/host-platform auto-detection (VMware, Hyper-V, Proxmox, AWS, Azure, GCP…), per-server filters
+- **Server Inventory** — Linux & Windows support, OS/host-platform auto-detection (VMware, Hyper-V, Proxmox, AWS, Azure, GCP…), per-server filters; servers sorted alphabetically
 - **Credential Vault** — per-server password vault for RDP, SSH users, databases, web services; reveal/copy/archive with audit log
 - **Global Vault** — standalone credential store (server OS, service accounts, API keys, network devices, domain AD, email, printers, DVRs); OU grouping, tagging, archiving
 - **Browser Terminal** — xterm.js multi-tab SSH, drag-and-drop SFTP upload, session recording & playback
 - **Remote Desktop** — browser-based RDP via Guacamole; command panel, file sharing
+- **Remote Exec** — run commands on Windows machines via PsExec, WMIExec, or WinRM; Shell is a first-class tab with live xterm.js terminal; stored-credential picker; command history; quick-command library; redesigned two-pane layout
+- **DB Connector** — connect to PostgreSQL, MySQL, MariaDB, MSSQL, Oracle databases via direct or SSH-tunnel connections; query editor, schema browser, data export, per-connection SSH tunnel override; data analysis rules (row count, null rate, uniqueness, range, custom SQL, referential integrity) with cross-connection comparison
 - **Domain Manager** — Active Directory management over SSH: list/search/filter users, reset passwords (syncs stored credentials), unlock accounts, enable/disable, view OUs; multi-AD cluster support with domain health panel (FSMO roles, DC status, replication failures, service checks, password policy) and force-sync
+- **Linux Root SSH Setup** — two-server-type flow (existing vs new Debian/Ubuntu); vault root credential + su/sudo elevation; PermitRootLogin management; root activation; sshd status panel on Overview tab
 - **Windows Server** — full OpenSSH support; Info panel shows OS, memory, CPU, hostname, domain, installed roles; RDP credentials and SSH user vault
+- **Auth Keys Management** — redesigned card layout; "Set as Management" button when a user has multiple keys; inline Yes/No revoke confirmation (no browser `confirm()` dialog); management key guard blocks accidental revoke
 - **Security Scanner** — checks password auth, root login, stale keys, X11 forwarding; configurable alerts
 - **Best Practices** — tailored config recommendations calculated from actual RAM/CPU; includes copy-paste config snippets
 - **AI Analyst** — multi-provider (Claude, GPT, Gemini, DeepSeek) server health analysis
@@ -178,6 +182,39 @@ Click **Verify Key** in the server row to capture the host fingerprint, then **T
 
 ---
 
+### Linux Root SSH Setup
+
+SSH Manager supports a two-phase root SSH setup that works for both existing servers (already have a management user) and new Debian/Ubuntu servers.
+
+**Phase 1 — Management user setup (required first)**
+
+Onboard the server with a non-root management user (e.g. `vandet` or `sshmanager`) and management key as described above. This gives SSH Manager initial access.
+
+**Phase 2 — Root SSH setup (from Server Info → Users tab)**
+
+Once connected via the management user:
+
+1. **Add root password to Vault** — go to **Server Info → Vault tab**, add a credential for linux user `root` with the root password.
+2. **Activate Root** (Ubuntu/Debian if root has no password) — click **Activate Root** to run `sudo passwd root` and set a password via the management user.
+3. **Setup Root SSH** — click **Setup Root SSH** to:
+   - Generate or use an existing SSH key for root
+   - Push the key to `/root/.ssh/authorized_keys` using su/sudo elevation (no direct root SSH required)
+   - Set `PermitRootLogin prohibit-password` in `/etc/ssh/sshd_config`
+   - Restart the SSH service
+4. **Switch management key to root** — go to **Auth Keys tab**, click **🔒 Set as Management** on the root key to make SSH Manager connect directly as root going forward.
+
+**PermitRootLogin values:**
+
+| Value | Meaning |
+|-------|---------|
+| `yes` | Root can log in with password or key |
+| `prohibit-password` | Root can log in with key only (recommended) |
+| `no` | Root SSH disabled |
+
+The **Overview tab** of Server Info shows the current `PermitRootLogin` status and root account lock state with color-coded alerts.
+
+---
+
 ### Windows Server
 
 SSH Manager supports **Windows Server 2016, 2019, and 2022** via OpenSSH.
@@ -314,6 +351,209 @@ If replication failures are detected, a **Force Sync** button triggers `repadmin
 
 ---
 
+## Auth Keys
+
+The **Auth Keys tab** in Server Info shows all keys currently in `authorized_keys` on the server, matched against your SSH key vault.
+
+| Badge | Meaning |
+|-------|---------|
+| `✓ key-name` (green) | Key is known and active in the vault |
+| `🔒 Management` (blue) | This is the active management key — used for all SSH connections |
+| `🗄 key-name (archived)` (orange) | Key was rotated/deleted from vault but still on server — revoke it |
+| `⚠ Unknown key` (red) | Key is not in the vault — investigate |
+
+**Set as Management** — appears when a user has more than one key on the server. Click to promote that key (and optionally switch the management Linux user) without re-doing setup.
+
+**Revoke** — removes the key from `authorized_keys` on the server. The management key cannot be revoked — set a different management key first. Uses inline Yes/No confirmation (no browser popup).
+
+**Assignments guard** — in the Assignments page, the Revoke button is also blocked for the active management key assignment, with both a UI disable and an API-level 409 error as a safety net.
+
+---
+
+## Remote Exec (Windows)
+
+The **Remote Exec** page runs commands on Windows machines using stored credentials. Three execution methods are available:
+
+| Method | Protocol | Port | AV Risk | Notes |
+|--------|----------|------|---------|-------|
+| **PsExec** | SMB | 445 | ⚠️ High — deploys a service binary | May trigger Windows Defender (VirTool:Win32/RemoteExec!pz) |
+| **WMIExec** | DCOM/RPC | 135 + dynamic | ✅ Low — no binary deployed | Recommended for environments with Defender enabled |
+| **WinRM** | HTTP/HTTPS | 5985 / 5986 | ✅ None — built-in Windows | Best for AD environments; requires WinRM pre-configured on targets |
+
+### Credential picker
+
+Remote Exec uses credentials from the **Global Vault** with category `windows`, `rdp`, or `other`. Domain credentials should have a `Domain: pvd.local` line in the Notes field, or the username stored as `domain\username`.
+
+### Enabling WinRM on a target (one-time setup)
+
+Use WMIExec (which requires no setup) to push WinRM configuration to the target via the **⚡ WinRM Setup via WMIExec** quick-action card in the sidebar:
+
+```powershell
+# Step 1 — Enable WinRM service + open firewall (runs on target via WMIExec)
+powershell -Command "Enable-PSRemoting -Force -SkipNetworkProfileCheck"
+
+# Step 2 — Allow Basic authentication
+powershell -Command "Set-Item WSMan:\localhost\Service\Auth\Basic $true; Set-Item WSMan:\localhost\Client\Auth\Basic $true"
+
+# Step 3 — Allow unencrypted HTTP (required for NTLM over HTTP)
+powershell -Command "Set-Item WSMan:\localhost\Service\AllowUnencrypted $true; Set-Item WSMan:\localhost\Client\AllowUnencrypted $true"
+```
+
+Or run all three in one shot with the **⚡ All in one** button.
+
+---
+
+## GPO Configuration for Remote Exec
+
+Use Group Policy to pre-configure WinRM and firewall rules on all domain machines at once, instead of running commands per-host.
+
+### Option A — Enable WinRM via GPO (recommended for WinRM method)
+
+In **Group Policy Management Console** (GPMC), create or edit a GPO linked to the target OU (e.g. `Computers > Windows Servers`).
+
+#### 1. Start the WinRM service automatically
+
+`Computer Configuration → Windows Settings → Security Settings → System Services`
+
+- Find **Windows Remote Management (WS-Management)**
+- Set startup mode: **Automatic**
+
+#### 2. Allow WinRM through Windows Firewall
+
+`Computer Configuration → Windows Settings → Security Settings → Windows Defender Firewall → Inbound Rules → New Rule`
+
+| Setting | Value |
+|---------|-------|
+| Rule type | Port |
+| Protocol | TCP |
+| Local port | 5985 (HTTP) and/or 5986 (HTTPS) |
+| Action | Allow the connection |
+| Profile | Domain (+ Private if needed) |
+| Name | `WinRM HTTP (SSH Manager)` |
+
+#### 3. Configure WinRM settings via Registry GPO
+
+`Computer Configuration → Preferences → Windows Settings → Registry`
+
+Add these registry values:
+
+| Hive | Key | Value name | Type | Data |
+|------|-----|-----------|------|------|
+| HKLM | `SOFTWARE\Policies\Microsoft\Windows\WinRM\Service` | `AllowBasic` | DWORD | `1` |
+| HKLM | `SOFTWARE\Policies\Microsoft\Windows\WinRM\Service` | `AllowUnencryptedTraffic` | DWORD | `1` |
+| HKLM | `SOFTWARE\Policies\Microsoft\Windows\WinRM\Client` | `AllowBasic` | DWORD | `1` |
+| HKLM | `SOFTWARE\Policies\Microsoft\Windows\WinRM\Client` | `AllowUnencryptedTraffic` | DWORD | `1` |
+| HKLM | `SOFTWARE\Policies\Microsoft\Windows\WinRM\Client` | `TrustedHosts` | REG_SZ | `*` (or your SSH Manager IP) |
+
+> For production environments, restrict `TrustedHosts` to your SSH Manager server IP instead of `*`.
+
+#### 4. Run gpupdate on targets
+
+```powershell
+gpupdate /force
+```
+
+Or wait for the next Group Policy refresh cycle (~90 minutes by default).
+
+---
+
+### Option B — Allow WMIExec via GPO (required for WMIExec method)
+
+WMIExec uses DCOM over port 135 plus dynamic high ports (49152–65535). Ensure these firewall rules are applied via GPO:
+
+`Computer Configuration → Windows Settings → Security Settings → Windows Defender Firewall → Inbound Rules → New Rule`
+
+| Rule | Protocol | Port | Description |
+|------|----------|------|-------------|
+| WMI (DCOM-In) | TCP | 135 | DCOM endpoint mapper |
+| WMI-In | TCP | Dynamic (49152–65535) | WMI traffic |
+
+These rules already exist by default but are disabled. Enable them via GPO:
+
+`Computer Configuration → Windows Settings → Security Settings → Windows Defender Firewall → Inbound Rules`
+
+Enable the predefined rules:
+- **Windows Management Instrumentation (DCOM-In)**
+- **Windows Management Instrumentation (WMI-In)**
+- **Windows Management Instrumentation (ASync-In)**
+
+Or create a new port rule:
+
+| Setting | Value |
+|---------|-------|
+| Rule type | Port |
+| Protocol | TCP |
+| Local port | 135 |
+| Action | Allow the connection |
+| Profile | Domain |
+| Name | `WMI DCOM (SSH Manager)` |
+
+And a second rule for dynamic ports:
+
+| Setting | Value |
+|---------|-------|
+| Rule type | Port |
+| Protocol | TCP |
+| Local port | 49152-65535 |
+| Action | Allow the connection |
+| Profile | Domain |
+| Name | `WMI Dynamic RPC (SSH Manager)` |
+
+---
+
+### Option C — Allow PsExec via GPO (if using PsExec despite AV risk)
+
+PsExec uses SMB (port 445) and deploys a temporary service binary. These rules are typically already open on domain machines.
+
+`Computer Configuration → Windows Settings → Security Settings → Windows Defender Firewall → Inbound Rules`
+
+Enable the predefined rule:
+- **File and Printer Sharing (SMB-In)** — TCP 445
+
+To suppress Windows Defender alerts for the impacket service binary (not recommended for production), add an exclusion via GPO:
+
+`Computer Configuration → Administrative Templates → Windows Components → Microsoft Defender Antivirus → Exclusions → Process Exclusions`
+
+Add: `%SystemRoot%\psexec*.exe` (or the specific service name pattern `psexec_*.exe`).
+
+> **Recommendation:** Use WMIExec or WinRM instead of PsExec to avoid AV conflicts.
+
+---
+
+## DB Connector
+
+The **DB Connector** page manages database connections and runs queries across PostgreSQL, MySQL, MariaDB, MSSQL, and Oracle databases.
+
+### Connection types
+
+| Mode | Description |
+|------|-------------|
+| **Direct** | Connects straight to the database host:port — no server required |
+| **SSH Tunnel** | Routes the connection through a linked server's SSH session (for databases behind a firewall) |
+
+Each connection can override the tunnel mode at runtime using the **🔒 SSH Tunnel / 🌐 Direct** toggle in the connection header — without editing the saved connection.
+
+### Server filter
+
+The sidebar has a server filter dropdown to narrow the connection list by linked server. Connections with no linked server appear under **Direct**.
+
+### Data Analysis
+
+Each connection has an **Analysis** tab with configurable data quality rules:
+
+| Rule type | What it checks |
+|-----------|---------------|
+| `row_count` | Total rows in a table (with min/max thresholds) |
+| `null_rate` | Percentage of NULLs in a column |
+| `uniqueness` | Percentage of distinct values in a column |
+| `range` | Min/max numeric values |
+| `custom_sql` | Any SQL that returns a single numeric value |
+| `referential` | Orphaned rows across two tables (FK integrity) |
+
+Rules run individually or all at once with **Run All**. Results show ✅ pass / ❌ fail / ⚠️ warning. The **Compare** section runs the same COUNT query on the same table across two connections to verify data consistency between environments (e.g. prod vs. staging).
+
+---
+
 ## SSO Configuration (Optional)
 
 ### Microsoft 365 (Azure AD)
@@ -396,7 +636,8 @@ ssh-manager/
 │   │       ├── modules/       # auth, users, servers, keys, assignments,
 │   │       │                  # rotation, terminal, credentials, security,
 │   │       │                  # logs, settings, telegram, rdp, share,
-│   │       │                  # commands, vault, domain
+│   │       │                  # commands, vault, domain, psexec,
+│   │       │                  # db-connector, db-analysis
 │   │       └── utils/         # vault, ssh, windows-ssh, virt-detect,
 │   │                          # key-ops, ppk, recommendations, alerts, audit
 │   ├── web/                   # React + Vite + Tailwind CSS
@@ -405,7 +646,8 @@ ssh-manager/
 │   │       └── pages/         # Dashboard, Servers, Keys, Assignments,
 │   │                          # Terminal, RemoteDesktop, Logs, Security,
 │   │                          # Users, Settings, Migration, FileManager,
-│   │                          # NetworkDevices, CommandLibrary, Vault, Domain
+│   │                          # NetworkDevices, CommandLibrary, Vault, Domain,
+│   │                          # PsExec (Remote Exec), DbConnector
 │   └── guac-proxy/            # WebSocket ↔ guacd bridge (RDP)
 ├── docker-compose.yml
 ├── docker-compose.prod.yml
@@ -431,7 +673,7 @@ docker compose build web api && docker compose up -d web api
 
 ## Database Migrations
 
-Migrations run automatically on startup. Current schema version: **022**.
+Migrations run automatically on startup. Current schema version: **025**.
 
 | Migration | What it adds |
 |-----------|-------------|
@@ -457,3 +699,6 @@ Migrations run automatically on startup. Current schema version: **022**.
 | `020` | Vault OU grouping |
 | `021` | Vault entry archiving |
 | `022` | `is_domain_controller` flag on servers |
+| `023` | DB Connector: `db_connections` table (server_id nullable, ssh tunnel support) |
+| `024` | `db_connections.server_id` made nullable (direct connections without a linked server) |
+| `025` | DB Analysis: `db_analysis_rules` + `db_analysis_results` tables |

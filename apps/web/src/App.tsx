@@ -20,6 +20,9 @@ import ShareCenter from './pages/ShareCenter'
 import CommandLibrary from './pages/CommandLibrary'
 import Vault from './pages/Vault'
 import Domain from './pages/Domain'
+import PsExec from './pages/PsExec'
+import PsExecShellPopup from './pages/PsExecShellPopup'
+import DbConnector from './pages/DbConnector'
 
 export type Theme = 'github' | 'proxmox'
 
@@ -62,6 +65,8 @@ function App() {
         <Route path="/share-center" element={<ShareCenter />} />
         <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login onLogin={setUser} />} />
         {user ? (
+          <>
+          <Route path="/psexec-shell" element={<PsExecShellPopup />} />
           <Route element={<Layout user={user} onLogout={() => setUser(null)} theme={theme} setTheme={setTheme} />}>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/servers"   element={<Servers />} />
@@ -74,6 +79,8 @@ function App() {
             <Route path="/commands" element={<CommandLibrary />} />
             <Route path="/vault"    element={<Vault />} />
             <Route path="/domain"   element={<Domain />} />
+            <Route path="/psexec"   element={<PsExec />} />
+            <Route path="/db-connector" element={<DbConnector />} />
             <Route path="/logs"      element={<Logs />} />
             <Route path="/migration" element={<Migration />} />
             <Route path="/filemanager" element={<FileManager />} />
@@ -81,6 +88,7 @@ function App() {
             <Route path="/settings"  element={<Settings />} />
             <Route path="*"          element={<Navigate to="/dashboard" replace />} />
           </Route>
+          </>
         ) : (
           <Route path="*" element={<Navigate to="/login" replace />} />
         )}

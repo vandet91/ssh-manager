@@ -86,7 +86,7 @@ export default function Users() {
       </div>
 
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-        <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 620 }}>
+        <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 620 }}>
           <colgroup>
             <col style={{ width: '24%' }} />
             <col style={{ width: '16%' }} />

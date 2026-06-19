@@ -16,6 +16,9 @@ export default function Assignments() {
   const [serverUsers, setServerUsers] = useState<ServerUser[]>([])
   const [loadingServerUsers, setLoadingServerUsers] = useState(false)
   const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null)
+  const [editTarget, setEditTarget] = useState<Assignment | null>(null)
+  const [editForm, setEditForm] = useState({ linux_user: '', can_terminal: true, expires_at: '' })
+  const [editError, setEditError] = useState('')
 
   const load = () => {
     api.get<{ data: Assignment[] } | Assignment[]>('/assignments').then((r) => setAssignments(Array.isArray(r) ? r : (r as { data: Assignment[] }).data ?? [])).catch(() => {})
@@ -51,6 +54,22 @@ export default function Assignments() {
     } catch (err: unknown) { setError((err as Error).message) }
   }
 
+  const openEdit = (a: Assignment) => {
+    setEditTarget(a)
+    setEditForm({ linux_user: a.linux_user, can_terminal: a.can_terminal, expires_at: a.expires_at ? new Date(a.expires_at).toISOString().slice(0, 16) : '' })
+    setEditError('')
+  }
+
+  const saveEdit = async (e: React.FormEvent) => {
+    e.preventDefault(); setEditError('')
+    if (!editTarget) return
+    try {
+      await api.patch(`/assignments/${editTarget.id}`, { ...editForm, expires_at: editForm.expires_at || null })
+      setEditTarget(null)
+      load()
+    } catch (err: unknown) { setEditError((err as Error).message) }
+  }
+
   const revoke = async (id: string) => {
     await api.delete(`/assignments/${id}`)
     setRevokeConfirm(null)
@@ -60,6 +79,7 @@ export default function Assignments() {
   const userMap = Object.fromEntries(users.map((u) => [u.id, u.email]))
   const keyMap = Object.fromEntries(keys.map((k) => [k.id, k.name]))
   const serverMap = Object.fromEntries(servers.map((s) => [s.id, s.name]))
+  const mgmtKeyMap = Object.fromEntries(servers.map((s) => [s.id, s.management_key_id]))
 
   const orphanedCount = assignments.filter(a => a.is_active && (a.server_is_active === false || a.key_is_active === false)).length
 
@@ -79,7 +99,7 @@ export default function Assignments() {
       )}
 
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-        <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 780 }}>
+        <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 780 }}>
           <colgroup>
             <col style={{ width: '16%' }} />  {/* User */}
             <col style={{ width: '13%' }} />  {/* Key */}
@@ -128,9 +148,23 @@ export default function Assignments() {
                 <td className="px-3 py-2"><Badge label={a.is_active ? 'Active' : 'Revoked'} variant={a.is_active ? 'ok' : 'default'} /></td>
                 <td className="px-3 py-2 text-gray-400 text-xs" title={new Date(a.created_at).toLocaleString()}>{new Date(a.created_at).toLocaleDateString()}</td>
                 <td className="px-3 py-2">
-                  {a.is_active && revokeConfirm !== a.id && (
-                    <button onClick={() => setRevokeConfirm(a.id)} className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors" style={{ whiteSpace: 'nowrap' }}>Revoke</button>
-                  )}
+                  {a.is_active && revokeConfirm !== a.id && (() => {
+                    const isMgmtKey = mgmtKeyMap[a.server_id] === a.key_id
+                    return (
+                      <span className="flex gap-1 flex-wrap items-center">
+                        <button onClick={() => openEdit(a)} className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">Edit</button>
+                        <button
+                          disabled={isMgmtKey}
+                          onClick={() => !isMgmtKey && setRevokeConfirm(a.id)}
+                          title={isMgmtKey ? 'Cannot revoke — this is the active management key. Set a different management key first.' : 'Revoke this assignment'}
+                          className={`px-2 py-1 text-xs rounded transition-colors ${isMgmtKey ? 'bg-gray-700/40 text-gray-500 cursor-not-allowed' : 'bg-red-700 hover:bg-red-600 text-white cursor-pointer'}`}
+                          style={{ whiteSpace: 'nowrap' }}>
+                          Revoke
+                        </button>
+                        {isMgmtKey && <span className="text-xs text-gray-500">🔒 Mgmt</span>}
+                      </span>
+                    )
+                  })()}
                   {a.is_active && revokeConfirm === a.id && (
                     <span className="flex gap-1 items-center flex-wrap">
                       <span className="text-yellow-400 text-xs">Sure?</span>
@@ -148,6 +182,32 @@ export default function Assignments() {
           </tbody>
         </table>
       </div>
+
+      {editTarget && (
+        <Modal title="Edit Assignment" onClose={() => setEditTarget(null)}>
+          <form onSubmit={saveEdit} className="space-y-3">
+            {editError && <p className="text-red-400 text-sm">{editError}</p>}
+            <label className="block">
+              <span className="text-sm text-gray-400">Linux User</span>
+              <input value={editForm.linux_user} onChange={e => setEditForm(f => ({ ...f, linux_user: e.target.value }))} required
+                className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-400">Expires (optional)</span>
+              <input type="datetime-local" value={editForm.expires_at} onChange={e => setEditForm(f => ({ ...f, expires_at: e.target.value }))}
+                className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={editForm.can_terminal} onChange={e => setEditForm(f => ({ ...f, can_terminal: e.target.checked }))} className="rounded" />
+              <span className="text-sm text-gray-400">Allow web terminal access</span>
+            </label>
+            <div className="flex gap-3 pt-2">
+              <button type="button" onClick={() => setEditTarget(null)} className="flex-1 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white text-sm transition-colors">Cancel</button>
+              <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Save</button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {showCreate && (
         <Modal title="Assign Key to Server" onClose={() => setShowCreate(false)}>

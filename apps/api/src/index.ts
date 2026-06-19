@@ -31,6 +31,9 @@ import shareRoutes from './modules/share/share.routes'
 import commandRoutes from './modules/commands/commands.routes'
 import vaultRoutes from './modules/vault/vault.routes'
 import domainRoutes from './modules/domain/domain.routes'
+import psexecRoutes from './modules/psexec/psexec.routes'
+import dbConnectorRoutes from './modules/db-connector/db-connector.routes'
+import dbAnalysisRoutes from './modules/db-connector/db-analysis.routes'
 import { startTelegramBot } from './modules/telegram/telegram.service'
 import { startRotationWorker, scheduleRotations } from './jobs/rotation.worker'
 import { FileMigrationProvider, Migrator } from 'kysely'
@@ -143,6 +146,9 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(commandRoutes)
   await fastify.register(vaultRoutes)
   await fastify.register(domainRoutes)
+  await fastify.register(psexecRoutes)
+  await fastify.register(dbConnectorRoutes)
+  await fastify.register(dbAnalysisRoutes)
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))

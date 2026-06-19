@@ -16,6 +16,8 @@ const nav = [
   { to: '/commands',        label: 'Commands',       icon: '📚' },
   { to: '/vault',           label: 'Vault',          icon: '🔐' },
   { to: '/domain',          label: 'Domain',         icon: '🏢' },
+  { to: '/psexec',          label: 'Remote Exec',    icon: '⚡' },
+  { to: '/db-connector',   label: 'DB Connector',   icon: '🗄' },
   { to: '/terminal',        label: 'Terminal',       icon: '⌨' },
   { to: '/remote-desktop',  label: 'Remote Desktop', icon: '🖥' },
   { to: '/logs',        label: 'Logs',        icon: '≡' },

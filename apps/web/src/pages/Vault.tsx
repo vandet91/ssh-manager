@@ -669,7 +669,7 @@ export default function Vault() {
 
   const renderTable = (items: VaultEntry[], groupKey: string) => (
     <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-      <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+      <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 700 }}>
         <colgroup>
           <col style={{ width: '20%' }} />
           <col style={{ width: '10%' }} />
@@ -933,7 +933,7 @@ export default function Vault() {
             )}
             {!archivedLoading && archivedFiltered.length > 0 && (
               <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-                <table className="w-full text-xs" style={{ tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 700 }}>
                   <colgroup>
                     <col style={{ width: '3%' }} />
                     <col style={{ width: '20%' }} />

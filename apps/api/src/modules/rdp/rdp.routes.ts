@@ -6,6 +6,7 @@ import { db } from '../../db/client'
 import { requireAuth, requirePermission } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
+import { withServerSsh } from '../../utils/server-ssh'
 
 // Must match the key used in guac-proxy/index.js (AES-256 = 32 bytes)
 function getGuacKey(): Buffer {
@@ -231,21 +232,71 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
     const vk = getVaultKey()
     const rdpSuffix = body.use_for_ssh ? 'RDP+SSH' : 'RDP'
     const autoLabel = body.domain ? `${body.domain}\\${body.username} (${rdpSuffix})` : `${body.username} (${rdpSuffix})`
-    const updates: Record<string, unknown> = {
-      label:            body.label || autoLabel,
-      service_username: body.username,
-      notes:            body.domain ? `Domain: ${body.domain}` : null,
-    }
-    if (body.use_for_ssh !== undefined) {
-      updates.category   = body.use_for_ssh ? 'windows' : 'other'
-      updates.linux_user = body.use_for_ssh ? body.username : null
-    }
-    if (body.password) updates.password_enc = encryptSecret(body.password, vk)
+    const category = body.use_for_ssh !== undefined ? (body.use_for_ssh ? 'windows' : 'other') : cred.category
+    const linuxUser = body.use_for_ssh !== undefined ? (body.use_for_ssh ? body.username : null) : cred.linux_user
 
-    await (db as any).updateTable('server_credentials')
-      .set(updates)
-      .where('id', '=', credId)
-      .execute()
+    // Check if password actually changed
+    const currentPassword = decryptSecret(cred.password_enc, vk)
+    const passwordChanged = body.password !== undefined && body.password !== currentPassword
+
+    if (passwordChanged) {
+      // ── Domain credential: sync to AD first — abort if it fails ─────────
+      if (body.domain) {
+        const allServers = await (db as any)
+          .selectFrom('servers').select(['id', 'tags'])
+          .where('os_type', '=', 'windows').execute()
+
+        const dc = allServers.find((s: any) => {
+          const dn: string | null = s.tags?.domain_name ?? null
+          if (!dn) return false
+          const netbios = dn.includes('.') ? dn.split('.')[0] : dn
+          return dn.toLowerCase() === body.domain!.toLowerCase() ||
+                 netbios.toLowerCase() === body.domain!.toLowerCase()
+        })
+
+        if (dc) {
+          const { sshExec } = await import('../../utils/ssh')
+          const psCmd = [
+            `$ProgressPreference = 'SilentlyContinue'`,
+            `$ErrorActionPreference = 'Stop'`,
+            `$pwd = ConvertTo-SecureString ${JSON.stringify(body.password)} -AsPlainText -Force`,
+            `Set-ADAccountPassword -Identity '${body.username}' -NewPassword $pwd -Reset`,
+          ].join('\n')
+          const encoded = Buffer.from(psCmd, 'utf16le').toString('base64')
+          await withServerSsh(dc.id, async (client) => {
+            const r = await sshExec(client, `powershell -NonInteractive -EncodedCommand ${encoded}`)
+            if (r.code !== 0 && r.stderr) throw new Error(r.stderr.slice(0, 200))
+          })
+        }
+      }
+
+      // ── Archive old, create new ───────────────────────────────────────────
+      await (db as any).updateTable('server_credentials')
+        .set({ is_archived: true, archived_at: new Date(), archived_reason: 'updated', updated_at: new Date() })
+        .where('id', '=', credId).execute()
+
+      await (db as any).insertInto('server_credentials').values({
+        server_id:        id,
+        category,
+        linux_user:       linuxUser,
+        service_username: body.username,
+        label:            body.label || autoLabel,
+        notes:            body.domain ? `Domain: ${body.domain}` : null,
+        password_enc:     encryptSecret(body.password!, vk),
+        created_by:       req.session.user!.id,
+        predecessor_id:   credId,
+      }).execute()
+    } else {
+      // ── No password change (or same password): update in-place ───────────
+      await (db as any).updateTable('server_credentials').set({
+        label:            body.label || autoLabel,
+        service_username: body.username,
+        notes:            body.domain ? `Domain: ${body.domain}` : null,
+        category,
+        linux_user:       linuxUser,
+        updated_at:       new Date(),
+      }).where('id', '=', credId).execute()
+    }
 
     await writeAuditLog({
       userId: req.session.user!.id, userEmail: req.session.user!.email,

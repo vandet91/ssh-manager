@@ -610,18 +610,52 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // GET /servers/:id/fs/download?path= — stream file to browser
+  // GET /servers/:id/fs/download?path= — stream file or folder to browser
+  // Files → raw download; folders → tar.gz archive
   fastify.get('/servers/:id/fs/download', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
-    const { path: filePath } = z.object({ path: z.string().min(1) }).parse(req.query)
+    const { path: targetPath } = z.object({ path: z.string().min(1) }).parse(req.query)
     try {
-      const buf = await withServerSsh(id, async (client) => {
-        const sftp = await getSftp(client)
-        return sftpReadFile(sftp, filePath)
+      const name = path.posix.basename(targetPath)
+      const { isDir, buf } = await withServerSsh(id, async (client) => {
+        const safe = targetPath.replace(/'/g, "'\\''")
+        const { stdout } = await exec(client, `[ -d '${safe}' ] && echo dir || echo file`)
+        const isDir = stdout.trim() === 'dir'
+        if (isDir) {
+          // Stream tar.gz from the server
+          const parent = path.posix.dirname(targetPath).replace(/'/g, "'\\''")
+          const base   = path.posix.basename(targetPath).replace(/'/g, "'\\''")
+          const tarBuf = await new Promise<Buffer>((resolve, reject) => {
+            client.exec(`tar -czf - -C '${parent}' '${base}'`, { pty: false }, (err, stream) => {
+              if (err) return reject(err)
+              const chunks: Buffer[] = []
+              stream.on('data', (d: Buffer) => chunks.push(d))
+              stream.stderr.on('data', () => {})
+              stream.on('close', () => resolve(Buffer.concat(chunks)))
+              stream.on('error', reject)
+            })
+          })
+          return { isDir, buf: tarBuf }
+        } else {
+          const sftp = await getSftp(client)
+          return { isDir, buf: await sftpReadFile(sftp, targetPath) }
+        }
       })
-      const filename = path.posix.basename(filePath)
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'filemanager.download', resource: 'file', serverId: id,
+        details: { path: targetPath }, request: req,
+      })
+
+      if (isDir) {
+        return reply
+          .header('Content-Disposition', `attachment; filename="${name}.tar.gz"`)
+          .header('Content-Type', 'application/gzip')
+          .send(buf)
+      }
       return reply
-        .header('Content-Disposition', `attachment; filename="${filename}"`)
+        .header('Content-Disposition', `attachment; filename="${name}"`)
         .header('Content-Type', 'application/octet-stream')
         .send(buf)
     } catch (err) {

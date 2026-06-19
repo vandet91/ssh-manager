@@ -152,6 +152,63 @@ export default function Settings() {
   const [testingEmail, setTestingEmail] = useState(false)
   const [testMsg, setTestMsg] = useState('')
 
+  // Vault export/import
+  const [vaultPassphrase, setVaultPassphrase] = useState('')
+  const [showVaultPass, setShowVaultPass] = useState(false)
+  const [vaultExporting, setVaultExporting] = useState(false)
+  const [vaultExportMsg, setVaultExportMsg] = useState('')
+  const [vaultImportFile, setVaultImportFile] = useState<File | null>(null)
+  const [vaultImportPass, setVaultImportPass] = useState('')
+  const [showImportPass, setShowImportPass] = useState(false)
+  const [vaultImportMode, setVaultImportMode] = useState<'skip' | 'overwrite'>('skip')
+  const [vaultImporting, setVaultImporting] = useState(false)
+  const [vaultImportMsg, setVaultImportMsg] = useState('')
+
+  const exportVault = async () => {
+    if (!vaultPassphrase || vaultPassphrase.length < 8) {
+      setVaultExportMsg('✗ Passphrase must be at least 8 characters')
+      return
+    }
+    setVaultExporting(true); setVaultExportMsg('')
+    try {
+      const params = new URLSearchParams({ passphrase: vaultPassphrase })
+      const res = await fetch(`/api/settings/vault/export?${params}`, { credentials: 'include' })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error ?? 'Export failed') }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `vault-export-${new Date().toISOString().slice(0,10)}.pvd`
+      a.click()
+      URL.revokeObjectURL(url)
+      setVaultExportMsg('✓ Export downloaded')
+      setTimeout(() => setVaultExportMsg(''), 4000)
+    } catch (err: unknown) {
+      setVaultExportMsg('✗ ' + (err as Error).message)
+    } finally {
+      setVaultExporting(false)
+    }
+  }
+
+  const importVault = async () => {
+    if (!vaultImportFile || !vaultImportPass) return
+    setVaultImporting(true); setVaultImportMsg('')
+    try {
+      const text = await vaultImportFile.text()
+      const res = await api.post<{ imported: number; skipped: number }>('/settings/vault/import', {
+        passphrase: vaultImportPass,
+        data: text,
+        mode: vaultImportMode,
+      })
+      setVaultImportMsg(`✓ Imported ${res.imported} credential(s), skipped ${res.skipped}`)
+      setTimeout(() => setVaultImportMsg(''), 6000)
+    } catch (err: unknown) {
+      setVaultImportMsg('✗ ' + (err as Error).message)
+    } finally {
+      setVaultImporting(false)
+    }
+  }
+
   // AI Provider keys
   type AiKeys = { claude: string; openai: string; gemini: string; deepseek: string; default_provider: string; default_model: string }
   const [aiKeys, setAiKeys] = useState<AiKeys>({ claude: '', openai: '', gemini: '', deepseek: '', default_provider: 'claude', default_model: '' })
@@ -774,6 +831,95 @@ export default function Settings() {
 
             </div>
           </div>
+
+        {/* ── Vault Export / Import ────────────────────────────────────────── */}
+        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+          <div style={{ background: 'var(--card-header-bg)', borderBottom: '1px solid var(--card-border)', padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 16 }}>🗄️</span>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-heading)' }}>Vault Export / Import</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                Back up all credentials to an AES-256 encrypted file, or restore from one
+              </div>
+            </div>
+          </div>
+          <div style={{ padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
+
+            {/* Export */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-weak)', paddingBottom: 8 }}>
+                Export
+              </div>
+              <div>
+                <label style={labelStyle}>Encryption Passphrase</label>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Min 8 characters. You'll need this to import the file.</p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    type={showVaultPass ? 'text' : 'password'}
+                    value={vaultPassphrase}
+                    onChange={e => setVaultPassphrase(e.target.value)}
+                    placeholder="Strong passphrase…"
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button type="button" onClick={() => setShowVaultPass(v => !v)}
+                    style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>
+                    {showVaultPass ? '🙈' : '👁'}
+                  </button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button type="button" onClick={exportVault} disabled={vaultExporting || !vaultPassphrase}
+                  className="btn-primary" style={{ padding: '8px 20px', opacity: !vaultPassphrase ? 0.5 : 1 }}>
+                  {vaultExporting ? 'Exporting…' : '⬇ Download Export'}
+                </button>
+                {vaultExportMsg && <span style={{ fontSize: 13, color: vaultExportMsg.startsWith('✓') ? 'var(--success)' : 'var(--error)' }}>{vaultExportMsg}</span>}
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
+                Downloads a <code style={{ fontFamily: 'monospace' }}>.pvd</code> file containing all active credentials encrypted with your passphrase.
+              </p>
+            </div>
+
+            {/* Import */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-weak)', paddingBottom: 8 }}>
+                Import
+              </div>
+              <div>
+                <label style={labelStyle}>Export File (.pvd)</label>
+                <input type="file" accept=".pvd" onChange={e => setVaultImportFile(e.target.files?.[0] ?? null)}
+                  style={{ ...inputStyle, padding: '5px 10px', cursor: 'pointer' }} />
+              </div>
+              <div>
+                <label style={labelStyle}>Passphrase</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input type={showImportPass ? 'text' : 'password'} value={vaultImportPass}
+                    onChange={e => setVaultImportPass(e.target.value)}
+                    placeholder="Passphrase used during export"
+                    style={{ ...inputStyle, flex: 1 }} />
+                  <button type="button" onClick={() => setShowImportPass(v => !v)}
+                    style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>
+                    {showImportPass ? '🙈' : '👁'}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label style={labelStyle}>If credential already exists</label>
+                <select value={vaultImportMode} onChange={e => setVaultImportMode(e.target.value as 'skip' | 'overwrite')} style={{ ...inputStyle, width: 'auto' }}>
+                  <option value="skip">Skip (keep existing)</option>
+                  <option value="overwrite">Add anyway (creates duplicate)</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button type="button" onClick={importVault} disabled={vaultImporting || !vaultImportFile || !vaultImportPass}
+                  className="btn-primary" style={{ padding: '8px 20px', opacity: (!vaultImportFile || !vaultImportPass) ? 0.5 : 1 }}>
+                  {vaultImporting ? 'Importing…' : '⬆ Import'}
+                </button>
+                {vaultImportMsg && <span style={{ fontSize: 13, color: vaultImportMsg.startsWith('✓') ? 'var(--success)' : 'var(--error)' }}>{vaultImportMsg}</span>}
+              </div>
+            </div>
+
+          </div>
+        </div>
 
         {/* ── AI Provider Keys ─────────────────────────────────────────────── */}
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 12, overflow: 'hidden' }}>

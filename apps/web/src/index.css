@@ -271,6 +271,21 @@
     box-shadow: 0 1px 3px rgba(0,0,0,0.2);
   }
 
+  .db-input {
+    width: 100%;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--input-text);
+    font-size: 0.875rem;
+    outline: none;
+  }
+  .db-input:focus {
+    border-color: var(--accent-hex);
+    box-shadow: 0 0 0 3px rgba(var(--accent) / 0.2);
+  }
+
   input:focus, select:focus, textarea:focus {
     outline: none;
     border-color: var(--accent-hex) !important;

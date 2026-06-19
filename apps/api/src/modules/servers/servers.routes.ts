@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { db } from '../../db/client'
 import { requireAuth, requirePermission } from '../../middleware/auth'
 import { writeAuditLog } from '../../utils/audit'
-import { getRemoteHostFingerprint, withSsh, connectWithFallback } from '../../utils/ssh'
+import { getRemoteHostFingerprint, withSsh, connectSsh, connectWithFallback } from '../../utils/ssh'
 import { withServerSsh } from '../../utils/server-ssh'
 import { decryptSecret, encryptSecret, getVaultKey } from '../../utils/vault'
 import { generateKeyPair } from '../../utils/keygen'
@@ -35,7 +35,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       limit: z.coerce.number().default(200),
     }).parse(req.query)
 
-    let qb = db.selectFrom('servers').selectAll().where('is_active', '=', true)
+    let qb = db.selectFrom('servers').selectAll().where('is_active', '=', true).orderBy('name', 'asc')
     if (query.environment) qb = qb.where('environment', '=', query.environment as 'production')
     if (query.device_category === 'server') {
       qb = qb.where('os_type', 'in', ['linux', 'windows'])
@@ -367,7 +367,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
             sshExec(client, 'who 2>/dev/null || echo ""'),
             sshExec(client, 'uptime -p 2>/dev/null || uptime 2>/dev/null || echo ""'),
             sshExec(client, 'free -h 2>/dev/null | grep Mem || echo ""'),
-            sshExec(client, 'cat /root/.ssh/authorized_keys 2>/dev/null || echo ""'),
+            sshExec(client, 'cat /root/.ssh/authorized_keys 2>/dev/null || sudo cat /root/.ssh/authorized_keys 2>/dev/null || echo ""'),
           ])
 
           // Parse /etc/os-release
@@ -394,7 +394,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
           // Try to read authorized_keys for non-root users
           for (const u of users.filter((u) => u.uid > 0 && u.home && u.home !== '/root')) {
             try {
-              const akOut = await sshExec(client, `sudo cat ${u.home}/.ssh/authorized_keys 2>/dev/null || echo ""`)
+              const akOut = await sshExec(client, `cat ${u.home}/.ssh/authorized_keys 2>/dev/null || sudo cat ${u.home}/.ssh/authorized_keys 2>/dev/null || echo ""`)
               for (const line of akOut.stdout.split('\n').filter(Boolean)) {
                 if (line.startsWith('#')) continue
                 rawLines.push({ linux_user: u.username, line: line.trim() })
@@ -736,7 +736,57 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     const { pushKeyToServer } = await import('../../utils/key-ops')
 
     try {
-      await pushKeyToServer(id, username, sshKey.public_key)
+      // For root on Linux: use su/sudo elevation via the root vault credential
+      // since the management user likely can't write to /root/.ssh directly
+      const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+      if (server && username === 'root' && server.os_type !== 'windows') {
+        const rootCred = await db.selectFrom('server_credentials').selectAll()
+          .where('server_id', '=', id).where('linux_user', '=', 'root')
+          .where('category', '=', 'linux').where('is_archived', '=', false)
+          .orderBy('created_at', 'desc').executeTakeFirst()
+
+        if (rootCred) {
+          const rootPassword = decryptSecret(rootCred.password_enc, getVaultKey())
+          const pubKey = sshKey.public_key.trim()
+          const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+
+          await withServerSsh(id, async (client) => {
+            const runAsRoot = (cmd: string) => new Promise<void>((resolve, reject) => {
+              const trySudo = () => new Promise<boolean>((res) => {
+                client.exec(`sudo -S sh -c ${sq(cmd)}`, { pty: false }, (err: Error | undefined, stream: any) => {
+                  if (err) return res(false)
+                  stream.stderr?.on('data', () => {})
+                  stream.on('data', () => {})
+                  stream.write(rootPassword + '\n')
+                  stream.end()
+                  stream.on('close', (code: number) => res(code === 0))
+                })
+              })
+              const trySu = () => new Promise<boolean>((res) => {
+                client.exec(`su -c ${sq(cmd)} root`, { pty: true }, (err: Error | undefined, stream: any) => {
+                  if (err) return res(false)
+                  let sent = false
+                  stream.on('data', (d: Buffer) => {
+                    if (!sent && /[Pp]assword/i.test(d.toString())) { sent = true; stream.write(rootPassword + '\n') }
+                  })
+                  stream.on('close', (code: number) => res(code === 0))
+                })
+              })
+              trySudo().then(ok => ok ? resolve() : trySu().then(ok2 => ok2 ? resolve() : reject(new Error('Could not elevate to root'))))
+            })
+
+            await runAsRoot('mkdir -p /root/.ssh && chmod 700 /root/.ssh')
+            await runAsRoot(`touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys`)
+            // Append only if not already present
+            await runAsRoot(`grep -qxF ${sq(pubKey)} /root/.ssh/authorized_keys || echo ${sq(pubKey)} >> /root/.ssh/authorized_keys`)
+          })
+        } else {
+          // No root vault credential — fall back to standard push (works if management user is root)
+          await pushKeyToServer(id, username, sshKey.public_key)
+        }
+      } else {
+        await pushKeyToServer(id, username, sshKey.public_key)
+      }
 
       // Create or reactivate a key_assignment so the user can access this linux_user via terminal.
       // Use the key owner (created_by) as the assignment's user_id; fall back to the requesting admin.
@@ -785,7 +835,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   // PATCH /servers/:id/management-key — promote an active SSH key to be the management key
   fastify.patch('/servers/:id/management-key', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
-    const body = z.object({ key_id: z.string().uuid() }).parse(req.body)
+    const body = z.object({ key_id: z.string().uuid(), linux_user: z.string().optional() }).parse(req.body)
 
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -794,7 +844,11 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     if (!key) return reply.code(400).send({ error: 'Key not found or not active' })
 
     await db.updateTable('servers')
-      .set({ management_key_id: body.key_id, updated_at: new Date() })
+      .set({
+        management_key_id: body.key_id,
+        ...(body.linux_user ? { management_linux_user: body.linux_user } : {}),
+        updated_at: new Date(),
+      })
       .where('id', '=', id)
       .execute()
 
@@ -1010,6 +1064,357 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       return result
     } catch (err: unknown) {
       return reply.code(500).send({ error: 'AI analysis failed', details: (err as Error).message })
+    }
+  })
+
+  // POST /servers/:id/enable-root-ssh
+  // Connects via management SSH key as normal user, elevates to root using the stored vault
+  // credential (linux_user='root'), pushes the management key to /root/.ssh/authorized_keys,
+  // and ensures PermitRootLogin allows key-based login.
+  fastify.post('/servers/:id/enable-root-ssh', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    try {
+      const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+      if (!server) return reply.code(404).send({ error: 'Server not found' })
+
+      // Look up stored root vault credential
+      const rootCred = await db.selectFrom('server_credentials')
+        .selectAll()
+        .where('server_id', '=', id)
+        .where('linux_user', '=', 'root')
+        .where('category', '=', 'linux')
+        .where('is_archived', '=', false)
+        .orderBy('created_at', 'desc')
+        .executeTakeFirst()
+
+      if (!rootCred) {
+        return reply.code(400).send({
+          error: 'No root vault credential found. Add a Linux credential with username "root" and the root password in the Vault tab first.',
+        })
+      }
+
+      const vaultKey = getVaultKey()
+      const rootPassword = decryptSecret(rootCred.password_enc, vaultKey)
+
+      const mgmtKey = await db.selectFrom('ssh_keys').selectAll()
+        .where('id', '=', server.management_key_id!).executeTakeFirst()
+      if (!mgmtKey) return reply.code(400).send({ error: 'Management key not found' })
+
+      const pubKey = mgmtKey.public_key.trim()
+      const steps: string[] = []
+
+      // Shell-escape a string for single-quoted shell argument
+      const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+
+      await withServerSsh(id, async (client) => {
+        steps.push(`Connected as ${server.management_linux_user} via management SSH key`)
+
+        // Run a command as root. Tries sudo -S first (Ubuntu/sudoers), falls back to su with PTY (Debian).
+        const runAsRoot = (cmd: string): Promise<{ out: string; code: number }> => {
+          const trySudo = () => new Promise<{ out: string; code: number }>((resolve, reject) => {
+            client.exec(`sudo -S sh -c ${sq(cmd)}`, { pty: false }, (err: Error | undefined, stream: any) => {
+              if (err) return reject(err)
+              let out = ''
+              stream.stderr?.on('data', () => {}) // discard sudo password prompt on stderr
+              stream.on('data', (d: Buffer) => { out += d.toString() })
+              // Write password to sudo's stdin
+              stream.write(rootPassword + '\n')
+              stream.end()
+              stream.on('close', (code: number) => {
+                if (code !== 0) return reject(new Error(`sudo exit ${code}`))
+                resolve({ out: out.trim(), code })
+              })
+            })
+          })
+
+          const trySu = () => new Promise<{ out: string; code: number }>((resolve, reject) => {
+            // Use PTY so su can read the password from the terminal
+            client.exec(`su -c ${sq(cmd)} root`, { pty: true }, (err: Error | undefined, stream: any) => {
+              if (err) return reject(err)
+              let out = '', passwordSent = false
+              stream.on('data', (d: Buffer) => {
+                const text = d.toString()
+                if (!passwordSent && /[Pp]assword/.test(text)) {
+                  passwordSent = true
+                  stream.write(rootPassword + '\n')
+                  return
+                }
+                // Filter out terminal echo / control sequences
+                if (passwordSent) out += text.replace(/\r/g, '')
+              })
+              stream.on('close', (code: number) => {
+                if (code !== 0) return reject(new Error(`su exit ${code}: ${out.trim()}`))
+                resolve({ out: out.trim(), code })
+              })
+            })
+          })
+
+          return trySudo().catch(() => trySu())
+        }
+
+        // Test elevation works
+        const { code: testCode } = await runAsRoot('true').catch(() => ({ code: 1 }))
+        if (testCode !== 0) throw new Error('Could not elevate to root — check the root password in the Vault')
+        steps.push('Elevated to root (via sudo or su)')
+
+        // Ensure /root/.ssh with correct permissions
+        await runAsRoot('mkdir -p /root/.ssh && chmod 700 /root/.ssh')
+        steps.push('Ensured /root/.ssh exists (mode 700)')
+
+        // Append key if not already present
+        const { out: existing } = await runAsRoot('cat /root/.ssh/authorized_keys 2>/dev/null || true')
+        const keyBody = pubKey.trim().split(' ').slice(0, 2).join(' ')
+        if (existing.includes(keyBody)) {
+          steps.push('Management SSH key already in authorized_keys — skipped')
+        } else {
+          await runAsRoot(`echo ${sq(pubKey)} >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys`)
+          steps.push('Management SSH key added to /root/.ssh/authorized_keys')
+        }
+
+        // Ensure PermitRootLogin allows key-based login
+        const { out: permitLine } = await runAsRoot(`grep -i PermitRootLogin /etc/ssh/sshd_config | grep -v '^#' || true`)
+        const permitVal = permitLine.trim().toLowerCase()
+        if (permitVal === '' || permitVal.includes('no')) {
+          // Replace or append
+          const { out: grepOut } = await runAsRoot(`grep -ic PermitRootLogin /etc/ssh/sshd_config || true`)
+          if (parseInt(grepOut.trim()) > 0) {
+            await runAsRoot(`sed -i 's/^[[:space:]#]*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config`)
+          } else {
+            await runAsRoot(`echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config`)
+          }
+          await runAsRoot('systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || service sshd reload 2>/dev/null || true')
+          steps.push('Set PermitRootLogin prohibit-password and reloaded sshd')
+        } else {
+          steps.push(`PermitRootLogin already allows key login: ${permitLine.trim()}`)
+        }
+      })
+
+      // Create key_assignment for root so the terminal can connect as root
+      const mgmtKeyForAssign = await db.selectFrom('ssh_keys').selectAll()
+        .where('id', '=', server.management_key_id!).executeTakeFirst()
+      if (mgmtKeyForAssign) {
+        const assigneeId = mgmtKeyForAssign.created_by ?? req.session.user!.id
+        const existing = await db.selectFrom('key_assignments').selectAll()
+          .where('server_id', '=', id).where('linux_user', '=', 'root')
+          .where('key_id', '=', server.management_key_id!).where('user_id', '=', assigneeId)
+          .executeTakeFirst()
+        if (existing) {
+          if (!existing.is_active) {
+            await db.updateTable('key_assignments').set({ is_active: true }).where('id', '=', existing.id).execute()
+          }
+        } else {
+          await db.insertInto('key_assignments').values({
+            user_id: assigneeId,
+            key_id: server.management_key_id!,
+            server_id: id,
+            linux_user: 'root',
+            can_terminal: true,
+            is_active: true,
+            granted_by: req.session.user!.id,
+          }).execute()
+        }
+        steps.push('key_assignment created for root (terminal access enabled)')
+      }
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'server.enable_root_ssh', resource: 'server', resourceId: id,
+        details: { steps }, request: req,
+      })
+      return { ok: true, steps }
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: (err as Error).message })
+    }
+  })
+
+  // GET /servers/:id/sshd-status — read PermitRootLogin + root lock status via management SSH
+  fastify.get('/servers/:id/sshd-status', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    try {
+      const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+      if (!server) return reply.code(404).send({ error: 'Server not found' })
+
+      const { sshExec } = await import('../../utils/ssh')
+      let permitRootLogin = 'unknown'
+      let rootLocked = false
+
+      await withServerSsh(id, async (client) => {
+        // Read PermitRootLogin from sshd_config (active value, not commented)
+        const { stdout: permitOut } = await sshExec(client,
+          `grep -iE '^[[:space:]]*PermitRootLogin' /etc/ssh/sshd_config 2>/dev/null | tail -1 || echo ''`)
+        const match = permitOut.trim().match(/PermitRootLogin\s+(\S+)/i)
+        permitRootLogin = match ? match[1].toLowerCase() : 'prohibit-password' // default when not set
+
+        // Check if root has NO password at all (Ubuntu default: field is just '!' or '*')
+        // A field like '!$6$...' means locked-for-SSH but password exists — root can still be su'd to
+        const { stdout: shadowOut } = await sshExec(client,
+          `sudo getent shadow root 2>/dev/null || getent shadow root 2>/dev/null || true`)
+        if (shadowOut.trim()) {
+          const fields = shadowOut.trim().split(':')
+          const pwField = fields[1] ?? ''
+          // Only truly no-password: bare '!', '!!', or '*' — NOT '!$6$...' (has password, just locked)
+          rootLocked = pwField === '!' || pwField === '!!' || pwField === '*' || pwField === ''
+        }
+      })
+
+      return { permitRootLogin, rootLocked }
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: (err as Error).message })
+    }
+  })
+
+  // POST /servers/:id/root/activate — Ubuntu: unlock root by setting a password via sudo passwd root
+  fastify.post('/servers/:id/root/activate', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { root_password } = z.object({ root_password: z.string().min(6) }).parse(req.body)
+    try {
+      const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+      if (!server) return reply.code(404).send({ error: 'Server not found' })
+
+      const steps: string[] = []
+
+      await withServerSsh(id, async (client) => {
+        steps.push(`Connected as ${server.management_linux_user} via management SSH key`)
+
+        // Run sudo passwd root via PTY — sends the new password twice when prompted
+        await new Promise<void>((resolve, reject) => {
+          client.exec('sudo passwd root', { pty: true }, (err: Error | undefined, stream: any) => {
+            if (err) return reject(err)
+            let out = '', promptCount = 0
+            stream.on('data', (d: Buffer) => {
+              const text = d.toString()
+              out += text
+              // passwd prompts "New password:" then "Retype new password:"
+              if (/[Pp]assword:/i.test(text) && promptCount < 2) {
+                promptCount++
+                stream.write(root_password + '\n')
+              }
+            })
+            stream.on('close', (code: number) => {
+              if (code !== 0) return reject(new Error(`passwd failed (exit ${code}): ${out.trim()}`))
+              resolve()
+            })
+          })
+        })
+        steps.push('Root password set via sudo passwd root')
+
+        // Ensure PermitRootLogin is not 'no' so password login is possible
+        const { sshExec } = await import('../../utils/ssh')
+        const { stdout: permitOut } = await sshExec(client,
+          `grep -iE '^[[:space:]]*PermitRootLogin' /etc/ssh/sshd_config 2>/dev/null | tail -1 || echo ''`)
+        const match = permitOut.trim().match(/PermitRootLogin\s+(\S+)/i)
+        const currentVal = match ? match[1].toLowerCase() : 'prohibit-password'
+        if (currentVal === 'no') {
+          steps.push(`PermitRootLogin is currently 'no' — you will need to set it to 'yes' or 'prohibit-password' to use root`)
+        } else {
+          steps.push(`PermitRootLogin is: ${currentVal}`)
+        }
+      })
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'server.root_activated', resource: 'server', resourceId: id,
+        details: { steps }, request: req,
+      })
+      return { ok: true, steps }
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: (err as Error).message })
+    }
+  })
+
+  // POST /servers/:id/root/permit-login — set PermitRootLogin value via root elevation
+  fastify.post('/servers/:id/root/permit-login', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { value } = z.object({ value: z.enum(['yes', 'prohibit-password', 'no']) }).parse(req.body)
+    try {
+      const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+      if (!server) return reply.code(404).send({ error: 'Server not found' })
+
+      // Get root vault credential for elevation
+      const rootCred = await db.selectFrom('server_credentials').selectAll()
+        .where('server_id', '=', id).where('linux_user', '=', 'root')
+        .where('category', '=', 'linux').where('is_archived', '=', false)
+        .orderBy('created_at', 'desc').executeTakeFirst()
+
+      if (!rootCred) {
+        return reply.code(400).send({
+          error: 'No root vault credential found. Add a Linux credential with username "root" first.',
+        })
+      }
+
+      const vaultKey = getVaultKey()
+      const rootPassword = decryptSecret(rootCred.password_enc, vaultKey)
+      const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+      const steps: string[] = []
+
+      await withServerSsh(id, async (client) => {
+        steps.push(`Connected as ${server.management_linux_user} via management SSH key`)
+
+        const runAsRoot = (cmd: string): Promise<{ out: string; code: number }> => {
+          const trySudo = () => new Promise<{ out: string; code: number }>((resolve, reject) => {
+            client.exec(`sudo -S sh -c ${sq(cmd)}`, { pty: false }, (err: Error | undefined, stream: any) => {
+              if (err) return reject(err)
+              let out = ''
+              stream.stderr?.on('data', () => {})
+              stream.on('data', (d: Buffer) => { out += d.toString() })
+              stream.write(rootPassword + '\n')
+              stream.end()
+              stream.on('close', (code: number) => {
+                if (code !== 0) return reject(new Error(`sudo exit ${code}`))
+                resolve({ out: out.trim(), code })
+              })
+            })
+          })
+
+          const trySu = () => new Promise<{ out: string; code: number }>((resolve, reject) => {
+            client.exec(`su -c ${sq(cmd)} root`, { pty: true }, (err: Error | undefined, stream: any) => {
+              if (err) return reject(err)
+              let out = '', passwordSent = false
+              stream.on('data', (d: Buffer) => {
+                const text = d.toString()
+                if (!passwordSent && /[Pp]assword/.test(text)) {
+                  passwordSent = true
+                  stream.write(rootPassword + '\n')
+                  return
+                }
+                if (passwordSent) out += text.replace(/\r/g, '')
+              })
+              stream.on('close', (code: number) => {
+                if (code !== 0) return reject(new Error(`su exit ${code}: ${out.trim()}`))
+                resolve({ out: out.trim(), code })
+              })
+            })
+          })
+
+          return trySudo().catch(() => trySu())
+        }
+
+        // Test elevation
+        const { code: testCode } = await runAsRoot('true').catch(() => ({ code: 1 }))
+        if (testCode !== 0) throw new Error('Could not elevate to root — check the root password in the Vault')
+        steps.push('Elevated to root')
+
+        // Check if PermitRootLogin line exists
+        const { out: grepCount } = await runAsRoot(`grep -ic PermitRootLogin /etc/ssh/sshd_config || true`)
+        if (parseInt(grepCount.trim()) > 0) {
+          await runAsRoot(`sed -i 's/^[[:space:]#]*PermitRootLogin.*/PermitRootLogin ${value}/' /etc/ssh/sshd_config`)
+        } else {
+          await runAsRoot(`echo 'PermitRootLogin ${value}' >> /etc/ssh/sshd_config`)
+        }
+        steps.push(`Set PermitRootLogin ${value} in /etc/ssh/sshd_config`)
+
+        await runAsRoot('systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || service sshd reload 2>/dev/null || true')
+        steps.push('Reloaded sshd')
+      })
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'server.permit_root_login_changed', resource: 'server', resourceId: id,
+        details: { value, steps }, request: req,
+      })
+      return { ok: true, steps, value }
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: (err as Error).message })
     }
   })
 }

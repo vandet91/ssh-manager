@@ -122,6 +122,48 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
         }
       }
 
+      // ── If domain credential, sync new password to Active Directory ──────────
+      const domainCredMatch = cred.linux_user?.match(/^(.+)[\\\/](.+)$/)
+      if (domainCredMatch) {
+        const domainPart = domainCredMatch[1]   // e.g. "pvd.local" or "pvd"
+        const samAccount = domainCredMatch[2]   // e.g. "administrator"
+
+        // Find DC whose domain_name tag matches (exact or netbios prefix)
+        const allServers = await (db as any)
+          .selectFrom('servers')
+          .select(['id', 'tags'])
+          .where('os_type', '=', 'windows')
+          .execute()
+
+        const dc = allServers.find((s: any) => {
+          const dn: string | null = s.tags?.domain_name ?? null
+          if (!dn) return false
+          const netbios = dn.includes('.') ? dn.split('.')[0] : dn
+          return dn.toLowerCase() === domainPart.toLowerCase() ||
+                 netbios.toLowerCase() === domainPart.toLowerCase()
+        })
+
+        if (dc) {
+          try {
+            const { sshExec } = await import('../../utils/ssh')
+            const psCmd = [
+              `$ProgressPreference = 'SilentlyContinue'`,
+              `$ErrorActionPreference = 'Stop'`,
+              `$pwd = ConvertTo-SecureString ${JSON.stringify(body.password)} -AsPlainText -Force`,
+              `Set-ADAccountPassword -Identity '${samAccount}' -NewPassword $pwd -Reset`,
+            ].join('\n')
+            const encoded = Buffer.from(psCmd, 'utf16le').toString('base64')
+            await withServerSsh(dc.id, async (client) => {
+              const r = await sshExec(client, `powershell -NonInteractive -EncodedCommand ${encoded}`)
+              if (r.code !== 0 && r.stderr) throw new Error(r.stderr.slice(0, 200))
+            })
+            appliedAt = new Date()
+          } catch (err: unknown) {
+            warning = `Saved to vault but failed to sync to Active Directory: ${(err as Error).message}`
+          }
+        }
+      }
+
       // Archive old credential
       await db.updateTable('server_credentials').set({
         is_archived: true, archived_at: new Date(), archived_reason: 'updated', updated_at: new Date(),
@@ -287,7 +329,7 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
 
     const cred = await db.selectFrom('server_credentials').selectAll().where('id', '=', credId).where('server_id', '=', id).executeTakeFirst()
     if (!cred) return reply.code(404).send({ error: 'Credential not found' })
-    if (cred.category !== 'linux' || !cred.linux_user) return reply.code(400).send({ error: 'Only Linux user credentials can be verified' })
+    if (!cred.linux_user) return reply.code(400).send({ error: 'No username on this credential' })
 
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -295,32 +337,147 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     const vaultKey = getVaultKey()
     const password = decryptSecret(cred.password_enc, vaultKey)
 
-    // Attempt SSH password authentication — this verifies the password at the PAM/OS level
-    const { Client } = await import('ssh2')
-    const match: boolean = await new Promise((resolve) => {
-      const client = new Client()
-      let resolved = false
-      const done = (result: boolean) => {
-        if (!resolved) { resolved = true; resolve(result) }
-        try { client.end() } catch {}
+    let match = false
+
+    if (server.os_type === 'windows') {
+      // ── Windows: use LogonUser Win32 API (same path as RDP/SMB auth) ─────────
+      // Parse "domain\user" or "domain/user" or plain "user"
+      const domainMatch = cred.linux_user.match(/^(.+)[\\\/](.+)$/)
+      const winUser   = domainMatch ? domainMatch[2] : cred.linux_user
+      // "." = local machine; domain name for domain accounts
+      const winDomain = domainMatch ? domainMatch[1] : '.'
+
+      // Domain accounts: LDAP bind to DC (no elevated privileges needed)
+      // Local accounts: LogonUser type 3 (network logon, no privilege needed)
+      const psScript = winDomain !== '.'
+        ? `
+$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'SilentlyContinue'
+try {
+  $entry = New-Object System.DirectoryServices.DirectoryEntry(
+    "LDAP://${winDomain}",
+    "${winDomain}\\${winUser}",
+    ${JSON.stringify(password)},
+    [System.DirectoryServices.AuthenticationTypes]::Secure
+  )
+  $dn = $entry.distinguishedName
+  if ($dn) { Write-Output "MATCH:True" } else { Write-Output "MATCH:False" }
+} catch {
+  Write-Output "MATCH:False"
+  Write-Output "ERR:$($_.Exception.Message)"
+}
+`.trim()
+        : `
+$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class WinAuth {
+  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  public static extern bool LogonUser(string user, string domain, string pass, int type, int provider, out IntPtr token);
+  [DllImport("kernel32.dll")]
+  public static extern bool CloseHandle(IntPtr handle);
+}
+'@
+try {
+  $token = [IntPtr]::Zero
+  $ok = [WinAuth]::LogonUser(${JSON.stringify(winUser)}, ".", ${JSON.stringify(password)}, 3, 0, [ref]$token)
+  if ($token -ne [IntPtr]::Zero) { [WinAuth]::CloseHandle($token) | Out-Null }
+  Write-Output "MATCH:$ok"
+} catch {
+  Write-Output "MATCH:False"
+  Write-Output "ERR:$($_.Exception.Message)"
+}
+`.trim()
+
+      const encoded = Buffer.from(psScript, 'utf16le').toString('base64')
+      const output = await withServerSsh(id, async (client) => {
+        const { sshExec } = await import('../../utils/ssh')
+        const r = await sshExec(client, `powershell -NonInteractive -EncodedCommand ${encoded}`)
+        return r.stdout
+      })
+
+      match = output.includes('MATCH:True')
+    } else {
+      // ── Linux root: try direct SSH as root first (PermitRootLogin yes),
+      //    then fall back to su/sudo elevation via management key (prohibit-password) ──
+      if (cred.linux_user === 'root') {
+        // Strategy 1: direct SSH as root with password
+        const { Client: SshClient } = await import('ssh2')
+        const directMatch = await new Promise<boolean>((resolve) => {
+          const c = new SshClient()
+          let done = false
+          const finish = (v: boolean) => { if (!done) { done = true; resolve(v); try { c.end() } catch {} } }
+          c.on('ready', () => finish(true))
+           .on('error', () => finish(false))
+           .connect({
+             host: server.hostname, port: server.ssh_port,
+             username: 'root', password,
+             readyTimeout: 8000,
+             authHandler: (_m: any, _p: any, cb: any) => cb('password'),
+           })
+        })
+
+        if (directMatch) {
+          match = true
+        } else {
+          // Strategy 2: management key SSH then su/sudo elevation
+          try {
+            match = await withServerSsh(id, async (client) => {
+              const trySudo = () => new Promise<boolean>((resolve) => {
+                client.exec('sudo -S true', { pty: false }, (err: any, stream: any) => {
+                  if (err) return resolve(false)
+                  stream.stderr?.on('data', () => {})
+                  stream.on('data', () => {})
+                  stream.write(password + '\n')
+                  stream.end()
+                  stream.on('close', (code: number) => resolve(code === 0))
+                })
+              })
+              const trySu = () => new Promise<boolean>((resolve) => {
+                client.exec('su root -c true', { pty: true }, (err: any, stream: any) => {
+                  if (err) return resolve(false)
+                  let sent = false
+                  stream.on('data', (d: Buffer) => {
+                    if (!sent && /[Pp]assword/i.test(d.toString())) {
+                      sent = true
+                      stream.write(password + '\n')
+                    }
+                  })
+                  stream.on('close', (code: number) => resolve(code === 0))
+                })
+              })
+              return (await trySudo()) || (await trySu())
+            })
+          } catch {
+            match = false
+          }
+        }
+      } else {
+        // ── Other Linux users: attempt SSH password authentication ─────────────
+        const { Client } = await import('ssh2')
+        match = await new Promise((resolve) => {
+          const client = new Client()
+          let resolved = false
+          const done = (result: boolean) => {
+            if (!resolved) { resolved = true; resolve(result) }
+            try { client.end() } catch {}
+          }
+          client
+            .on('ready', () => done(true))
+            .on('error', () => done(false))
+            .connect({
+              host: server.hostname,
+              port: server.ssh_port,
+              username: cred.linux_user!,
+              password,
+              readyTimeout: 10000,
+              authHandler: (_methodsLeft, _partialSuccess, cb) => cb('password'),
+            })
+        })
       }
-      client
-        .on('ready', () => done(true))
-        .on('error', (err: Error & { level?: string }) => {
-          // 'client-authentication' = wrong password or auth method not allowed
-          // We treat 'not allowed' (PasswordAuthentication disabled) separately
-          if (err.level === 'client-authentication') done(false)
-          else done(false)
-        })
-        .connect({
-          host: server.hostname,
-          port: server.ssh_port,
-          username: cred.linux_user!,
-          password,
-          readyTimeout: 10000,
-          authHandler: (_methodsLeft, _partialSuccess, cb) => cb('password'),
-        })
-    })
+    }
 
     await writeAuditLog({
       userId: req.session.user!.id, userEmail: req.session.user!.email,
