@@ -51,6 +51,129 @@ export type Server = {
   host_type_detail: string | null
   windows_rdp_ready: boolean
   is_domain_controller: boolean
+  // Network device access
+  access_ssh_enabled: boolean
+  access_ssh_auth_type: 'key' | 'password' | null
+  web_enabled: boolean
+  web_url: string | null
+  snmp_enabled: boolean
+  snmp_version: string
+  snmp_last_fetched_at: string | null
+}
+
+export type NetworkProfile = {
+  access_ssh_enabled: boolean
+  access_ssh_auth_type: 'key' | 'password' | null
+  management_key_id: string | null
+  management_linux_user: string | null
+  ssh_credential_id: string | null
+  ssh_credential_username: string | null
+  web_enabled: boolean
+  web_url: string | null
+  snmp_enabled: boolean
+  snmp_version: string
+  snmp_community: string
+  snmp_port: number
+  snmp_v3_user: string | null
+  snmp_v3_auth_proto: string | null
+  snmp_v3_auth_key: string
+  snmp_v3_priv_proto: string | null
+  snmp_v3_priv_key: string
+  snmp_profile_id: string | null
+  snmp_last_fetched_at: string | null
+  snmp_last_data: Record<string, string> | null
+  ping_enabled: boolean
+  in_stock: boolean
+  ping_last_at: string | null
+  ping_last_status: string | null
+  ping_last_latency_ms: number | null
+  snmp_hostname: string | null
+  snmp_firmware: string | null
+  snmp_model: string | null
+  snmp_serial: string | null
+  snmp_mac_address: string | null
+  snmp_vendor: string | null
+  snmp_interfaces: unknown | null
+  firmware_check_at: string | null
+  firmware_check_result: FirmwareCheckResult | null
+}
+
+export type SnmpProfile = {
+  id: string
+  name: string
+  description: string | null
+  version: string
+  community: string
+  port: number
+  v3_user: string | null
+  v3_auth_proto: string | null
+  v3_auth_key: string
+  v3_priv_proto: string | null
+  v3_priv_key: string
+  created_at: string
+  updated_at: string
+}
+
+export type PingResult = {
+  id: string; name: string; hostname: string
+  status: 'online' | 'offline' | 'skipped'
+  latency_ms: number | null
+  skipped_reason: string | null
+}
+
+export type PingStatus = {
+  id: string; name: string; hostname: string; os_type: string | null; environment: string
+  ping_enabled: boolean; in_stock: boolean
+  ping_last_at: string | null; ping_last_status: string | null; ping_last_latency_ms: number | null
+}
+
+export type FirmwareFile = {
+  id: string
+  vendor: string
+  model: string
+  version: string
+  filename: string
+  file_size: number | null
+  checksum: string | null
+  is_latest: boolean
+  notes: string | null
+  uploaded_by: string | null
+  uploaded_at: string
+}
+
+export type ConfigBackup = {
+  id: string
+  server_id: string
+  server_name: string
+  os_type: string | null
+  environment: string
+  filename: string
+  file_size: number | null
+  backup_method: string
+  status: 'ok' | 'error'
+  error_message: string | null
+  content_preview: string | null
+  created_at: string
+}
+
+export type DiffLine = { type: 'add' | 'remove' | 'context'; line: string; lineNum?: number }
+
+export type DiffResult = {
+  current: { id: string; filename: string; created_at: string }
+  previous: { id: string; filename: string; created_at: string } | null
+  diff: DiffLine[]
+  unchanged: boolean
+}
+
+export type FirmwareCheckResult = {
+  status: 'current' | 'outdated' | 'unknown'
+  current_version: string | null
+  latest_version: string | null
+  release_date: string | null
+  eol: boolean | null
+  cves: Array<{ id: string; severity: string; summary: string }>
+  recommendation: string
+  notes: string
 }
 
 export type RdpCredential = {
@@ -311,11 +434,24 @@ export type TransferJob = {
   created_by: string
 }
 
+export type CommandGroupConfig = { enabled: boolean; totp: boolean }
+
+export type TelegramCommands = {
+  servers:    CommandGroupConfig
+  status:     CommandGroupConfig
+  software:   CommandGroupConfig
+  linux_info: CommandGroupConfig
+  linux_svc:  CommandGroupConfig
+  ad_read:    CommandGroupConfig
+  ad_write:   CommandGroupConfig
+}
+
 export type TelegramSettings = {
   enabled: boolean
   bot_token: string
   allowed_chats: number[]
   totp_secret: string
+  commands: TelegramCommands
 }
 
 export type RotationJob = {
@@ -338,7 +474,7 @@ export type AlertEvents = {
   user_deactivated: boolean
 }
 
-export type VaultType = 'server_os' | 'service' | 'api_key' | 'network_device' | 'domain_ad' | 'email' | 'printer' | 'dvr' | 'other'
+export type VaultType = 'server_os' | 'service' | 'api_key' | 'network_device' | 'domain_ad' | 'email' | 'printer' | 'dvr' | 'hypervisor' | 'storage' | 'database' | 'firewall' | 'vpn' | 'wireless' | 'ipmi' | 'other'
 
 export type VaultEntry = {
   id: string
@@ -359,6 +495,45 @@ export type VaultEntry = {
   linked_credential_label?: string | null
   linked_server_id?: string | null
   linked_server_name?: string | null
+}
+
+export type DiagramNode = {
+  id: string
+  type: string
+  x: number
+  y: number
+  w: number
+  h: number
+  label: string
+  ip: string
+  notes: string
+  serverId?: string | null
+  isZone?: boolean
+  color?: string
+}
+
+export type DiagramEdge = {
+  id: string
+  from: string
+  to: string
+  type: 'lan' | 'uplink' | 'fiber' | 'mgmt' | 'vpn'
+  label: string
+}
+
+export type DiagramData = {
+  nodes: DiagramNode[]
+  edges: DiagramEdge[]
+}
+
+export type NetworkDiagram = {
+  id: string
+  name: string
+  data?: DiagramData
+  created_by: string | null
+  creator_name: string | null
+  creator_email: string | null
+  created_at: string
+  updated_at: string
 }
 
 export type AlertSettings = {

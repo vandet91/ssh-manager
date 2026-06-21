@@ -23,6 +23,9 @@ import Domain from './pages/Domain'
 import PsExec from './pages/PsExec'
 import PsExecShellPopup from './pages/PsExecShellPopup'
 import DbConnector from './pages/DbConnector'
+import Diagrams from './pages/Diagrams'
+import FirmwareRepo from './pages/FirmwareRepo'
+import NetworkScan from './pages/NetworkScan'
 
 export type Theme = 'github' | 'proxmox'
 
@@ -81,6 +84,9 @@ function App() {
             <Route path="/domain"   element={<Domain />} />
             <Route path="/psexec"   element={<PsExec />} />
             <Route path="/db-connector" element={<DbConnector />} />
+            <Route path="/diagrams" element={<Diagrams />} />
+            <Route path="/firmware-repo" element={<FirmwareRepo />} />
+            <Route path="/network-scan" element={<NetworkScan />} />
             <Route path="/logs"      element={<Logs />} />
             <Route path="/migration" element={<Migration />} />
             <Route path="/filemanager" element={<FileManager />} />

@@ -18,5 +18,8 @@ RUN apk add --no-cache python3 py3-pip ruby ruby-dev build-base libffi-dev && \
     pip3 install --break-system-packages impacket pywinrm requests-ntlm 2>/dev/null || \
     pip3 install impacket pywinrm requests-ntlm && \
     gem install evil-winrm --no-document
+# Network scanner tools: arping (active ARP), nmap (ARP scan fallback), net-tools (arp -n)
+# Note: iputils conflicts with arping; node:alpine already has busybox ping with TTL support
+RUN apk add --no-cache arping nmap bind-tools net-tools
 EXPOSE 3001
 CMD ["node", "dist/index.js"]

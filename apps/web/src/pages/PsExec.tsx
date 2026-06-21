@@ -494,14 +494,20 @@ export default function PsExec() {
 
           {/* WinRM setup (only when wmiexec selected) */}
           {method === 'wmiexec' && (
-            <div className="bg-blue-950/30 border border-blue-900/60 rounded-xl overflow-hidden">
-              <p className="px-4 py-2.5 text-xs font-semibold text-blue-300 border-b border-blue-900/60">⚡ WinRM Setup via WMIExec</p>
-              <p className="px-4 py-2 text-[11px] text-gray-500 border-b border-gray-700/50">Run in order to enable WinRM</p>
-              {WINRM_SETUP.map(q => (
+            <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #3b82f6', background: '#1e3a5f' }}>
+              <div style={{ background: '#1d4ed8', padding: '10px 16px', borderBottom: '1px solid #3b82f6' }}>
+                <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>⚡ WinRM Setup via WMIExec</span>
+              </div>
+              <div style={{ padding: '8px 16px', borderBottom: '1px solid #2563eb', background: '#1e3a5f' }}>
+                <span style={{ color: '#93c5fd', fontSize: 11 }}>Click a step to load it into the command box, then run in order</span>
+              </div>
+              {WINRM_SETUP.map((q, i) => (
                 <button key={q.label} onClick={() => setCommand(q.cmd)}
-                  className="w-full text-left px-4 py-2.5 border-b border-gray-700/30 hover:bg-blue-900/20 transition-colors cursor-pointer">
-                  <span className="text-xs font-semibold text-blue-300 block">{q.label}</span>
-                  <span className="text-[10px] font-mono text-gray-600 truncate block mt-0.5">{q.cmd.slice(0, 50)}…</span>
+                  style={{ width: '100%', textAlign: 'left', padding: '10px 16px', borderBottom: i < WINRM_SETUP.length - 1 ? '1px solid #1e40af' : 'none', background: 'transparent', cursor: 'pointer', display: 'block' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#1d4ed8')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <span style={{ color: '#ffffff', fontWeight: 600, fontSize: 12, display: 'block' }}>{q.label}</span>
+                  <span style={{ color: '#93c5fd', fontSize: 10, fontFamily: 'monospace', display: 'block', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{q.cmd.slice(0, 70)}…</span>
                 </button>
               ))}
             </div>

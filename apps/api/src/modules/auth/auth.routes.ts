@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify'
+import { randomBytes } from 'crypto'
 
 import speakeasy from 'speakeasy'
 import QRCode from 'qrcode'
@@ -233,7 +234,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     // Generate backup codes
     const backupCodes = Array.from({ length: 8 }, () =>
-      Math.random().toString(36).substring(2, 8).toUpperCase()
+      randomBytes(4).toString('hex').toUpperCase()
     )
     const encBackups = JSON.stringify(backupCodes.map((c) => encryptSecret(c, vaultKey)))
 

@@ -29,6 +29,7 @@ type ShareItem = {
 
 export default function Share() {
   const [items, setItems]         = useState<ShareItem[]>([])
+  const [pins, setPins]           = useState<{id:string;label:string|null;content:string;device_type:string;created_at:string}[]>([])
   const [clipText, setClipText]   = useState('')
   const [deviceType, setDeviceType] = useState('windows')
   const [label, setLabel]         = useState('')
@@ -54,6 +55,22 @@ export default function Share() {
 
   const loadShares = async () => {
     try { setItems(await api.get<ShareItem[]>('/share/list')) } catch {}
+    try { setPins(await api.get('/share/pins')) } catch {}
+  }
+
+  const deletePin = async (id: string) => {
+    try { await api.delete(`/share/pins/${id}`); setPins(p => p.filter(x => x.id !== id)) } catch {}
+  }
+
+  const pinCurrentText = async () => {
+    if (!clipText.trim()) return
+    try {
+      const res = await api.post<{id:string;content:string;label:string|null;device_type:string;created_at:string}>('/share/pins', {
+        content: clipText, device_type: deviceType, label: label.trim() || null,
+      })
+      setPins(p => [res, ...p])
+      setClipText(''); setLabel('')
+    } catch (e: any) { setTextError(e?.data?.error ?? 'Failed to pin') }
   }
 
   const shareText = async () => {
@@ -172,12 +189,20 @@ export default function Share() {
               placeholder="Command or text…" rows={4}
               style={{ ...inp, fontFamily: 'monospace', fontSize: 12, resize: 'vertical' }} />
             {textError && <p style={{ margin: '6px 0 0', fontSize: 11, color: '#ef4444' }}>{textError}</p>}
-            <button onClick={shareText} disabled={!clipText.trim()}
-              style={{ marginTop: 10, width: '100%', padding: '8px', borderRadius: 6, border: 'none',
-                background: clipText.trim() ? typeInfo(deviceType).color : '#4b5563',
-                color: '#fff', cursor: clipText.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
-              Save as {typeInfo(deviceType).label} note
-            </button>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button onClick={shareText} disabled={!clipText.trim()}
+                style={{ flex: 1, padding: '8px', borderRadius: 6, border: 'none',
+                  background: clipText.trim() ? typeInfo(deviceType).color : '#4b5563',
+                  color: '#fff', cursor: clipText.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                ⏱ Temporary (24h)
+              </button>
+              <button onClick={pinCurrentText} disabled={!clipText.trim()}
+                style={{ flex: 1, padding: '8px', borderRadius: 6, border: 'none',
+                  background: clipText.trim() ? '#7c3aed' : '#4b5563',
+                  color: '#fff', cursor: clipText.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+                📌 Pin Permanently
+              </button>
+            </div>
           </div>
 
           {/* File upload */}
@@ -241,8 +266,46 @@ export default function Share() {
           )}
         </div>
 
-        {/* ── Right: sticky notes grouped by type ── */}
+        {/* ── Right: notes ── */}
         <div>
+
+          {/* ── Permanent pins ── */}
+          {pins.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa' }}>📌 Pinned (permanent)</span>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{pins.length} item{pins.length !== 1 ? 's' : ''} — survive restarts</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
+                {pins.map(pin => {
+                  const info = typeInfo(pin.device_type || 'general')
+                  return (
+                    <div key={pin.id} style={{ background: 'var(--bg-surface)', border: `2px solid rgba(139,92,246,0.3)`, borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: info.color + '22', color: info.color }}>{info.label}</span>
+                        {pin.label && <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pin.label}</span>}
+                        <button onClick={() => deletePin(pin.id)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0, flexShrink: 0 }}>✕</button>
+                      </div>
+                      <pre style={{ margin: 0, fontSize: 11, color: 'var(--text-primary)', lineHeight: 1.5, maxHeight: 120, overflow: 'auto', wordBreak: 'break-all', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                        {pin.content}
+                      </pre>
+                      <button onClick={() => navigator.clipboard.writeText(pin.content)}
+                        style={{ padding: '5px', borderRadius: 5, border: 'none', background: 'rgba(139,92,246,0.15)', color: '#a78bfa', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                        📋 Copy
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+              <div style={{ borderTop: '1px solid var(--border-weak)', marginTop: 16, paddingTop: 4 }} />
+            </div>
+          )}
+
+          {/* ── Temporary notes (Redis) ── */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>⏱ Temporary (24h)</span>
+          </div>
+
           {/* Filter tabs */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
             <button onClick={() => setFilterType('all')} style={filterBtn(filterType === 'all', '#6b7280')}>All ({textItems.length})</button>

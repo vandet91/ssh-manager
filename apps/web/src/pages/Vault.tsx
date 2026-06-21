@@ -11,6 +11,13 @@ const TYPE_LABELS: Record<VaultType, string> = {
   email: '📧 Email',
   printer: '🖨 Printer',
   dvr: '📹 DVR / Camera',
+  hypervisor: '🔲 Hypervisor',
+  storage: '💾 Storage',
+  database: '🗄 Database',
+  firewall: '🛡 Firewall',
+  vpn: '🔒 VPN',
+  wireless: '📶 Wireless / AP',
+  ipmi: '🖧 IPMI / BMC',
   other: '📦 Other',
 }
 

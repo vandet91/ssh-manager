@@ -18,6 +18,7 @@ export async function withServerSsh<T>(
   serverId: string,
   fn: (client: Client) => Promise<T>,
   onKeyUsed?: (info: UsedKeyInfo) => void,
+  connectTimeout?: number,
 ): Promise<T> {
   const server = await db.selectFrom('servers').selectAll().where('id', '=', serverId).executeTakeFirst()
   if (!server || !server.management_key_id) throw Object.assign(new Error('Server not configured'), { statusCode: 400 })
@@ -44,7 +45,7 @@ export async function withServerSsh<T>(
 
   const { client, keyId: usedKeyId } = await connectWithFallback(
     server.hostname, server.ssh_port, server.management_linux_user,
-    keysToTry, server.host_key_fingerprint ?? undefined,
+    keysToTry, server.host_key_fingerprint ?? undefined, connectTimeout,
   )
 
   if (onKeyUsed) {

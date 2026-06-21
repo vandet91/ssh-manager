@@ -44,9 +44,8 @@ export default function CommandLibrary() {
 
   const loadPinned = async () => {
     try {
-      const notes = await api.get<{type:string,content?:string}[]>('/share/list')
-      const contents = new Set(notes.filter(n => n.type === 'text' && n.content).map(n => n.content!))
-      setPinnedCmds(contents)
+      const pins = await api.get<{content:string}[]>('/share/pins')
+      setPinnedCmds(new Set(pins.map(p => p.content)))
     } catch {}
   }
 
@@ -249,14 +248,14 @@ export default function CommandLibrary() {
                 <button onClick={async () => {
                   if (pinnedCmds.has(c.command)) return
                   try {
-                    await api.post('/share/text', { text: c.command, device_type: c.os, label: c.label })
+                    await api.post('/share/pins', { content: c.command, device_type: c.os, label: c.label })
                     setPinnedCmds(prev => new Set(prev).add(c.command))
                     setPinned(c.id)
                     setTimeout(() => setPinned(null), 1500)
                   } catch {}
                 }} disabled={pinnedCmds.has(c.command)}
                 style={btn(pinnedCmds.has(c.command) || pinned === c.id ? 'success' : 'default')}
-                title={pinnedCmds.has(c.command) ? 'Already in sticky notes' : `Add to ${c.os} sticky notes`}>
+                title={pinnedCmds.has(c.command) ? 'Already pinned (permanent)' : 'Pin permanently'}>
                   {pinnedCmds.has(c.command) ? '✓ Pinned' : pinned === c.id ? '✓ Added' : '📌 Pin'}
                 </button>
                 <button onClick={() => openEdit(c)} style={btn('default')}>✏️</button>

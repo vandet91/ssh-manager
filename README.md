@@ -1,6 +1,6 @@
 # SSH Manager
 
-A self-hosted web platform for centralizing SSH key management, server credential vault, browser-based terminal, Remote Desktop (RDP), Active Directory management, remote Windows execution, database connector, security auditing, Telegram bot integration, and full audit logging.
+A self-hosted web platform for centralizing SSH key management, server credential vault, browser-based terminal, Remote Desktop (RDP), Active Directory management, remote Windows execution, database connector, network scanning, security auditing, Telegram bot integration, and full audit logging.
 
 ---
 
@@ -18,6 +18,9 @@ A self-hosted web platform for centralizing SSH key management, server credentia
 - **Linux Root SSH Setup** — two-server-type flow (existing vs new Debian/Ubuntu); vault root credential + su/sudo elevation; PermitRootLogin management; root activation; sshd status panel on Overview tab
 - **Windows Server** — full OpenSSH support; Info panel shows OS, memory, CPU, hostname, domain, installed roles; RDP credentials and SSH user vault
 - **Auth Keys Management** — redesigned card layout; "Set as Management" button when a user has multiple keys; inline Yes/No revoke confirmation (no browser `confirm()` dialog); management key guard blocks accidental revoke
+- **Network Scanner** — LAN discovery with ping sweep, port scan (quick/standard/deep), OS/device classification, MAC address detection, OUI vendor lookup (30k+ IEEE entries), hostname resolution (NetBIOS, mDNS, LLMNR, reverse DNS), CSV export; score-based device classification for Windows PCs, routers, Linux servers, NAS, IP cameras, smart appliances, game consoles, mobile phones, and more
+- **Network Diagrams** — drag-and-drop topology diagrams with 700+ MDI icons, node colour and label customisation, zoom/pan canvas, PNG export
+- **Firmware & Backup** — firmware repository with TFTP server; config backup storage per device
 - **Security Scanner** — checks password auth, root login, stale keys, X11 forwarding; configurable alerts
 - **Best Practices** — tailored config recommendations calculated from actual RAM/CPU; includes copy-paste config snippets
 - **AI Analyst** — multi-provider (Claude, GPT, Gemini, DeepSeek) server health analysis
@@ -114,6 +117,7 @@ Open **http://localhost:3000** — sign in with your bootstrap email.
 | `redis` | 6379 (host) | Redis 7 (BullMQ job queues) |
 | `ubuntu-test` | 2222 | Ubuntu 22.04 test SSH server |
 | `debian-test` | 2223 | Debian 12 test SSH server |
+| `tftp-server` | 69/udp | TFTP server for firmware delivery |
 
 ---
 
@@ -554,6 +558,84 @@ Rules run individually or all at once with **Run All**. Results show ✅ pass / 
 
 ---
 
+## Network Scanner
+
+The **Network Scanner** page discovers and fingerprints every device on your LAN.
+
+### Scan modes
+
+| Mode | Ports scanned | Use case |
+|------|--------------|---------|
+| **Quick** | ~40 common ports | Fast overview in seconds |
+| **Standard** | ~200 ports | Balanced coverage |
+| **Deep** | 1–65535 | Full scan (slow) |
+| **Custom** | Port range you specify | Targeted scans |
+
+### What it detects
+
+| Signal | How |
+|--------|-----|
+| **IP / latency** | ICMP ping sweep |
+| **TTL** | Extracted from ping reply (Linux ≈ 64, Windows ≈ 128, Cisco ≈ 255) |
+| **Open ports + banners** | TCP connect with optional banner grab |
+| **MAC address** | `/proc/net/arp` → `arping` → `arp -n` fallback chain |
+| **OUI vendor** | 30k+ entry IEEE database (downloaded once, cached 30 days) |
+| **Hostname** | NetBIOS UDP 137 → mDNS unicast/multicast → LLMNR → reverse DNS |
+| **OS / device type** | Score-based classification using vendor, ports, banners, hostname, TTL |
+
+### Device types classified
+
+Windows PC, Router/Gateway, Linux/Unix, Printer, Smart TV/Media, IP Camera, NAS/Storage, Game Console, VoIP/Phone, IoT/MQTT, iPhone/iPad, Android Phone, Smart Appliance, Mobile Phone (unknown)
+
+### Privacy MAC detection
+
+Devices using randomized MAC addresses (iOS 14+, Android 10+, Windows 10+) are detected via the locally-administered bit and shown as **"randomized (privacy MAC)"** — the device is classified as **Mobile Phone** unless a port or hostname confirms iPhone vs Android.
+
+### Scan results
+
+- Live streaming via SSE — each host appears as it is scanned
+- Expand any row to see open ports with service names and banners
+- CSV export includes IP, hostname, MAC, vendor, OS hint, latency, ports
+- Results persist until a new scan starts
+
+### Production deployment note
+
+MAC address detection and mDNS/LLMNR hostname resolution require the API container to run on the host network stack so it can read the physical ARP table and send multicast packets. On a real Linux server, set the following in `docker-compose.yml`:
+
+```yaml
+api:
+  network_mode: host
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+  environment:
+    - DATABASE_URL=postgresql://sshmanager:password@127.0.0.1:5433/sshmanager
+    - REDIS_URL=redis://127.0.0.1:6379
+
+web:
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+```
+
+And in `apps/web/nginx.conf`, change `proxy_pass http://api:3001/` to `http://host.docker.internal:3001/`.
+
+> **Docker Desktop on Windows/Mac:** `network_mode: host` runs inside a VM and does not reach the physical LAN. MAC addresses and multicast hostnames are unavailable in this environment. IP/port scanning and NetBIOS/reverse-DNS resolution still work.
+
+---
+
+## Network Diagrams
+
+The **Diagrams** page lets you draw and save network topology diagrams.
+
+- **700+ MDI icons** — servers, switches, firewalls, routers, phones, cameras, printers, and more
+- **Drag-and-drop canvas** — add nodes, connect them with labelled edges, move freely
+- **Node customisation** — icon, label, colour
+- **Zoom / pan** — mouse wheel zoom, drag to pan
+- **PNG export** — download the diagram as an image
+- **Auto-save** — diagrams saved to the database, persist across sessions
+
+---
+
 ## SSO Configuration (Optional)
 
 ### Microsoft 365 (Azure AD)
@@ -637,7 +719,8 @@ ssh-manager/
 │   │       │                  # rotation, terminal, credentials, security,
 │   │       │                  # logs, settings, telegram, rdp, share,
 │   │       │                  # commands, vault, domain, psexec,
-│   │       │                  # db-connector, db-analysis
+│   │       │                  # db-connector, db-analysis, network-scan,
+│   │       │                  # diagrams, firmware-repo, config-backup
 │   │       └── utils/         # vault, ssh, windows-ssh, virt-detect,
 │   │                          # key-ops, ppk, recommendations, alerts, audit
 │   ├── web/                   # React + Vite + Tailwind CSS
@@ -647,8 +730,11 @@ ssh-manager/
 │   │                          # Terminal, RemoteDesktop, Logs, Security,
 │   │                          # Users, Settings, Migration, FileManager,
 │   │                          # NetworkDevices, CommandLibrary, Vault, Domain,
-│   │                          # PsExec (Remote Exec), DbConnector
+│   │                          # PsExec (Remote Exec), DbConnector,
+│   │                          # NetworkScan, Diagrams, FirmwareRepo
 │   └── guac-proxy/            # WebSocket ↔ guacd bridge (RDP)
+├── services/
+│   └── tftp/                  # Alpine TFTP server for firmware delivery
 ├── docker-compose.yml
 ├── docker-compose.prod.yml
 └── .env
@@ -673,7 +759,7 @@ docker compose build web api && docker compose up -d web api
 
 ## Database Migrations
 
-Migrations run automatically on startup. Current schema version: **025**.
+Migrations run automatically on startup. Current schema version: **031**.
 
 | Migration | What it adds |
 |-----------|-------------|
@@ -702,3 +788,9 @@ Migrations run automatically on startup. Current schema version: **025**.
 | `023` | DB Connector: `db_connections` table (server_id nullable, ssh tunnel support) |
 | `024` | `db_connections.server_id` made nullable (direct connections without a linked server) |
 | `025` | DB Analysis: `db_analysis_rules` + `db_analysis_results` tables |
+| `026` | Network diagrams: `network_diagrams` table (nodes, edges JSON) |
+| `027` | Network device access: per-device credential linkage |
+| `028` | Drop environment check constraint |
+| `029` | SNMP profiles, ping settings, firmware columns on network devices |
+| `030` | Firmware repository: `firmware_files` table |
+| `031` | Share pins: PIN-protected file share links |

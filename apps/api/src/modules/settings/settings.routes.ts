@@ -123,17 +123,40 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ── Telegram Settings ───────────────────────────────────────────────────────
 
+  const groupSchema = z.object({ enabled: z.boolean().default(true), totp: z.boolean().default(false) })
+
+  const commandsSchema = z.object({
+    servers:    groupSchema.default({ enabled: true,  totp: false }),
+    status:     groupSchema.default({ enabled: true,  totp: false }),
+    software:   groupSchema.default({ enabled: true,  totp: false }),
+    linux_info: groupSchema.default({ enabled: true,  totp: false }),
+    linux_svc:  groupSchema.default({ enabled: true,  totp: true  }),
+    ad_read:    groupSchema.default({ enabled: true,  totp: false }),
+    ad_write:   groupSchema.default({ enabled: true,  totp: true  }),
+  })
+
+  const DEFAULT_COMMANDS = {
+    servers:    { enabled: true,  totp: false },
+    status:     { enabled: true,  totp: false },
+    software:   { enabled: true,  totp: false },
+    linux_info: { enabled: true,  totp: false },
+    linux_svc:  { enabled: true,  totp: true  },
+    ad_read:    { enabled: true,  totp: false },
+    ad_write:   { enabled: true,  totp: true  },
+  }
+
   const telegramSchema = z.object({
     enabled: z.boolean(),
     bot_token: z.string(),
     allowed_chats: z.array(z.number().int()),
     totp_secret: z.string(),
+    commands: commandsSchema.default(DEFAULT_COMMANDS),
   })
 
   // GET /settings/telegram
   fastify.get('/settings/telegram', { preHandler: [requireAuth, requirePermission('admin')] }, async () => {
     const rows = (await (db as any).selectFrom('settings').selectAll()
-      .where('key', 'in', ['telegram_enabled','telegram_bot_token','telegram_allowed_chats','telegram_totp_secret'])
+      .where('key', 'in', ['telegram_enabled','telegram_bot_token','telegram_allowed_chats','telegram_totp_secret','telegram_commands'])
       .execute()) as Array<{ key: string; value: unknown }>
     const m = Object.fromEntries(rows.map((r) => [r.key, r.value]))
     return {
@@ -141,6 +164,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
       bot_token:     (m['telegram_bot_token'] as string) ?? '',
       allowed_chats: (m['telegram_allowed_chats'] as number[]) ?? [],
       totp_secret:   (m['telegram_totp_secret'] as string) ?? '',
+      commands:      (m['telegram_commands'] as object) ?? DEFAULT_COMMANDS,
     }
   })
 
@@ -158,6 +182,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     await upsert('telegram_bot_token',     body.bot_token)
     await upsert('telegram_allowed_chats', body.allowed_chats)
     await upsert('telegram_totp_secret',   body.totp_secret)
+    await upsert('telegram_commands',      body.commands)
 
     await writeAuditLog({
       userId: req.session.user!.id, userEmail: req.session.user!.email,

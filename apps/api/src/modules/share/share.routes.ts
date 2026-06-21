@@ -4,6 +4,8 @@ import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
 import { getRedis } from '../../jobs/redis'
+import { db } from '../../db/client'
+import { requireAuth } from '../../middleware/auth'
 
 const DRIVE_PATH = '/tmp/guac-uploads'
 
@@ -146,6 +148,52 @@ async function shareRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     return items
+  })
+
+  // ── Permanent pins (PostgreSQL) ───────────────────────────────────────────
+
+  // GET /share/pins — list all pins
+  fastify.get('/share/pins', { preHandler: requireAuth }, async () => {
+    return db.selectFrom('share_pins').selectAll().orderBy('created_at desc').execute()
+  })
+
+  // POST /share/pins — create a pin
+  fastify.post('/share/pins', { preHandler: requireAuth }, async (req) => {
+    const body = z.object({
+      content:     z.string().min(1),
+      label:       z.string().optional(),
+      device_type: z.string().optional(),
+    }).parse(req.body)
+
+    const user = (req as any).session?.user
+    return db.insertInto('share_pins').values({
+      content:     body.content,
+      label:       body.label ?? null,
+      device_type: body.device_type ?? 'general',
+      created_by:  user?.email ?? null,
+    }).returningAll().executeTakeFirstOrThrow()
+  })
+
+  // DELETE /share/pins/:id — remove a pin
+  fastify.delete('/share/pins/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = await db.selectFrom('share_pins').select('id').where('id', '=', id).executeTakeFirst()
+    if (!row) return reply.status(404).send({ error: 'Not found' })
+    await db.deleteFrom('share_pins').where('id', '=', id).execute()
+    return { ok: true }
+  })
+
+  // PATCH /share/pins/:id — update label or device_type
+  fastify.patch('/share/pins/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = z.object({
+      label:       z.string().optional(),
+      device_type: z.string().optional(),
+    }).parse(req.body)
+    const row = await db.selectFrom('share_pins').select('id').where('id', '=', id).executeTakeFirst()
+    if (!row) return reply.status(404).send({ error: 'Not found' })
+    await db.updateTable('share_pins').set(body).where('id', '=', id).execute()
+    return { ok: true }
   })
 }
 

@@ -30,7 +30,7 @@ export interface ServerTable {
   name: string
   hostname: string
   ssh_port: Opt<number>
-  environment: 'production' | 'staging' | 'development' | 'other'
+  environment: string
   tags: Opt<unknown>
   host_key_fingerprint: string | null
   host_key_verified: Opt<boolean>
@@ -45,6 +45,96 @@ export interface ServerTable {
   host_type: Opt<string>
   host_type_detail: Opt<string>
   windows_rdp_ready: Opt<boolean>
+  // Network device access profiles
+  access_ssh_enabled: Opt<boolean>
+  access_ssh_auth_type: string | null       // 'key' | 'password'
+  web_enabled: Opt<boolean>
+  web_url: string | null
+  snmp_enabled: Opt<boolean>
+  snmp_version: Opt<string>                 // 'v1' | 'v2c' | 'v3'
+  snmp_community_enc: string | null
+  snmp_port: Opt<number>
+  snmp_v3_user: string | null
+  snmp_v3_auth_proto: string | null
+  snmp_v3_auth_key_enc: string | null
+  snmp_v3_priv_proto: string | null
+  snmp_v3_priv_key_enc: string | null
+  snmp_last_fetched_at: Date | null
+  snmp_last_data: unknown | null
+  // SNMP profile link
+  snmp_profile_id: string | null
+  // Ping monitoring
+  ping_enabled: Opt<boolean>
+  in_stock: Opt<boolean>
+  ping_last_at: Date | null
+  ping_last_status: string | null
+  ping_last_latency_ms: number | null
+  // Enriched SNMP discovery
+  snmp_hostname: string | null
+  snmp_firmware: string | null
+  snmp_model: string | null
+  snmp_serial: string | null
+  snmp_mac_address: string | null
+  snmp_vendor: string | null
+  snmp_interfaces: unknown | null
+  // AI firmware check
+  firmware_check_at: Date | null
+  firmware_check_result: unknown | null
+  created_at: ColumnType<Date, never, never>
+  updated_at: Opt<Date>
+}
+
+export interface SharePinTable {
+  id: Generated<string>
+  label: string | null
+  content: string
+  device_type: Opt<string>
+  created_by: string | null
+  created_at: ColumnType<Date, never, never>
+}
+
+export interface FirmwareFileTable {
+  id: Generated<string>
+  vendor: string
+  model: string
+  version: string
+  filename: string
+  file_path: string
+  file_size: number | null
+  checksum: string | null
+  is_latest: Opt<boolean>
+  notes: string | null
+  uploaded_by: string | null
+  uploaded_at: ColumnType<Date, never, never>
+  updated_at: Opt<Date>
+}
+
+export interface ConfigBackupTable {
+  id: Generated<string>
+  server_id: string
+  filename: string
+  file_path: string
+  file_size: number | null
+  backup_method: Opt<string>
+  status: Opt<string>
+  error_message: string | null
+  content_preview: string | null
+  created_at: ColumnType<Date, never, never>
+}
+
+export interface SnmpProfileTable {
+  id: Generated<string>
+  name: string
+  description: string | null
+  version: Opt<string>
+  community_enc: string | null
+  port: Opt<number>
+  v3_user: string | null
+  v3_auth_proto: string | null
+  v3_auth_key_enc: string | null
+  v3_priv_proto: string | null
+  v3_priv_key_enc: string | null
+  created_by: string | null
   created_at: ColumnType<Date, never, never>
   updated_at: Opt<Date>
 }
@@ -199,9 +289,19 @@ export interface VaultEntryTable {
   updated_at: Opt<Date>
 }
 
+export interface NetworkDiagramTable {
+  id: Generated<string>
+  name: string
+  data: Opt<unknown>
+  created_by: string | null
+  created_at: ColumnType<Date, never, never>
+  updated_at: Opt<Date>
+}
+
 export interface Database {
   users: UserTable
   servers: ServerTable
+  snmp_profiles: SnmpProfileTable
   ssh_keys: SshKeyTable
   key_assignments: KeyAssignmentTable
   audit_logs: AuditLogTable
@@ -212,6 +312,10 @@ export interface Database {
   migration_snapshots: MigrationSnapshotTable
   pingcastle_reports: PingcastleReportTable
   vault_entries: VaultEntryTable
+  network_diagrams: NetworkDiagramTable
+  share_pins: SharePinTable
+  firmware_files: FirmwareFileTable
+  config_backups: ConfigBackupTable
 }
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })

@@ -1,6 +1,27 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { api } from '../api/client'
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function timeAgo(iso: string): string {
+  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (secs < 60) return `${secs}s ago`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`
+  return `${Math.floor(secs / 86400)}d ago`
+}
+
+function summaryFromRules(rules: AnalysisRule[]) {
+  const withResult = rules.filter(r => r.last_result)
+  if (withResult.length === 0) return null
+  return {
+    total: withResult.length,
+    pass: withResult.filter(r => r.last_result!.status === 'pass').length,
+    fail: withResult.filter(r => r.last_result!.status === 'fail').length,
+    error: withResult.filter(r => r.last_result!.status === 'error').length,
+  }
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type DbType = 'postgresql' | 'mysql' | 'sqlite' | 'mongodb' | 'mssql'
@@ -122,6 +143,7 @@ function Spinner() {
 
 export default function DbConnector() {
   const [connections, setConnections] = useState<DbConnection[]>([])
+  const [connectionsLoading, setConnectionsLoading] = useState(true)
   const [servers, setServers] = useState<Server[]>([])
   const [filterServerId, setFilterServerId] = useState('')
   const filteredConnections = filterServerId ? connections.filter(c => c.server_id === filterServerId) : connections
@@ -193,7 +215,11 @@ export default function DbConnector() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const load = useCallback(() => {
-    api.get<{ connections: DbConnection[] }>('/db/connections').then(r => setConnections(r.connections)).catch(() => {})
+    setConnectionsLoading(true)
+    api.get<{ connections: DbConnection[] }>('/db/connections')
+      .then(r => setConnections(r.connections))
+      .catch(() => {})
+      .finally(() => setConnectionsLoading(false))
     api.get<Server[]>('/servers').then(setServers).catch(() => {})
   }, [])
 
@@ -329,7 +355,7 @@ export default function DbConnector() {
   useEffect(() => {
     if (panel === 'tables' && activeConn) loadTables()
     if (panel === 'history' && activeConn) loadHistory()
-    if (panel === 'analysis' && activeConn) { loadRules(); setAnalysisRunResults(null); setAnalysisSummary(null) }
+    if (panel === 'analysis' && activeConn) { loadRules(); setAnalysisRunResults(null) }
   }, [panel, activeConn])
 
   // ── Backup ────────────────────────────────────────────────────────────────────
@@ -350,6 +376,7 @@ export default function DbConnector() {
     if (!activeConn) return
     const r = await api.get<{ rules: AnalysisRule[] }>(`/db/analysis/rules?connection_id=${activeConn.id}`)
     setAnalysisRules(r.rules)
+    setAnalysisSummary(summaryFromRules(r.rules))
   }
 
   async function runAllRules() {
@@ -452,7 +479,7 @@ export default function DbConnector() {
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
 
       {/* ── Left sidebar — connections ── */}
-      <div style={{ width: 280, minWidth: 220, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--sidebar-bg)' }}>
+      <div style={{ width: 280, minWidth: 220, borderRight: '1px solid var(--border-med)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-panel)' }}>
         <div style={{ padding: '14px 12px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
           <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>🗄 DB Connector</span>
           <button style={btnPrimary} onClick={openCreate}>+ New</button>
@@ -473,7 +500,7 @@ export default function DbConnector() {
         )}
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
-          {connections.length === 0 && (
+          {!connectionsLoading && connections.length === 0 && (
             <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>
               No connections yet.<br />Click "+ New" to add one.
             </div>
@@ -772,6 +799,7 @@ export default function DbConnector() {
                               <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{rule.name}</div>
                               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
                                 {rule.rule_type} · {rule.table_name}{rule.column_name ? `.${rule.column_name}` : ''}
+                                {display?.ran_at && <span style={{ marginLeft: 8, opacity: 0.6 }}>· {timeAgo(display.ran_at)}</span>}
                               </div>
                             </div>
                             {display && (

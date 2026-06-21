@@ -18,6 +18,9 @@ const nav = [
   { to: '/domain',          label: 'Domain',         icon: '🏢' },
   { to: '/psexec',          label: 'Remote Exec',    icon: '⚡' },
   { to: '/db-connector',   label: 'DB Connector',   icon: '🗄' },
+  { to: '/diagrams',       label: 'Diagrams',       icon: '📐' },
+  { to: '/firmware-repo', label: 'Firmware & Backup', icon: '💾' },
+  { to: '/network-scan',  label: 'Network Scanner',   icon: '🔍' },
   { to: '/terminal',        label: 'Terminal',       icon: '⌨' },
   { to: '/remote-desktop',  label: 'Remote Desktop', icon: '🖥' },
   { to: '/logs',        label: 'Logs',        icon: '≡' },
@@ -64,7 +67,9 @@ export default function Layout({ user, onLogout, theme, setTheme }: Props) {
         flexDirection: 'column',
         background: 'var(--sidebar-bg)',
         borderRight: '1px solid var(--sidebar-border)',
-        position: 'relative',
+        position: 'sticky',
+        top: 0,
+        height: '100vh',
       }}>
 
         {/* Brand */}

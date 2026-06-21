@@ -3,10 +3,15 @@ services:
     build: ./apps/api
     ports:
       - "3001:3001"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     environment:
       - NODE_ENV=development
       - DATABASE_URL=postgresql://sshmanager:password@postgres:5432/sshmanager
       - REDIS_URL=redis://redis:6379
+      - TZ=Asia/Phnom_Penh
+      - TFTP_ROOT=/var/lib/ssh-manager/tftp-root
     env_file: .env
     depends_on:
       postgres:
@@ -17,6 +22,7 @@ services:
       - recordings:/var/lib/ssh-manager/recordings
       - shares:/tmp/ssh-manager-shares
       - guac-uploads:/tmp/guac-uploads
+      - tftp-data:/var/lib/ssh-manager/tftp-root
 
   # Guacamole RDP/VNC protocol daemon
   guacd:
@@ -63,6 +69,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
     ports:
       - "6379:6379"
     volumes:
@@ -115,9 +122,20 @@ services:
       "
     restart: unless-stopped
 
+  tftp-server:
+    build: ./services/tftp
+    ports:
+      - "69:69/udp"
+    volumes:
+      - tftp-data:/tftp-root
+    environment:
+      - TFTP_ROOT=/tftp-root
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
   recordings:
   guac-uploads:
   shares:
+  tftp-data:

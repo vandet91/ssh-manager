@@ -5,7 +5,7 @@ import { requireAuth, requirePermission } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 
-const VAULT_TYPES = ['server_os', 'service', 'api_key', 'network_device', 'domain_ad', 'email', 'printer', 'dvr', 'other'] as const
+const VAULT_TYPES = ['server_os', 'service', 'api_key', 'network_device', 'domain_ad', 'email', 'printer', 'dvr', 'hypervisor', 'storage', 'database', 'firewall', 'vpn', 'wireless', 'ipmi', 'other'] as const
 
 const EntryBody = z.object({
   title: z.string().min(1).max(300),

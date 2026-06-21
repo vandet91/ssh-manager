@@ -6,6 +6,14 @@ import { requireAuth, requirePermission } from '../../middleware/auth'
 import { withServerSsh } from '../../utils/server-ssh'
 import { writeAuditLog } from '../../utils/audit'
 
+function normalizeSshPath(input: string): string {
+  return path.posix.normalize('/' + input).replace(/\/+$/, '') || '/'
+}
+
+function shellEscape(p: string): string {
+  return normalizeSshPath(p).replace(/'/g, "'\\''")
+}
+
 function getSftp(client: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) => client.sftp((err, sftp) => err ? reject(err) : resolve(sftp)))
 }
@@ -95,8 +103,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
 
     try {
       const result = await withServerSsh(id, async (client) => {
-        // Normalize & sanitize
-        const safe = dirPath.replace(/'/g, "'\\''")
+        const safe = shellEscape(dirPath)
         const { stdout, code } = await exec(client,
           `ls -la --time-style='+%Y-%m-%d %H:%M:%S' '${safe}' 2>&1`
         )
@@ -147,7 +154,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
 
     try {
       const result = await withServerSsh(id, async (client) => {
-        const safe = filePath.replace(/'/g, "'\\''")
+        const safe = shellEscape(filePath)
 
         // Check size
         const { stdout: sizeOut } = await exec(client, `stat -c%s '${safe}' 2>/dev/null || stat -f%z '${safe}' 2>/dev/null`)
@@ -186,7 +193,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     try {
       let archivedTo: string | null = null
       await withServerSsh(id, async (client) => {
-        const safe = body.path.replace(/'/g, "'\\''")
+        const safe = shellEscape(body.path)
         const sftp = await getSftp(client)
 
         // Archive existing file before overwriting — check existence via stdout, not exit code
@@ -198,9 +205,9 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
             const { stdout: tsOut } = await exec(client, "date +'%Y-%m-%dT%H-%M-%S'")
             const ts = tsOut.trim() || new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
             const versionDir = `${dir}/.versions`
-            const safeVDir = versionDir.replace(/'/g, "'\\''")
+            const safeVDir = shellEscape(versionDir)
             const versionFile = `${versionDir}/${basename}.${ts}`
-            const safeVFile = versionFile.replace(/'/g, "'\\''")
+            const safeVFile = shellEscape(versionFile)
             const { code: cpCode, stderr: cpErr } = await exec(client,
               `mkdir -p '${safeVDir}' && cp '${safe}' '${safeVFile}'`
             )
@@ -219,10 +226,10 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
           const { stdout: tsOut2 } = await exec(client, "date +'%Y-%m-%dT%H-%M-%S'")
           const ts = tsOut2.trim() || new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
           const versionDir = `${dir}/.versions`
-          const safeVDir = versionDir.replace(/'/g, "'\\''")
-          const safe2 = body.path.replace(/'/g, "'\\''")
+          const safeVDir = shellEscape(versionDir)
+          const safe2 = shellEscape(body.path)
           const versionFile = `${versionDir}/${basename}.${ts}`
-          const safeVFile = versionFile.replace(/'/g, "'\\''")
+          const safeVFile = shellEscape(versionFile)
           const { code: cpCode, stderr: cpErr } = await exec(client,
             `mkdir -p '${safeVDir}' && cp '${safe2}' '${safeVFile}'`
           )
@@ -252,7 +259,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
         const basename = path.posix.basename(filePath)
         const dir = path.posix.dirname(filePath)
         const versionDir = `${dir}/.versions`
-        const safeVDir = versionDir.replace(/'/g, "'\\''")
+        const safeVDir = shellEscape(versionDir)
         const safeBase = basename.replace(/'/g, "'\\''")
 
         const { stdout, code } = await exec(client,
@@ -284,8 +291,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     try {
       let archivedTo: string | null = null
       await withServerSsh(id, async (client) => {
-        const safeTarget = body.target_path.replace(/'/g, "'\\''")
-        const safeVersion = body.version_path.replace(/'/g, "'\\''")
+        const safeTarget = shellEscape(body.target_path)
+        const safeVersion = shellEscape(body.version_path)
 
         // Archive the current file first
         const { stdout: existOut } = await exec(client, `[ -f '${safeTarget}' ] && echo yes || echo no`)
@@ -295,9 +302,9 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
           const { stdout: tsOut } = await exec(client, "date +'%Y-%m-%dT%H-%M-%S'")
           const ts = tsOut.trim() || new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
           const versionDir = `${dir}/.versions`
-          const safeVDir = versionDir.replace(/'/g, "'\\''")
+          const safeVDir = shellEscape(versionDir)
           const versionFile = `${versionDir}/${basename}.${ts}`
-          const safeVFile = versionFile.replace(/'/g, "'\\''")
+          const safeVFile = shellEscape(versionFile)
           await exec(client, `mkdir -p '${safeVDir}' && cp '${safeTarget}' '${safeVFile}'`)
           archivedTo = versionFile
         }
@@ -325,7 +332,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
 
     try {
       await withServerSsh(id, async (client) => {
-        const safe = dirPath.replace(/'/g, "'\\''")
+        const safe = shellEscape(dirPath)
         const { code, stderr } = await exec(client, `mkdir -p '${safe}' 2>&1`)
         if (code !== 0) throw new Error(stderr.trim() || `mkdir failed`)
       })
@@ -342,8 +349,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
 
     try {
       await withServerSsh(id, async (client) => {
-        const safeFrom = fromPath.replace(/'/g, "'\\''")
-        const safeTo = toPath.replace(/'/g, "'\\''")
+        const safeFrom = shellEscape(fromPath)
+        const safeTo = shellEscape(toPath)
         const { code, stderr } = await exec(client, `mv '${safeFrom}' '${safeTo}' 2>&1`)
         if (code !== 0) throw new Error(stderr.trim() || `Rename failed`)
       })
@@ -372,7 +379,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
 
     try {
       await withServerSsh(id, async (client) => {
-        const safe = targetPath.replace(/'/g, "'\\''")
+        const safe = shellEscape(targetPath)
         const { code, stderr } = await exec(client, `rm -rf '${safe}' 2>&1`)
         if (code !== 0) throw new Error(stderr.trim() || `Delete failed`)
       })
@@ -399,7 +406,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
 
     try {
       const results = await withServerSsh(id, async (client) => {
-        const safeBase = basePath.replace(/'/g, "'\\''")
+        const safeBase = shellEscape(basePath)
         const safeQ = q.replace(/'/g, "'\\''").replace(/"/g, '\\"')
 
         let cmd: string
@@ -435,14 +442,15 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     const { path: filePath } = z.object({ path: z.string() }).parse(req.body)
 
     const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+    const safe = shellEscape(filePath)
     const lintCmds: Record<string, string> = {
-      php: `php -l '${filePath.replace(/'/g, "'\\''")}' 2>&1`,
-      py: `python3 -m py_compile '${filePath.replace(/'/g, "'\\''")}' 2>&1 && echo OK`,
-      js: `node --check '${filePath.replace(/'/g, "'\\''")}' 2>&1 && echo OK`,
-      sh: `bash -n '${filePath.replace(/'/g, "'\\''")}' 2>&1 && echo OK`,
-      json: `python3 -c "import json,sys; json.load(open(sys.argv[1]))" '${filePath.replace(/'/g, "'\\''")}'  2>&1 && echo OK`,
-      yaml: `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" '${filePath.replace(/'/g, "'\\''")}'  2>&1 && echo OK`,
-      yml: `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" '${filePath.replace(/'/g, "'\\''")}'  2>&1 && echo OK`,
+      php: `php -l '${safe}' 2>&1`,
+      py: `python3 -m py_compile '${safe}' 2>&1 && echo OK`,
+      js: `node --check '${safe}' 2>&1 && echo OK`,
+      sh: `bash -n '${safe}' 2>&1 && echo OK`,
+      json: `python3 -c "import json,sys; json.load(open(sys.argv[1]))" '${safe}'  2>&1 && echo OK`,
+      yaml: `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" '${safe}'  2>&1 && echo OK`,
+      yml: `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" '${safe}'  2>&1 && echo OK`,
     }
 
     if (!lintCmds[ext]) return { supported: false, output: '', ok: true }

@@ -229,9 +229,9 @@ export default function Dashboard() {
           {staleServers.length > 0 && (
             <div>
               <p className="text-xs text-yellow-600 mb-2 uppercase tracking-wide">⚠ Not seen in 7+ days</p>
-              <div className="space-y-1 max-h-24 overflow-y-auto">
+              <div className="space-y-1 max-h-24 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
                 {staleServers.map(s => (
-                  <div key={s.id} className="flex items-center justify-between text-xs">
+                  <div key={s.id} className="flex items-center justify-between text-xs" style={{ paddingRight: 20 }}>
                     <span className="text-gray-400 truncate">{s.name}</span>
                     <span className="text-yellow-700 shrink-0 ml-2">{timeAgo(s.last_connected_at)}</span>
                   </div>

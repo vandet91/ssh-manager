@@ -95,7 +95,16 @@ function Toggle({ label, hint, checked, onChange }: {
   )
 }
 
-const DEFAULT_TG: TelegramSettings = { enabled: false, bot_token: '', allowed_chats: [], totp_secret: '' }
+const DEFAULT_COMMANDS = {
+  servers:    { enabled: true, totp: false },
+  status:     { enabled: true, totp: false },
+  software:   { enabled: true, totp: false },
+  linux_info: { enabled: true, totp: false },
+  linux_svc:  { enabled: true, totp: true  },
+  ad_read:    { enabled: true, totp: false },
+  ad_write:   { enabled: true, totp: true  },
+}
+const DEFAULT_TG: TelegramSettings = { enabled: false, bot_token: '', allowed_chats: [], totp_secret: '', commands: DEFAULT_COMMANDS }
 
 const DEFAULT_ALERT: AlertSettings = {
   webhook_enabled: false, webhook_url: '',
@@ -608,6 +617,48 @@ export default function Settings() {
                     </p>
                   </div>
                 )}
+              </div>
+
+              {/* Command group toggles */}
+              <div style={{ border: '1px solid var(--border-med)', borderRadius: 8, overflow: 'hidden' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', alignItems: 'center', padding: '6px 14px', background: 'var(--bg-subtle)', borderBottom: '1px solid var(--border-med)', gap: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Command Group</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', textAlign: 'center', width: 60 }}>Enable</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', textAlign: 'center', width: 60 }}>TOTP</span>
+                </div>
+                {([
+                  ['servers',    'Servers',        '/servers — list servers',           false],
+                  ['status',     'Status',         '/status — server info',             false],
+                  ['software',   'Software',       '/software — scan packages',         false],
+                  ['linux_info', 'Linux Info',     '/disk /memory /top /users',         false],
+                  ['linux_svc',  'Linux Services', '/start /stop /restart',             true ],
+                  ['ad_read',    'AD Read',        '/aduser /adgroups /adlocked …',     false],
+                  ['ad_write',   'AD Write',       '/adunlock /adenable /adreset …',    true ],
+                ] as [keyof typeof DEFAULT_COMMANDS, string, string, boolean][]).map(([key, label, hint], i, arr) => {
+                  const cfg = tg.commands?.[key] ?? DEFAULT_COMMANDS[key]
+                  const enabled = cfg.enabled !== false
+                  const totp = cfg.totp === true
+                  return (
+                    <div key={key} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', alignItems: 'center', padding: '8px 14px', gap: 8, borderBottom: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none', opacity: enabled ? 1 : 0.5 }}>
+                      <span>
+                        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-heading)' }}>{label}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>{hint}</span>
+                      </span>
+                      <div style={{ width: 60, display: 'flex', justifyContent: 'center' }}>
+                        <input type="checkbox" checked={enabled} onChange={e => setTg(prev => ({
+                          ...prev,
+                          commands: { ...(prev.commands ?? DEFAULT_COMMANDS), [key]: { ...(prev.commands?.[key] ?? DEFAULT_COMMANDS[key]), enabled: e.target.checked } },
+                        }))} />
+                      </div>
+                      <div style={{ width: 60, display: 'flex', justifyContent: 'center' }}>
+                        <input type="checkbox" checked={totp} disabled={!enabled} title={!enabled ? 'Enable the group first' : 'Require TOTP code before executing'} onChange={e => setTg(prev => ({
+                          ...prev,
+                          commands: { ...(prev.commands ?? DEFAULT_COMMANDS), [key]: { ...(prev.commands?.[key] ?? DEFAULT_COMMANDS[key]), totp: e.target.checked } },
+                        }))} />
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
 
               {/* Bot commands reference */}

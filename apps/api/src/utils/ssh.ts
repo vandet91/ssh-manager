@@ -41,13 +41,14 @@ export function buildConnectConfig(
   linuxUser: string,
   privateKeyPem: string,
   hostKeyFingerprint?: string,
+  readyTimeout = 15000,
 ): ConnectConfig {
   return {
     host: hostname,
     port,
     username: linuxUser,
     privateKey: ensureOpenSsh(privateKeyPem),
-    readyTimeout: 15000,
+    readyTimeout,
     hostVerifier: hostKeyFingerprint
       ? (keyHash: Buffer | string) => {
           const incoming = Buffer.isBuffer(keyHash) ? keyHash.toString('hex') : String(keyHash)
@@ -90,11 +91,12 @@ export async function connectWithFallback(
   linuxUser: string,
   keys: Array<{ id: string; privatePem: string }>,
   hostKeyFingerprint?: string,
+  readyTimeout?: number,
 ): Promise<{ client: Client; keyId: string }> {
   const errors: string[] = []
   for (const key of keys) {
     try {
-      const cfg = buildConnectConfig(hostname, port, linuxUser, key.privatePem, hostKeyFingerprint)
+      const cfg = buildConnectConfig(hostname, port, linuxUser, key.privatePem, hostKeyFingerprint, readyTimeout)
       const client = await connectSsh(cfg)
       return { client, keyId: key.id }
     } catch (err) {

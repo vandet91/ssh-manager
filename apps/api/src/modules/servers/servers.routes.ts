@@ -14,11 +14,22 @@ const ServerBody = z.object({
   name: z.string().min(1).max(100),
   hostname: z.string().min(1),
   ssh_port: z.number().int().min(1).max(65535).default(22),
-  environment: z.enum(['production', 'staging', 'development', 'other']),
+  environment: z.enum(['production', 'staging', 'development', 'other', 'office', 'branch', 'datacenter', 'home', 'warehouse']),
   tags: z.record(z.string()).optional().default({}),
   management_key_id: z.string().uuid().optional(),
   management_linux_user: z.string().min(1).optional(),
-  os_type: z.enum(['linux', 'windows', 'router', 'access-point', 'switch', 'dvr', 'nvr', 'other-network']).optional(),
+  os_type: z.enum([
+    'linux', 'windows',
+    'router', 'switch', 'switch-l3', 'access-point', 'wireless-controller',
+    'firewall', 'utm', 'ids-ips', 'waf',
+    'load-balancer', 'proxy', 'wan-optimizer',
+    'vpn-gateway', 'vpn-concentrator',
+    'patch-panel', 'media-converter', 'sfp-module',
+    'ip-pbx', 'voip-gateway',
+    'dvr', 'nvr', 'ip-camera',
+    'ups', 'pdu', 'kvm-switch', 'console-server',
+    'other-network',
+  ]).optional(),
   device_category: z.enum(['server', 'network']).optional(),
   is_domain_controller: z.boolean().optional(),
 })
@@ -40,7 +51,17 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     if (query.device_category === 'server') {
       qb = qb.where('os_type', 'in', ['linux', 'windows'])
     } else if (query.device_category === 'network') {
-      qb = qb.where('os_type', 'in', ['router', 'access-point', 'switch', 'dvr', 'nvr', 'other-network'])
+      qb = qb.where('os_type', 'in', [
+        'router', 'switch', 'switch-l3', 'access-point', 'wireless-controller',
+        'firewall', 'utm', 'ids-ips', 'waf',
+        'load-balancer', 'proxy', 'wan-optimizer',
+        'vpn-gateway', 'vpn-concentrator',
+        'patch-panel', 'media-converter', 'sfp-module',
+        'ip-pbx', 'voip-gateway',
+        'dvr', 'nvr', 'ip-camera',
+        'ups', 'pdu', 'kvm-switch', 'console-server',
+        'other-network',
+      ])
     }
     return qb.limit(query.limit).offset((query.page - 1) * query.limit).execute()
   })

@@ -1,0 +1,23 @@
+services:
+  snmp-sim:
+    build:
+      context: ./sim
+      dockerfile: Dockerfile
+    container_name: ssh-manager-snmp-sim
+    environment:
+      SNMP_COMMUNITY: public
+      BASE_PORT: "1161"
+    ports:
+      - "1161-1166:1161-1166/udp"
+    networks:
+      - ssh-manager_default
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(1); s.bind(('',0)); print('ok')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  ssh-manager_default:
+    external: true
