@@ -1,0 +1,29 @@
+# Production override for Linux Docker hosts.
+#
+# Enables host networking on the API so the network scanner can:
+#   - Read the real OS ARP table (/proc/net/arp) for MAC addresses
+#   - Send arping active ARP requests
+#   - Send mDNS (224.0.0.251) and LLMNR (224.0.0.252) multicast packets
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.linux.yml up -d --build
+#
+# NOT compatible with Docker Desktop on Windows/Mac (host = VM, not physical machine).
+
+services:
+  api:
+    ports: !reset []          # remove bridge port mapping — API listens on host directly
+    network_mode: host
+    environment:
+      # host network: reach postgres/redis via 127.0.0.1 with their host-mapped ports
+      - DATABASE_URL=postgresql://sshmanager:password@127.0.0.1:5433/sshmanager
+      - REDIS_URL=redis://127.0.0.1:6379
+
+  web:
+    extra_hosts:
+      # host-gateway → docker0 bridge IP (e.g. 172.17.0.1) on Linux Docker.
+      # The API bound to 0.0.0.0:3001 is reachable there even on host network.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Override nginx config to proxy to host.docker.internal instead of api:3001
+      - ./apps/web/nginx.linux.conf:/etc/nginx/conf.d/default.conf:ro
