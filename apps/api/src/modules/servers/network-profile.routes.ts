@@ -482,5 +482,154 @@ ${deviceInfo}`
       return reply.code(500).send({ error: `Firmware check failed: ${err.message}` })
     }
   })
+
+  // POST /servers/:id/snmp-ports — walk IF-MIB + Q-BRIDGE-MIB, store in snmp_interfaces
+  fastify.post('/servers/:id/snmp-ports', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+    if (!server) return reply.code(404).send({ error: 'Server not found' })
+    if (!server.snmp_enabled) return reply.code(400).send({ error: 'SNMP not configured for this device' })
+
+    const vaultKey = getVaultKey()
+
+    let version  = server.snmp_version ?? 'v2c'
+    let port     = server.snmp_port ?? 161
+    let community = server.snmp_community_enc ? decryptSecret(server.snmp_community_enc, vaultKey) : ''
+    let v3User   = server.snmp_v3_user ?? ''
+    let v3AuthProto = server.snmp_v3_auth_proto ?? null
+    let v3AuthKey   = server.snmp_v3_auth_key_enc ? decryptSecret(server.snmp_v3_auth_key_enc, vaultKey) : ''
+    let v3PrivProto = server.snmp_v3_priv_proto ?? null
+    let v3PrivKey   = server.snmp_v3_priv_key_enc ? decryptSecret(server.snmp_v3_priv_key_enc, vaultKey) : ''
+
+    if (server.snmp_profile_id && !community) {
+      const profile = await db.selectFrom('snmp_profiles').selectAll().where('id', '=', server.snmp_profile_id).executeTakeFirst()
+      if (profile) {
+        version     = profile.version ?? version
+        port        = profile.port ?? port
+        community   = profile.community_enc ? decryptSecret(profile.community_enc, vaultKey) : community
+        v3User      = profile.v3_user ?? v3User
+        v3AuthProto = profile.v3_auth_proto ?? v3AuthProto
+        v3AuthKey   = profile.v3_auth_key_enc ? decryptSecret(profile.v3_auth_key_enc, vaultKey) : v3AuthKey
+        v3PrivProto = profile.v3_priv_proto ?? v3PrivProto
+        v3PrivKey   = profile.v3_priv_key_enc ? decryptSecret(profile.v3_priv_key_enc, vaultKey) : v3PrivKey
+      }
+    }
+    if (!community && version !== 'v3') community = 'public'
+
+    try {
+      const snmp = await import('net-snmp')
+
+      const sessionOpts: any = {
+        port,
+        retries: 1,
+        timeout: 6000,
+        transport: 'udp4',
+        version: version === 'v1' ? snmp.Version1 : version === 'v3' ? snmp.Version3 : snmp.Version2c,
+      }
+
+      const sess = version === 'v3'
+        ? snmp.createV3Session(server.hostname, {
+            name: v3User,
+            level: v3PrivKey ? snmp.SecurityLevel.authPriv : v3AuthKey ? snmp.SecurityLevel.authNoPriv : snmp.SecurityLevel.noAuthNoPriv,
+            authProtocol: v3AuthProto === 'SHA' ? snmp.AuthProtocols.sha : snmp.AuthProtocols.md5,
+            authKey: v3AuthKey,
+            privProtocol: v3PrivProto === 'AES' ? snmp.PrivProtocols.aes : snmp.PrivProtocols.des,
+            privKey: v3PrivKey,
+          }, sessionOpts)
+        : snmp.createSession(server.hostname, community, sessionOpts)
+
+      // Walk a subtree, returning map of index → value
+      const walkTable = (baseOid: string): Promise<Map<number, string>> =>
+        new Promise((resolve) => {
+          const result = new Map<number, string>()
+          sess.subtree(baseOid, 20, (varbinds: any[]) => {
+            for (const vb of varbinds) {
+              if (snmp.isVarbindError(vb)) continue
+              const oidParts = vb.oid.split('.')
+              const idx = parseInt(oidParts[oidParts.length - 1], 10)
+              if (isNaN(idx)) continue
+              const raw = vb.value
+              let val: string
+              if (Buffer.isBuffer(raw)) {
+                // MAC address or binary — try hex first
+                if (raw.length === 6) {
+                  val = Array.from(raw).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(':')
+                } else {
+                  val = raw.toString('utf8').replace(/\0/g, '').trim()
+                }
+              } else if (raw && typeof raw === 'object' && raw.identifiers) {
+                val = raw.identifiers.join('.')
+              } else {
+                val = raw != null ? String(raw) : ''
+              }
+              result.set(idx, val)
+            }
+          }, (err: any) => {
+            // Ignore errors (device may not support all MIBs) — return what we have
+            if (err) {} // best-effort
+            resolve(result)
+          })
+        })
+
+      // IF-MIB OIDs (standard, all devices)
+      const [ifDescr, ifSpeed, ifPhysAddr, ifAdminStatus, ifOperStatus, ifName, ifHighSpeed, ifAlias] =
+        await Promise.all([
+          walkTable('1.3.6.1.2.1.2.2.1.2'),   // ifDescr
+          walkTable('1.3.6.1.2.1.2.2.1.5'),   // ifSpeed (bps)
+          walkTable('1.3.6.1.2.1.2.2.1.6'),   // ifPhysAddress
+          walkTable('1.3.6.1.2.1.2.2.1.7'),   // ifAdminStatus (1=up,2=down)
+          walkTable('1.3.6.1.2.1.2.2.1.8'),   // ifOperStatus (1=up,2=down)
+          walkTable('1.3.6.1.2.1.31.1.1.1.1'),  // ifName (IF-MIB extension)
+          walkTable('1.3.6.1.2.1.31.1.1.1.15'), // ifHighSpeed (Mbps)
+          walkTable('1.3.6.1.2.1.31.1.1.1.18'), // ifAlias
+        ])
+
+      // Q-BRIDGE-MIB: port VLAN (PVID) — best effort
+      const dot1qPvid = await walkTable('1.3.6.1.2.1.17.7.1.4.5.1.1').catch(() => new Map<number, string>())
+
+      // Collect all interface indexes
+      const allIndexes = new Set<number>([
+        ...ifDescr.keys(), ...ifName.keys(), ...ifOperStatus.keys(),
+      ])
+
+      const ports = Array.from(allIndexes)
+        .map(idx => {
+          const adminRaw = ifAdminStatus.get(idx)
+          const operRaw  = ifOperStatus.get(idx)
+          const adminUp  = adminRaw === '1' || adminRaw === 'up'
+          const operUp   = operRaw  === '1' || operRaw  === 'up'
+          const speedBps = parseInt(ifSpeed.get(idx) ?? '0', 10)
+          const speedMbps = parseInt(ifHighSpeed.get(idx) ?? '0', 10) || (speedBps > 0 ? Math.round(speedBps / 1_000_000) : 0)
+          return {
+            index:       idx,
+            name:        ifName.get(idx) ?? ifDescr.get(idx) ?? `if${idx}`,
+            descr:       ifDescr.get(idx) ?? '',
+            alias:       ifAlias.get(idx) ?? '',
+            mac:         ifPhysAddr.get(idx) ?? '',
+            admin_up:    adminUp,
+            oper_up:     operUp,
+            speed_mbps:  speedMbps,
+            pvid:        dot1qPvid.has(idx) ? parseInt(dot1qPvid.get(idx)!, 10) || null : null,
+          }
+        })
+        // Filter out loopback and irrelevant types (typically index 1 is lo on Linux routers)
+        .filter(p => p.name !== 'lo' && !p.name.startsWith('Loopback'))
+        .sort((a, b) => a.index - b.index)
+
+      sess.close()
+
+      const now = new Date()
+      await db.updateTable('servers').set({
+        snmp_interfaces: JSON.stringify(ports),
+        snmp_last_fetched_at: now,
+        updated_at: now,
+      } as any).where('id', '=', id).execute()
+
+      return { ok: true, fetched_at: now.toISOString(), ports }
+    } catch (err: any) {
+      return reply.code(400).send({ error: `SNMP port walk failed: ${err.message ?? err}` })
+    }
+  })
 }
 

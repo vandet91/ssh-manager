@@ -1346,10 +1346,231 @@ function DevicesTab({ devices, snmpProfiles, onChanged }: { devices: Server[]; s
   )
 }
 
+// ── Port Dashboard Tab ────────────────────────────────────────────────────────
+
+interface SnmpPort {
+  index: number
+  name: string
+  descr: string
+  alias: string
+  mac: string
+  admin_up: boolean
+  oper_up: boolean
+  speed_mbps: number
+  pvid: number | null
+}
+
+function PortStatusDot({ up }: { up: boolean }) {
+  return (
+    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: up ? '#3fb950' : '#4b5563', boxShadow: up ? '0 0 4px #3fb950' : 'none', flexShrink: 0 }} />
+  )
+}
+
+function speedLabel(mbps: number): string {
+  if (!mbps) return '—'
+  if (mbps >= 1000) return `${mbps / 1000}G`
+  return `${mbps}M`
+}
+
+function PortsTab({ devices }: { devices: Server[] }) {
+  const snmpDevices = devices.filter(d => d.snmp_enabled)
+  const [selectedId, setSelectedId] = useState<string>(snmpDevices[0]?.id ?? '')
+  const [ports, setPorts] = useState<SnmpPort[] | null>(null)
+  const [fetching, setFetching] = useState(false)
+  const [fetchedAt, setFetchedAt] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [filterStatus, setFilterStatus] = useState<'all' | 'up' | 'down'>('all')
+  const [search, setSearch] = useState('')
+
+  const selected = devices.find(d => d.id === selectedId)
+
+  // Load cached ports from snmp_interfaces on device switch
+  useEffect(() => {
+    setPorts(null); setError(''); setFetchedAt(null)
+    if (!selectedId) return
+    api.get<any>(`/servers/${selectedId}/network-profile`)
+      .then(p => {
+        if (p.snmp_interfaces) {
+          setPorts(p.snmp_interfaces as SnmpPort[])
+          setFetchedAt(p.snmp_last_fetched_at ?? null)
+        }
+      })
+      .catch(() => {})
+  }, [selectedId])
+
+  const pollPorts = async () => {
+    if (!selectedId) return
+    setFetching(true); setError('')
+    try {
+      const r = await api.post<{ ok: boolean; fetched_at: string; ports: SnmpPort[] }>(`/servers/${selectedId}/snmp-ports`)
+      setPorts(r.ports)
+      setFetchedAt(r.fetched_at)
+    } catch (e: any) {
+      setError(e?.data?.error ?? e?.message ?? 'Port poll failed')
+    } finally { setFetching(false) }
+  }
+
+  const filtered = (ports ?? []).filter(p => {
+    if (filterStatus === 'up' && !p.oper_up) return false
+    if (filterStatus === 'down' && p.oper_up) return false
+    if (search) {
+      const q = search.toLowerCase()
+      return p.name.toLowerCase().includes(q) || p.descr.toLowerCase().includes(q) || p.alias.toLowerCase().includes(q)
+    }
+    return true
+  })
+
+  const upCount = (ports ?? []).filter(p => p.oper_up).length
+  const downCount = (ports ?? []).filter(p => !p.oper_up).length
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <select
+          value={selectedId}
+          onChange={e => setSelectedId(e.target.value)}
+          style={{ ...inp, width: 220 }}
+        >
+          {snmpDevices.length === 0
+            ? <option value="">No SNMP-enabled devices</option>
+            : snmpDevices.map(d => <option key={d.id} value={d.id}>{d.name} ({d.hostname})</option>)
+          }
+        </select>
+
+        <button
+          onClick={pollPorts}
+          disabled={fetching || !selectedId || snmpDevices.length === 0}
+          style={{ padding: '7px 14px', borderRadius: 7, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: fetching ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: fetching ? 0.65 : 1 }}
+        >
+          {fetching ? 'Polling…' : '🔌 Poll Ports'}
+        </button>
+
+        {ports && (
+          <>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {(['all', 'up', 'down'] as const).map(f => (
+                <button key={f} onClick={() => setFilterStatus(f)} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, cursor: 'pointer', fontWeight: filterStatus === f ? 600 : 400, background: filterStatus === f ? 'var(--accent-hex)' : 'transparent', border: `1px solid ${filterStatus === f ? 'var(--accent-hex)' : 'var(--border-med)'}`, color: filterStatus === f ? '#fff' : 'var(--text-muted)' }}>
+                  {f === 'up' ? `✓ Up (${upCount})` : f === 'down' ? `✗ Down (${downCount})` : `All (${ports.length})`}
+                </button>
+              ))}
+            </div>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search port name…"
+              style={{ ...inp, width: 180 }}
+            />
+          </>
+        )}
+
+        <div style={{ flex: 1 }} />
+        {fetchedAt && (
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Polled {new Date(fetchedAt).toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ marginBottom: 14, padding: '10px 14px', borderRadius: 7, background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.35)', color: '#f87171', fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+
+      {snmpDevices.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+          No SNMP-enabled devices. Enable SNMP on a device in the Devices tab → Configure (⚙) → SNMP.
+        </div>
+      ) : !ports ? (
+        <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+          {fetching ? 'Walking interface table…' : 'Click "Poll Ports" to fetch interface status from this device via SNMP.'}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+          No ports match.
+        </div>
+      ) : (
+        <div style={{ border: '1px solid var(--border-med)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-surface)' }}>
+          {/* Visual port strip */}
+          {selected && (
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-med)', background: 'var(--bg-card)' }}>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+                {selected.name} — {ports.length} interfaces &nbsp;
+                <span style={{ color: '#3fb950' }}>▲ {upCount} up</span>
+                <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>·</span>
+                <span style={{ color: '#9ca3af' }}>▼ {downCount} down</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {ports.map(p => (
+                  <div
+                    key={p.index}
+                    title={`${p.name}${p.alias ? ` — ${p.alias}` : ''}\n${p.oper_up ? 'Up' : 'Down'} · ${speedLabel(p.speed_mbps)}${p.pvid ? ` · VLAN ${p.pvid}` : ''}`}
+                    style={{
+                      width: 20, height: 20, borderRadius: 3,
+                      background: p.oper_up ? 'rgba(52,211,153,0.2)' : 'rgba(75,85,99,0.25)',
+                      border: `1px solid ${p.oper_up ? 'rgba(52,211,153,0.55)' : 'rgba(75,85,99,0.45)'}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'default',
+                    }}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: 1, background: p.oper_up ? '#3fb950' : '#4b5563' }} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Table */}
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-med)' }}>
+                {['#', 'Port', 'Description / Alias', 'MAC', 'Admin', 'Link', 'Speed', 'VLAN'].map(h => (
+                  <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((p, i) => (
+                <tr key={p.index} style={{ borderBottom: i < filtered.length - 1 ? '1px solid var(--border-weak)' : 'none' }}>
+                  <td style={{ padding: '9px 14px', color: 'var(--text-muted)', fontSize: 11 }}>{p.index}</td>
+                  <td style={{ padding: '9px 14px', fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{p.name}</td>
+                  <td style={{ padding: '9px 14px', fontSize: 12 }}>
+                    {p.descr && <div style={{ color: 'var(--text-secondary)' }}>{p.descr}</div>}
+                    {p.alias && p.alias !== p.descr && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>↪ {p.alias}</div>}
+                  </td>
+                  <td style={{ padding: '9px 14px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>{p.mac || '—'}</td>
+                  <td style={{ padding: '9px 14px' }}>
+                    <span style={{ fontSize: 11, color: p.admin_up ? '#3fb950' : '#9ca3af' }}>{p.admin_up ? 'Enabled' : 'Disabled'}</span>
+                  </td>
+                  <td style={{ padding: '9px 14px' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: p.oper_up ? '#3fb950' : '#6b7280' }}>
+                      <PortStatusDot up={p.oper_up} />
+                      {p.oper_up ? 'Up' : 'Down'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '9px 14px', fontSize: 12, fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{speedLabel(p.speed_mbps)}</td>
+                  <td style={{ padding: '9px 14px', fontSize: 12 }}>
+                    {p.pvid ? (
+                      <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: '1px 7px', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: '#818cf8' }}>
+                        VLAN {p.pvid}
+                      </span>
+                    ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function NetworkDevices() {
-  const [pageTab, setPageTab] = useState<'devices' | 'snmp-profiles' | 'ping' | 'firmware'>('devices')
+  const [pageTab, setPageTab] = useState<'devices' | 'snmp-profiles' | 'ping' | 'firmware' | 'ports'>('devices')
   const [devices, setDevices] = useState<Server[]>([])
   const [snmpProfiles, setSnmpProfiles] = useState<SnmpProfile[]>([])
 
@@ -1367,6 +1588,7 @@ export default function NetworkDevices() {
     { id: 'devices',       label: '🌐 Devices',       count: devices.length },
     { id: 'snmp-profiles', label: '📊 SNMP Profiles', count: snmpProfiles.length },
     { id: 'ping',          label: '📡 Ping Monitor',  count: null },
+    { id: 'ports',         label: '🔌 Port Dashboard', count: null },
     { id: 'firmware',      label: '🛡 Firmware AI',   count: null },
   ] as const
 
@@ -1376,7 +1598,7 @@ export default function NetworkDevices() {
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>🌐 Network Devices</h1>
         <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>
-          Routers, switches, firewalls — SSH, Web UI, SNMP, ping monitoring & AI firmware analysis
+          Routers, switches, firewalls — SSH, Web UI, SNMP, ping monitoring, port dashboard & AI firmware analysis
         </p>
       </div>
 
@@ -1393,6 +1615,7 @@ export default function NetworkDevices() {
       {pageTab === 'devices'       && <DevicesTab devices={devices} snmpProfiles={snmpProfiles} onChanged={() => { loadDevices(); loadProfiles() }} />}
       {pageTab === 'snmp-profiles' && <SnmpProfilesTab />}
       {pageTab === 'ping'          && <PingMonitorTab devices={devices} />}
+      {pageTab === 'ports'         && <PortsTab devices={devices} />}
       {pageTab === 'firmware'      && <FirmwareTab devices={devices} onDevicesChanged={loadDevices} />}
     </div>
   )
