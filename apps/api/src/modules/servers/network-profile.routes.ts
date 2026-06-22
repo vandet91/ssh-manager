@@ -589,6 +589,36 @@ ${deviceInfo}`
       // Q-BRIDGE-MIB: port VLAN (PVID) — best effort
       const dot1qPvid = await walkTable('1.3.6.1.2.1.17.7.1.4.5.1.1').catch(() => new Map<number, string>())
 
+      // Q-BRIDGE-MIB: dot1qVlanStaticEgressPorts — bitmask of ports per VLAN
+      // Used to detect trunk (port in >1 VLAN) vs access (port in exactly 1 VLAN)
+      const walkBitmask = (baseOid: string): Promise<Map<number, Buffer>> =>
+        new Promise((resolve) => {
+          const result = new Map<number, Buffer>()
+          sess.subtree(baseOid, 20, (varbinds: any[]) => {
+            for (const vb of varbinds) {
+              if (snmp.isVarbindError(vb)) continue
+              const parts = vb.oid.split('.')
+              const key = parseInt(parts[parts.length - 1], 10)
+              if (!isNaN(key) && Buffer.isBuffer(vb.value)) result.set(key, vb.value)
+            }
+          }, () => resolve(result))
+        })
+
+      const egressByVlan = await walkBitmask('1.3.6.1.2.1.17.7.1.4.3.1.2').catch(() => new Map<number, Buffer>())
+
+      // Decode: port n → byte floor((n-1)/8), bit (n-1)%8 from MSB
+      const portVlanCount = new Map<number, number>()
+      for (const bitmask of egressByVlan.values()) {
+        for (let b = 0; b < bitmask.length; b++) {
+          for (let bit = 0; bit < 8; bit++) {
+            if (bitmask[b] & (0x80 >> bit)) {
+              const portN = b * 8 + bit + 1
+              portVlanCount.set(portN, (portVlanCount.get(portN) ?? 0) + 1)
+            }
+          }
+        }
+      }
+
       // Collect all interface indexes
       const allIndexes = new Set<number>([
         ...ifDescr.keys(), ...ifName.keys(), ...ifOperStatus.keys(),
@@ -602,6 +632,9 @@ ${deviceInfo}`
           const operUp   = operRaw  === '1' || operRaw  === 'up'
           const speedBps = parseInt(ifSpeed.get(idx) ?? '0', 10)
           const speedMbps = parseInt(ifHighSpeed.get(idx) ?? '0', 10) || (speedBps > 0 ? Math.round(speedBps / 1_000_000) : 0)
+          const vlanCount = portVlanCount.get(idx) ?? 0
+          const mode: 'access' | 'trunk' | 'unknown' =
+            vlanCount === 0 ? 'unknown' : vlanCount === 1 ? 'access' : 'trunk'
           return {
             index:       idx,
             name:        ifName.get(idx) ?? ifDescr.get(idx) ?? `if${idx}`,
@@ -612,6 +645,7 @@ ${deviceInfo}`
             oper_up:     operUp,
             speed_mbps:  speedMbps,
             pvid:        dot1qPvid.has(idx) ? parseInt(dot1qPvid.get(idx)!, 10) || null : null,
+            mode,
           }
         })
         // Filter out loopback and irrelevant types (typically index 1 is lo on Linux routers)

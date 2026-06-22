@@ -1447,6 +1447,20 @@ interface SnmpPort {
   oper_up: boolean
   speed_mbps: number
   pvid: number | null
+  mode?: 'access' | 'trunk' | 'unknown'
+}
+
+function ModeBadge({ mode }: { mode?: 'access' | 'trunk' | 'unknown' }) {
+  if (!mode || mode === 'unknown') return <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>—</span>
+  const isT = mode === 'trunk'
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', borderRadius: 4, padding: '1px 6px',
+      background: isT ? 'rgba(251,191,36,0.12)' : 'rgba(52,211,153,0.1)',
+      border: `1px solid ${isT ? 'rgba(251,191,36,0.4)' : 'rgba(52,211,153,0.35)'}`,
+      color: isT ? '#fbbf24' : '#34d399' }}>
+      {isT ? 'TRUNK' : 'ACCESS'}
+    </span>
+  )
 }
 
 function PortStatusDot({ up }: { up: boolean }) {
@@ -1487,6 +1501,13 @@ function PortsTab({ devices }: { devices: Server[] }) {
 
   const selected = devices.find(d => d.id === selectedId)
   const hasSsh = !!selected?.access_ssh_enabled
+
+  // Mixed-mode detection — computed from currently checked ports
+  const selModes = new Set(
+    [...checkedPorts].map(idx => ports?.find(p => p.index === idx)?.mode ?? 'unknown')
+  )
+  const hasMixedModes = selModes.has('access') && selModes.has('trunk')
+  const allSameMode = !hasMixedModes && (selModes.size === 1 && !selModes.has('unknown'))
 
   // Clear selection when device changes
   useEffect(() => { setCheckedPorts(new Set()); setLastCheckedIdx(null) }, [selectedId])
@@ -1688,22 +1709,44 @@ function PortsTab({ devices }: { devices: Server[] }) {
                 <span style={{ color: '#9ca3af' }}>▼ {downCount} down</span>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {ports.map(p => (
-                  <div
-                    key={p.index}
-                    title={`${p.name}${p.alias ? ` — ${p.alias}` : ''}\n${p.oper_up ? 'Up' : 'Down'} · ${speedLabel(p.speed_mbps)}${p.pvid ? ` · VLAN ${p.pvid}` : ''}`}
-                    onClick={() => { setCheckedPorts(prev => { const n = new Set(prev); if (n.has(p.index)) n.delete(p.index); else n.add(p.index); return n }) }}
-                    style={{
-                      width: 20, height: 20, borderRadius: 3,
-                      background: checkedPorts.has(p.index) ? 'rgba(99,102,241,0.35)' : p.oper_up ? 'rgba(52,211,153,0.2)' : 'rgba(75,85,99,0.25)',
-                      border: `1px solid ${checkedPorts.has(p.index) ? '#818cf8' : p.oper_up ? 'rgba(52,211,153,0.55)' : 'rgba(75,85,99,0.45)'}`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <span style={{ width: 6, height: 6, borderRadius: 1, background: checkedPorts.has(p.index) ? '#818cf8' : p.oper_up ? '#3fb950' : '#4b5563' }} />
-                  </div>
-                ))}
+                {ports.map((p, stripIdx) => {
+                  const isChecked = checkedPorts.has(p.index)
+                  const isTrunk = p.mode === 'trunk'
+                  return (
+                    <div
+                      key={p.index}
+                      title={`${p.name}${p.alias ? ` — ${p.alias}` : ''}\n${p.mode ? p.mode.toUpperCase() : ''} · ${p.oper_up ? 'Up' : 'Down'} · ${speedLabel(p.speed_mbps)}${p.pvid ? ` · VLAN ${p.pvid}` : ''}`}
+                      onClick={e => {
+                        const portsCopy = ports
+                        if (e.shiftKey && lastCheckedIdx !== null) {
+                          // Find range in ports array (strip uses full ports, not filtered)
+                          const stripIndexes = portsCopy.map(x => x.index)
+                          const a = stripIndexes.indexOf(ports[lastCheckedIdx]?.index ?? -1)
+                          const b = stripIdx
+                          const lo = Math.min(a === -1 ? b : a, b)
+                          const hi = Math.max(a === -1 ? b : a, b)
+                          setCheckedPorts(prev => {
+                            const n = new Set(prev)
+                            portsCopy.slice(lo, hi + 1).forEach(x => n.add(x.index))
+                            return n
+                          })
+                        } else {
+                          setCheckedPorts(prev => { const n = new Set(prev); if (n.has(p.index)) n.delete(p.index); else n.add(p.index); return n })
+                          setLastCheckedIdx(stripIdx)
+                        }
+                      }}
+                      style={{
+                        width: 20, height: 20, borderRadius: isTrunk ? 10 : 3,
+                        background: isChecked ? 'rgba(99,102,241,0.4)' : p.oper_up ? (isTrunk ? 'rgba(251,191,36,0.15)' : 'rgba(52,211,153,0.2)') : 'rgba(75,85,99,0.25)',
+                        border: `1px solid ${isChecked ? '#818cf8' : p.oper_up ? (isTrunk ? 'rgba(251,191,36,0.6)' : 'rgba(52,211,153,0.55)') : 'rgba(75,85,99,0.45)'}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        cursor: 'pointer', flexShrink: 0,
+                      }}
+                    >
+                      <span style={{ width: 6, height: 6, borderRadius: isTrunk ? 3 : 1, background: isChecked ? '#818cf8' : p.oper_up ? (isTrunk ? '#fbbf24' : '#3fb950') : '#4b5563' }} />
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -1712,16 +1755,16 @@ function PortsTab({ devices }: { devices: Server[] }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-med)' }}>
-                <th style={{ padding: '9px 10px 9px 14px', width: 32 }}>
+                <th style={{ padding: '9px 8px 9px 16px', width: 36, minWidth: 36 }}>
                   <input
                     type="checkbox"
                     checked={filtered.length > 0 && filtered.every(p => checkedPorts.has(p.index))}
                     ref={el => { if (el) el.indeterminate = filtered.some(p => checkedPorts.has(p.index)) && !filtered.every(p => checkedPorts.has(p.index)) }}
                     onChange={toggleAllVisible}
-                    title="Select all visible ports"
+                    title="Select all visible ports (Shift+click rows for range)"
                   />
                 </th>
-                {['#', 'Port', 'Description / Alias', 'MAC', 'Admin', 'Link', 'Speed', 'VLAN', ''].map(h => (
+                {['#', 'Port', 'Description / Alias', 'MAC', 'Mode', 'Admin', 'Link', 'Speed', 'VLAN', ''].map(h => (
                   <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -1732,12 +1775,12 @@ function PortsTab({ devices }: { devices: Server[] }) {
                   key={p.index}
                   style={{ borderBottom: i < filtered.length - 1 ? '1px solid var(--border-weak)' : 'none', background: checkedPorts.has(p.index) ? 'rgba(99,102,241,0.06)' : 'transparent' }}
                 >
-                  <td style={{ padding: '9px 10px 9px 14px' }}>
+                  <td style={{ padding: '9px 8px 9px 16px' }}>
                     <input
                       type="checkbox"
                       checked={checkedPorts.has(p.index)}
-                      onChange={e => handleCheck(p, i, e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey)}
-                      onClick={e => handleCheck(p, i, (e as React.MouseEvent).shiftKey)}
+                      onChange={() => {/* handled by onClick */}}
+                      onClick={e => { e.stopPropagation(); handleCheck(p, i, (e as React.MouseEvent).shiftKey) }}
                     />
                   </td>
                   <td style={{ padding: '9px 14px', color: 'var(--text-muted)', fontSize: 11 }}>{p.index}</td>
@@ -1747,6 +1790,7 @@ function PortsTab({ devices }: { devices: Server[] }) {
                     {p.alias && p.alias !== p.descr && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>↪ {p.alias}</div>}
                   </td>
                   <td style={{ padding: '9px 14px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>{p.mac || '—'}</td>
+                  <td style={{ padding: '9px 14px' }}><ModeBadge mode={p.mode} /></td>
                   <td style={{ padding: '9px 14px' }}>
                     <span style={{ fontSize: 11, color: p.admin_up ? '#3fb950' : '#9ca3af' }}>{p.admin_up ? 'Enabled' : 'Disabled'}</span>
                   </td>
@@ -1783,28 +1827,69 @@ function PortsTab({ devices }: { devices: Server[] }) {
 
       {/* ── Bulk action toolbar — floats when ports are selected ── */}
       {checkedPorts.size > 0 && (
-        <div style={{ position: 'sticky', bottom: 16, marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '10px 16px', borderRadius: 10, background: 'var(--bg-card)', border: '1px solid var(--border-med)', boxShadow: '0 4px 20px rgba(0,0,0,0.35)' }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-hex)', marginRight: 4 }}>
-            {checkedPorts.size} port{checkedPorts.size > 1 ? 's' : ''} selected
-          </span>
-          <span style={{ width: 1, height: 18, background: 'var(--border-med)' }} />
+        <div style={{ position: 'sticky', bottom: 16, marginTop: 12, borderRadius: 10, background: 'var(--bg-card)', border: `1px solid ${hasMixedModes ? 'rgba(251,191,36,0.5)' : 'var(--border-med)'}`, boxShadow: '0 4px 20px rgba(0,0,0,0.35)', overflow: 'hidden' }}>
 
-          {/* SNMP actions — always available */}
-          <button onClick={() => bulkAdmin(true)}  style={tbBtn('#34d399', 'rgba(52,211,153,0.15)', 'rgba(52,211,153,0.35)')}>✓ Enable</button>
-          <button onClick={() => bulkAdmin(false)} style={tbBtn('#f87171', 'rgba(248,113,113,0.12)', 'rgba(248,113,113,0.35)')}>✕ Disable</button>
+          {/* Mixed-mode warning banner */}
+          {hasMixedModes && (
+            <div style={{ padding: '7px 16px', background: 'rgba(251,191,36,0.1)', borderBottom: '1px solid rgba(251,191,36,0.3)', fontSize: 12, color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>⚠ Mixed port modes selected</span>
+              <span style={{ color: 'var(--text-muted)' }}>—</span>
+              <span>Your selection contains both ACCESS and TRUNK ports. VLAN, Mode, and PortFast actions require a uniform mode selection. Deselect one type to continue, or use Enable/Disable which works on all modes.</span>
+            </div>
+          )}
 
-          {/* SSH CLI actions — only when device has SSH */}
-          {hasSsh && <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '10px 16px' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-hex)', marginRight: 4 }}>
+              {checkedPorts.size} port{checkedPorts.size > 1 ? 's' : ''} selected
+              {allSameMode && <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6 }}>({[...selModes][0]})</span>}
+            </span>
             <span style={{ width: 1, height: 18, background: 'var(--border-med)' }} />
-            <button onClick={() => { setActionModal('description'); setActionInput('') }}        style={tbBtn('#60a5fa', 'rgba(96,165,250,0.12)', 'rgba(96,165,250,0.35)')}>✎ Description</button>
-            <button onClick={() => { setActionModal('vlan');        setActionInput('') }}        style={tbBtn('#a78bfa', 'rgba(167,139,250,0.12)', 'rgba(167,139,250,0.35)')}>🏷 VLAN</button>
-            <button onClick={() => { setActionModal('mode');        setActionSelect('access') }} style={tbBtn('#fbbf24', 'rgba(251,191,36,0.12)',  'rgba(251,191,36,0.35)')}>⇄ Mode</button>
-            <button onClick={() => runPortCli('portfast', { enabled: true })}                   style={tbBtn('#34d399', 'rgba(52,211,153,0.12)',  'rgba(52,211,153,0.25)')}>⚡ Edge On</button>
-            <button onClick={() => runPortCli('portfast', { enabled: false })}                  style={tbBtn('#9ca3af', 'rgba(156,163,175,0.12)', 'rgba(156,163,175,0.3)')}>⚡ Edge Off</button>
-          </>}
 
-          <div style={{ flex: 1 }} />
-          <button onClick={() => setCheckedPorts(new Set())} style={tbBtn('var(--text-muted)', 'transparent', 'var(--border-weak)')}>✕ Clear</button>
+            {/* SNMP — always available regardless of mode */}
+            <button onClick={() => bulkAdmin(true)}  style={tbBtn('#34d399', 'rgba(52,211,153,0.15)', 'rgba(52,211,153,0.35)')}>✓ Enable</button>
+            <button onClick={() => bulkAdmin(false)} style={tbBtn('#f87171', 'rgba(248,113,113,0.12)', 'rgba(248,113,113,0.35)')}>✕ Disable</button>
+
+            {/* SSH CLI actions — only when device has SSH; blocked when mixed modes */}
+            {hasSsh && <>
+              <span style={{ width: 1, height: 18, background: 'var(--border-med)' }} />
+              <button
+                onClick={() => { setActionModal('description'); setActionInput('') }}
+                style={tbBtn('#60a5fa', 'rgba(96,165,250,0.12)', 'rgba(96,165,250,0.35)')}>
+                ✎ Description
+              </button>
+              <button
+                onClick={() => !hasMixedModes && (setActionModal('vlan'), setActionInput(''), setActionSelect(allSameMode ? ([...selModes][0] as string) : 'access'))}
+                disabled={hasMixedModes}
+                title={hasMixedModes ? 'Deselect mixed port modes first' : undefined}
+                style={{ ...tbBtn('#a78bfa', 'rgba(167,139,250,0.12)', 'rgba(167,139,250,0.35)'), opacity: hasMixedModes ? 0.4 : 1, cursor: hasMixedModes ? 'not-allowed' : 'pointer' }}>
+                🏷 VLAN
+              </button>
+              <button
+                onClick={() => !hasMixedModes && (setActionModal('mode'), setActionSelect('access'))}
+                disabled={hasMixedModes}
+                title={hasMixedModes ? 'Deselect mixed port modes first' : undefined}
+                style={{ ...tbBtn('#fbbf24', 'rgba(251,191,36,0.12)', 'rgba(251,191,36,0.35)'), opacity: hasMixedModes ? 0.4 : 1, cursor: hasMixedModes ? 'not-allowed' : 'pointer' }}>
+                ⇄ Mode
+              </button>
+              <button
+                onClick={() => !hasMixedModes && runPortCli('portfast', { enabled: true })}
+                disabled={hasMixedModes}
+                title={hasMixedModes ? 'Deselect mixed port modes first' : undefined}
+                style={{ ...tbBtn('#34d399', 'rgba(52,211,153,0.12)', 'rgba(52,211,153,0.25)'), opacity: hasMixedModes ? 0.4 : 1, cursor: hasMixedModes ? 'not-allowed' : 'pointer' }}>
+                ⚡ Edge On
+              </button>
+              <button
+                onClick={() => !hasMixedModes && runPortCli('portfast', { enabled: false })}
+                disabled={hasMixedModes}
+                title={hasMixedModes ? 'Deselect mixed port modes first' : undefined}
+                style={{ ...tbBtn('#9ca3af', 'rgba(156,163,175,0.12)', 'rgba(156,163,175,0.3)'), opacity: hasMixedModes ? 0.4 : 1, cursor: hasMixedModes ? 'not-allowed' : 'pointer' }}>
+                ⚡ Edge Off
+              </button>
+            </>}
+
+            <div style={{ flex: 1 }} />
+            <button onClick={() => setCheckedPorts(new Set())} style={tbBtn('var(--text-muted)', 'transparent', 'var(--border-weak)')}>✕ Clear</button>
+          </div>
         </div>
       )}
 

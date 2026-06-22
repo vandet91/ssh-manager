@@ -343,6 +343,26 @@ for (const p of PORTS) {
   set(`1.3.6.1.2.1.17.7.1.4.5.1.1.${i}`, T.GAUGE32,  p.v)                  // dot1qPvid
 }
 
+// dot1qVlanStaticEgressPorts (1.3.6.1.2.1.17.7.1.4.3.1.2.{vlanId})
+// Bitmask encoding: port n → byte floor((n-1)/8), bit (n-1)%8 from MSB (0x80 >> bitPos)
+// Ports 25-26 (uplinks) are trunk and appear in ALL VLANs.
+// Ports 21-22 (trunk to APs) carry VLANs 1+50 → also detected as trunk.
+// Ports 1-24 (access) appear in exactly one VLAN → detected as access.
+//
+//                         Port indices:  1-8     9-16    17-24   25-32
+const EGRESS = {
+  1:  Buffer.from([0x00, 0xF9, 0xCF, 0xC0]), // VLAN 1  — ports 9-13,16-18,21-24 + 25-26
+  10: Buffer.from([0xCC, 0x00, 0x00, 0xC0]), // VLAN 10 — ports 1,2,5,6 + 25-26
+  20: Buffer.from([0x30, 0x00, 0x00, 0xC0]), // VLAN 20 — ports 3,4 + 25-26
+  30: Buffer.from([0x02, 0x00, 0x00, 0xC0]), // VLAN 30 — port 7 + 25-26
+  40: Buffer.from([0x01, 0x00, 0x00, 0xC0]), // VLAN 40 — port 8 + 25-26
+  50: Buffer.from([0x00, 0x06, 0x0C, 0xC0]), // VLAN 50 — ports 14,15,21,22 + 25-26
+  60: Buffer.from([0x00, 0x00, 0x30, 0xC0]), // VLAN 60 — ports 19,20 + 25-26
+}
+for (const [vlan, mask] of Object.entries(EGRESS)) {
+  set(`1.3.6.1.2.1.17.7.1.4.3.1.2.${vlan}`, T.OCTET_STRING, mask)
+}
+
 // ── UDP server ─────────────────────────────────────────────────────────────────
 const server = dgram.createSocket('udp4')
 
