@@ -687,6 +687,91 @@ Rotation runs automatically on API startup and every hour. On failure, the new k
 
 ---
 
+## Alerts
+
+SSH Manager can push alerts to three channels simultaneously. Each alert event can be individually enabled or disabled from **Settings → Alerts**.
+
+### Alert events
+
+| Event | When it fires |
+|-------|--------------|
+| `rotation_failed` | SSH key rotation fails on a server |
+| `rotation_success` | Key rotation completes successfully |
+| `security_critical` | Security scan finds a critical issue |
+| `security_high` | Security scan finds a high-severity issue |
+| `key_expiring` | A key is nearing its rotation deadline |
+| `login_failed` | Failed login attempt to SSH Manager |
+| `new_login` | Successful new login to SSH Manager |
+| `server_unreachable` | A server stops responding |
+| `key_revoked` | An SSH key is revoked |
+| `user_deactivated` | A user account is deactivated |
+
+---
+
+### Slack / Teams Webhook
+
+Sends a color-coded attachment message to any Slack channel or Microsoft Teams connector. Both use the same Slack-compatible payload format.
+
+**Setup (Slack):**
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch** → give it a name and pick your workspace
+2. In the left sidebar click **Incoming Webhooks** → toggle **On**
+3. Click **Add New Webhook to Workspace** → pick a channel (e.g. `#alerts`) → click **Allow**
+4. The webhook URL appears at the bottom of the page — copy it (looks like `https://hooks.slack.com/services/T.../B.../...`)
+5. In SSH Manager go to **Settings → Alerts** → enable **Webhook Alerts** → paste the URL → **Save**
+
+> Slack's free plan supports Incoming Webhooks with no restrictions.
+
+**Setup (Microsoft Teams):**
+
+1. In Teams, open the channel → **…** → **Connectors** → search **Incoming Webhook** → **Configure**
+2. Give it a name, optionally upload an icon → **Create**
+3. Copy the generated URL
+4. Paste it into SSH Manager **Settings → Alerts → Webhook URL** — same field as Slack
+
+**Setup (Discord — free, no account limits):**
+
+1. In Discord, open a channel → **Edit Channel** → **Integrations** → **Webhooks** → **New Webhook** → copy URL
+2. Append `/slack` to the URL: `https://discord.com/api/webhooks/.../slack`
+3. Paste into SSH Manager **Settings → Alerts → Webhook URL**
+
+Alerts are sent as colored Slack attachments:
+- 🔴 Red — critical
+- 🟡 Yellow — warning
+- 🔵 Blue — info
+
+---
+
+### SMTP Email
+
+Sends a styled HTML email to one or more recipients.
+
+In **Settings → Alerts → Email**:
+
+| Field | Example |
+|-------|---------|
+| SMTP host | `smtp.gmail.com` |
+| SMTP port | `587` |
+| Secure (TLS) | off for port 587 (STARTTLS), on for 465 |
+| Username | your email address |
+| Password | app password (not your login password) |
+| From address | `alerts@yourcompany.com` |
+| Recipients | comma-separated list of emails |
+
+> For Gmail, generate an **App Password** at myaccount.google.com → Security → 2-Step Verification → App passwords.
+
+---
+
+### Telegram Alert Channel
+
+Sends a Markdown-formatted message to a Telegram chat or channel using the same bot token as the Telegram Bot feature.
+
+In **Settings → Alerts → Telegram**:
+1. Enable and enter the **Alert Chat ID** (can be the same or a different chat from the bot)
+2. Save — alerts will be sent to that chat alongside any bot commands
+
+---
+
 ## Telegram Bot
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token
