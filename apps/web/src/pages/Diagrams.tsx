@@ -244,6 +244,9 @@ function drawEdge(ctx: CanvasRenderingContext2D, e: DiagramEdge, nodes: DiagramN
 }
 
 function drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number) {
+  // Background fill — matches --bg-body dark theme
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg-body').trim() || '#0d1117'
+  ctx.fillRect(0, 0, W, H)
   ctx.save(); ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1
   for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke() }
   for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke() }
