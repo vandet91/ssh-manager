@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { api, User } from './api/client'
+import { TotpElevationProvider } from './context/TotpElevationContext'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Servers from './pages/Servers'
@@ -63,6 +64,7 @@ function App() {
   }
 
   return (
+    <TotpElevationProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/share-center" element={<ShareCenter />} />
@@ -100,6 +102,7 @@ function App() {
         )}
       </Routes>
     </BrowserRouter>
+    </TotpElevationProvider>
   )
 }
 

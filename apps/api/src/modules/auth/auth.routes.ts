@@ -9,6 +9,7 @@ import { db } from '../../db/client'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 import { requireAuth, requirePermission } from '../../middleware/auth'
+import { elevateSession } from '../../utils/totp-guard'
 import { config } from '../../config'
 import { getPasswordPolicy, validatePassword } from '../settings/settings.routes'
 
@@ -302,6 +303,48 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     await writeAuditLog({ userId: user.id, userEmail: user.email, action: 'mfa.validate.success', request: req })
     return { ok: true, user: req.session.user }
+  })
+
+  // POST /auth/totp/elevate — verify TOTP code and elevate session for critical actions
+  fastify.post('/auth/totp/elevate', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { token } = req.body as { token: string }
+    if (!token) return reply.code(400).send({ error: 'token required' })
+
+    const user = await db.selectFrom('users')
+      .select(['mfa_secret', 'mfa_enabled'])
+      .where('id', '=', req.session.user!.id)
+      .executeTakeFirst()
+
+    if (!user?.mfa_enabled || !user.mfa_secret) {
+      return reply.code(400).send({ error: 'MFA not enabled on this account' })
+    }
+
+    const vaultKey = getVaultKey()
+    const plainSecret = decryptSecret(user.mfa_secret, vaultKey)
+
+    // Prevent replay — reject code if it was the last accepted one
+    const codeHash = require('crypto').createHash('sha256').update(token).digest('hex')
+    if (req.session.totpLastCode === codeHash) {
+      return reply.code(400).send({ error: 'TOTP code already used' })
+    }
+
+    const valid = speakeasy.totp.verify({ secret: plainSecret, encoding: 'base32', token, window: 1 })
+    if (!valid) {
+      await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'totp.elevate.failed', request: req })
+      return reply.code(400).send({ error: 'Invalid TOTP code' })
+    }
+
+    req.session.totpLastCode = codeHash
+    await elevateSession(req)
+    await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'totp.elevate.success', request: req })
+    return { ok: true, elevatedUntil: req.session.totpElevatedUntil }
+  })
+
+  // GET /auth/totp/elevation-status — check if session is currently elevated
+  fastify.get('/auth/totp/elevation-status', { preHandler: [requireAuth] }, async (req) => {
+    const until = req.session.totpElevatedUntil
+    const elevated = typeof until === 'number' && until > Date.now()
+    return { elevated, elevatedUntil: elevated ? until : null }
   })
 
   // GET /auth/mfa/backup-codes

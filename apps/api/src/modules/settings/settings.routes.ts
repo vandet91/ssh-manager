@@ -476,6 +476,58 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
 
     return { ok: true, imported, skipped }
   })
+
+  // ── TOTP Action Rules ─────────────────────────────────────────────────────────
+
+  // GET /settings/totp-actions
+  fastify.get('/settings/totp-actions', { preHandler: [requireAuth] }, async (req) => {
+    const rows = await (db as any)
+      .selectFrom('totp_action_rules')
+      .selectAll()
+      .orderBy('category')
+      .orderBy('label')
+      .execute()
+
+    const elevationMinutes = await (db as any)
+      .selectFrom('settings')
+      .select('value')
+      .where('key', '=', 'totp_elevation_minutes')
+      .executeTakeFirst()
+      .then((r: any) => r ? JSON.parse(r.value) : 15)
+
+    return { actions: rows, elevationMinutes }
+  })
+
+  // PUT /settings/totp-actions
+  fastify.put('/settings/totp-actions', { preHandler: [requirePermission('admin')] }, async (req, reply) => {
+    const { actions, elevationMinutes } = req.body as {
+      actions: { action: string; enabled: boolean }[]
+      elevationMinutes?: number
+    }
+
+    for (const { action, enabled } of actions) {
+      await (db as any)
+        .updateTable('totp_action_rules')
+        .set({ enabled, updated_at: new Date() })
+        .where('action', '=', action)
+        .execute()
+    }
+
+    if (typeof elevationMinutes === 'number' && elevationMinutes > 0) {
+      await (db as any)
+        .insertInto('settings')
+        .values({ key: 'totp_elevation_minutes', value: JSON.stringify(elevationMinutes) })
+        .onConflict((oc: any) => oc.column('key').doUpdateSet({ value: JSON.stringify(elevationMinutes) }))
+        .execute()
+    }
+
+    await writeAuditLog({
+      userId: req.session.user!.id, userEmail: req.session.user!.email,
+      action: 'settings.totp_actions.updated', request: req,
+    })
+
+    return { ok: true }
+  })
 }
 
 export default settingsRoutes

@@ -13,6 +13,8 @@ declare module '@fastify/session' {
     user?: SessionUser
     mfaPending?: boolean
     mfaUserId?: string
+    totpElevatedUntil?: number   // epoch ms — set after TOTP elevation
+    totpLastCode?: string        // last accepted code hash — prevents replay
   }
 }
 

@@ -551,3 +551,17 @@ export type AlertSettings = {
   telegram_chat_id: number
   events: AlertEvents
 }
+
+export type TotpActionRule = {
+  action: string
+  label: string
+  category: string
+  enabled: boolean
+  updated_at: string
+}
+
+export type TotpActionSettings = {
+  actions: TotpActionRule[]
+  elevationMinutes: number
+}
+

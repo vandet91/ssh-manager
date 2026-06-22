@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, TelegramSettings, AlertSettings } from '../api/client'
+import { api, TelegramSettings, AlertSettings, TotpActionRule, TotpActionSettings } from '../api/client'
 
 interface PasswordPolicy {
   min_length: number
@@ -218,6 +218,13 @@ export default function Settings() {
     }
   }
 
+  // TOTP action rules
+  const [totpActions, setTotpActions] = useState<TotpActionRule[]>([])
+  const [totpElevationMinutes, setTotpElevationMinutes] = useState(15)
+  const [totpSaving, setTotpSaving] = useState(false)
+  const [totpSaved, setTotpSaved] = useState(false)
+  const [totpError, setTotpError] = useState('')
+
   // AI Provider keys
   type AiKeys = { claude: string; openai: string; gemini: string; deepseek: string; default_provider: string; default_model: string }
   const [aiKeys, setAiKeys] = useState<AiKeys>({ claude: '', openai: '', gemini: '', deepseek: '', default_provider: 'claude', default_model: '' })
@@ -238,6 +245,9 @@ export default function Settings() {
       .catch(() => {})
     api.get<AiKeys>('/settings/ai-keys')
       .then(k => setAiKeys(k))
+      .catch(() => {})
+    api.get<TotpActionSettings>('/settings/totp-actions')
+      .then(t => { setTotpActions(t.actions); setTotpElevationMinutes(t.elevationMinutes) })
       .catch(() => {})
   }, [])
 
@@ -882,6 +892,80 @@ export default function Settings() {
 
             </div>
           </div>
+
+        {/* ── TOTP Action Guards ───────────────────────────────────────────── */}
+        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+          <div style={{ background: 'var(--card-header-bg)', borderBottom: '1px solid var(--card-border)', padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 16 }}>🔐</span>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-heading)' }}>TOTP Action Guards</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Require authenticator verification before critical actions. Users must have MFA enabled on their account.</div>
+            </div>
+          </div>
+          <div style={{ padding: '16px 20px' }}>
+
+            {/* Elevation window */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, padding: '12px 16px', background: 'var(--bg-body)', borderRadius: 8, border: '1px solid var(--card-border)' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>Elevation window</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>How long a TOTP verification stays valid before asking again (like sudo timeout)</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="number" min={1} max={120}
+                  value={totpElevationMinutes}
+                  onChange={e => setTotpElevationMinutes(Number(e.target.value))}
+                  style={{ width: 64, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: 13, textAlign: 'center' }}
+                />
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>minutes</span>
+              </div>
+            </div>
+
+            {/* Group actions by category */}
+            {Array.from(new Set(totpActions.map(a => a.category))).map(category => (
+              <div key={category} style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 8 }}>{category}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {totpActions.filter(a => a.category === category).map(rule => (
+                    <label key={rule.action} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', background: rule.enabled ? 'rgba(var(--accent-rgb, 88,166,255),0.06)' : 'transparent', border: `1px solid ${rule.enabled ? 'var(--accent-hex)' : 'var(--card-border)'}`, transition: 'all 0.15s' }}>
+                      <input
+                        type="checkbox"
+                        checked={rule.enabled}
+                        onChange={e => setTotpActions(prev => prev.map(a => a.action === rule.action ? { ...a, enabled: e.target.checked } : a))}
+                        style={{ width: 16, height: 16, accentColor: 'var(--accent-hex)', cursor: 'pointer' }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: 13, color: 'var(--text)' }}>{rule.label}</span>
+                      </div>
+                      {rule.enabled && (
+                        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'var(--accent-hex)', color: '#fff', fontWeight: 500 }}>Protected</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+
+            {totpError && <div style={{ fontSize: 12, color: 'var(--danger)', marginBottom: 8 }}>{totpError}</div>}
+            {totpSaved && <div style={{ fontSize: 12, color: 'var(--success)', marginBottom: 8 }}>✓ Saved</div>}
+
+            <button
+              disabled={totpSaving}
+              onClick={async () => {
+                setTotpSaving(true); setTotpError(''); setTotpSaved(false)
+                try {
+                  await api.put('/settings/totp-actions', { actions: totpActions.map(a => ({ action: a.action, enabled: a.enabled })), elevationMinutes: totpElevationMinutes })
+                  setTotpSaved(true)
+                  setTimeout(() => setTotpSaved(false), 3000)
+                } catch (e: any) { setTotpError(e.message || 'Failed to save') }
+                finally { setTotpSaving(false) }
+              }}
+              style={{ padding: '8px 20px', borderRadius: 6, background: 'var(--accent-hex)', color: '#fff', border: 'none', fontWeight: 500, fontSize: 13, cursor: 'pointer', opacity: totpSaving ? 0.6 : 1 }}
+            >
+              {totpSaving ? 'Saving…' : 'Save TOTP Settings'}
+            </button>
+          </div>
+        </div>
 
         {/* ── Vault Export / Import ────────────────────────────────────────── */}
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
