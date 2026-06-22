@@ -100,16 +100,6 @@ function DeviceTypeSelect({ value, onChange, style }: { value: string; onChange:
   )
 }
 
-function AccessBadges({ d }: { d: Server }) {
-  return (
-    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-      {d.access_ssh_enabled && <span style={{ fontSize: 10, fontWeight: 600, borderRadius: 4, padding: '1px 6px', background: 'rgba(46,160,67,0.15)', border: '1px solid rgba(46,160,67,0.35)', color: '#3fb950' }}>⌨ SSH/{d.access_ssh_auth_type === 'password' ? 'pass' : 'key'}</span>}
-      {d.web_enabled && <span style={{ fontSize: 10, fontWeight: 600, borderRadius: 4, padding: '1px 6px', background: 'rgba(56,139,253,0.15)', border: '1px solid rgba(56,139,253,0.35)', color: '#58a6ff' }}>🌐 Web</span>}
-      {d.snmp_enabled && <span style={{ fontSize: 10, fontWeight: 600, borderRadius: 4, padding: '1px 6px', background: 'rgba(210,153,34,0.15)', border: '1px solid rgba(210,153,34,0.35)', color: '#e3b341' }}>📊 SNMP/{d.snmp_version}</span>}
-      {!d.access_ssh_enabled && !d.web_enabled && !d.snmp_enabled && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>}
-    </div>
-  )
-}
 
 function PingDot({ status }: { status: string | null }) {
   if (!status) return <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>
@@ -1219,11 +1209,19 @@ function DevicesTab({ devices, snmpProfiles, onChanged }: { devices: Server[]; s
         </div>
       ) : (
         <div style={{ border: '1px solid var(--border-med)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-surface)' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '9%'  }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '29%' }} />
+            </colgroup>
             <thead>
               <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-med)' }}>
-                {['Device', 'Type', 'Hostname / IP', 'Environment', 'Ping', 'FW', 'Access', 'Actions'].map(h => (
-                  <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
+                {['Device', 'Type', 'Hostname / IP', 'Ping', 'Status', 'Actions'].map(h => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1233,54 +1231,121 @@ function DevicesTab({ devices, snmpProfiles, onChanged }: { devices: Server[]; s
                 const fetching = snmpFetching[d.id]
                 const firmChecks = firmChecking[d.id]
                 const dAny = d as any
+                const envColors: Record<string, { bg: string; color: string }> = {
+                  office:     { bg: 'rgba(99,102,241,0.12)',  color: '#818cf8' },
+                  branch:     { bg: 'rgba(52,211,153,0.12)',  color: '#34d399' },
+                  datacenter: { bg: 'rgba(251,146,60,0.12)',  color: '#fb923c' },
+                  home:       { bg: 'rgba(167,139,250,0.12)', color: '#a78bfa' },
+                  warehouse:  { bg: 'rgba(156,163,175,0.12)', color: '#9ca3af' },
+                }
+                const envStyle = envColors[d.environment] ?? envColors.office
+                // icon button base
+                const btn = (extra: React.CSSProperties = {}): React.CSSProperties => ({
+                  width: 26, height: 26, borderRadius: 5, border: '1px solid var(--border-med)',
+                  background: 'transparent', cursor: 'pointer', display: 'inline-flex',
+                  alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0,
+                  ...extra,
+                })
                 return (
                   <tr key={d.id} style={{ borderBottom: i < filtered.length - 1 ? '1px solid var(--border-weak)' : 'none' }}>
-                    <td style={{ padding: '10px 14px' }}>
-                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{d.name}</div>
-                      {dAny.snmp_model && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{dAny.snmp_vendor ? `${dAny.snmp_vendor} ` : ''}{dAny.snmp_model}</div>}
-                      {d.snmp_last_fetched_at && !dAny.snmp_model && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>SNMP {new Date(d.snmp_last_fetched_at).toLocaleDateString()}</div>}
+
+                    {/* Device: name + env badge + model */}
+                    <td style={{ padding: '8px 12px', overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        <span style={{ fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
+                        <span style={{ fontSize: 10, fontWeight: 600, borderRadius: 3, padding: '0 5px', background: envStyle.bg, color: envStyle.color, whiteSpace: 'nowrap', flexShrink: 0 }}>{d.environment}</span>
+                      </div>
+                      {(dAny.snmp_vendor || dAny.snmp_model) && (
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {[dAny.snmp_vendor, dAny.snmp_model].filter(Boolean).join(' ')}
+                        </div>
+                      )}
                     </td>
-                    <td style={{ padding: '10px 14px' }}><DeviceBadge type={d.os_type} /></td>
-                    <td style={{ padding: '10px 14px', fontFamily: 'monospace', fontSize: 12, color: 'var(--text-secondary)' }}>{d.hostname}</td>
-                    <td style={{ padding: '10px 14px' }}>
-                      <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 5, padding: '1px 7px', ...({ office: { background: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.3)' }, branch: { background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.3)' }, datacenter: { background: 'rgba(251,146,60,0.15)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.3)' }, home: { background: 'rgba(167,139,250,0.15)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.3)' }, warehouse: { background: 'rgba(156,163,175,0.15)', color: '#9ca3af', border: '1px solid rgba(156,163,175,0.3)' } }[d.environment] ?? { background: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.3)' }) }}>
-                        {d.environment}
-                      </span>
+
+                    {/* Type */}
+                    <td style={{ padding: '8px 12px' }}><DeviceBadge type={d.os_type} /></td>
+
+                    {/* Hostname + access method icons */}
+                    <td style={{ padding: '8px 12px', overflow: 'hidden' }}>
+                      <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.hostname}</div>
+                      <div style={{ display: 'flex', gap: 3, marginTop: 3 }}>
+                        {d.access_ssh_enabled && <span title="SSH enabled" style={{ fontSize: 9, fontWeight: 700, borderRadius: 3, padding: '0 4px', background: 'rgba(46,160,67,0.15)', border: '1px solid rgba(46,160,67,0.3)', color: '#3fb950' }}>SSH</span>}
+                        {d.web_enabled        && <span title="Web UI"      style={{ fontSize: 9, fontWeight: 700, borderRadius: 3, padding: '0 4px', background: 'rgba(56,139,253,0.15)', border: '1px solid rgba(56,139,253,0.3)', color: '#58a6ff' }}>WEB</span>}
+                        {d.snmp_enabled       && <span title="SNMP"        style={{ fontSize: 9, fontWeight: 700, borderRadius: 3, padding: '0 4px', background: 'rgba(210,153,34,0.15)', border: '1px solid rgba(210,153,34,0.3)', color: '#e3b341' }}>SNMP</span>}
+                      </div>
                     </td>
-                    <td style={{ padding: '10px 14px' }}><PingDot status={dAny.in_stock ? null : !dAny.ping_enabled ? null : dAny.ping_last_status} /></td>
-                    <td style={{ padding: '10px 14px' }}><FirmwareBadge result={dAny.firmware_check_result} /></td>
-                    <td style={{ padding: '10px 14px' }}><AccessBadges d={d} /></td>
-                    <td style={{ padding: '10px 14px' }}>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+
+                    {/* Ping */}
+                    <td style={{ padding: '8px 12px' }}>
+                      <PingDot status={dAny.in_stock ? null : !dAny.ping_enabled ? null : dAny.ping_last_status} />
+                      {dAny.ping_last_latency_ms != null && !dAny.in_stock && dAny.ping_enabled && (
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{dAny.ping_last_latency_ms} ms</div>
+                      )}
+                    </td>
+
+                    {/* Status: FW badge + SNMP date */}
+                    <td style={{ padding: '8px 12px' }}>
+                      <FirmwareBadge result={dAny.firmware_check_result} />
+                      {d.snmp_last_fetched_at && (
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
+                          SNMP {new Date(d.snmp_last_fetched_at).toLocaleDateString()}
+                        </div>
+                      )}
+                    </td>
+
+                    {/* Actions — icon-only buttons */}
+                    <td style={{ padding: '8px 12px' }}>
+                      <div style={{ display: 'flex', gap: 3, alignItems: 'center', flexWrap: 'nowrap' }}>
+
+                        {/* SSH */}
                         {d.access_ssh_enabled ? (
-                          <button onClick={() => openSsh(d)} style={{ fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: 'pointer', background: 'var(--accent-hex)', border: 'none', color: '#fff', fontWeight: 600 }}>⌨ SSH</button>
+                          <button onClick={() => openSsh(d)} title="Open SSH terminal" style={btn({ background: 'var(--accent-hex)', border: 'none', color: '#fff' })}>⌨</button>
                         ) : (
-                          <button onClick={() => testConnection(d)} style={{ fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: 'pointer', background: 'transparent', border: '1px solid var(--border-med)', color: 'var(--text-muted)' }}>
-                            {tr === 'testing' ? '…' : tr === 'ok' ? '✓ SSH' : tr === 'failed' ? '✗ SSH' : 'Test SSH'}
+                          <button onClick={() => testConnection(d)} title="Test SSH connection" style={btn({ color: tr === 'ok' ? '#3fb950' : tr === 'failed' ? '#f87171' : 'var(--text-muted)' })}>
+                            {tr === 'testing' ? '…' : tr === 'ok' ? '✓' : tr === 'failed' ? '✗' : '⌨'}
                           </button>
                         )}
+
+                        {/* Web UI */}
                         {d.web_enabled && d.web_url && (
-                          <a href={d.web_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, padding: '4px 9px', borderRadius: 5, background: 'rgba(56,139,253,0.15)', border: '1px solid rgba(56,139,253,0.4)', color: '#58a6ff', fontWeight: 600, textDecoration: 'none' }}>🌐 Web</a>
+                          <a href={d.web_url} target="_blank" rel="noopener noreferrer" title="Open Web UI" style={{ ...btn({ background: 'rgba(56,139,253,0.12)', border: '1px solid rgba(56,139,253,0.35)', color: '#58a6ff', textDecoration: 'none' }) }}>🌐</a>
                         )}
+
+                        {/* SNMP fetch */}
                         {d.snmp_enabled && (
-                          <button onClick={() => fetchSnmp(d)} disabled={fetching} title="Fetch SNMP" style={{ fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: fetching ? 'default' : 'pointer', background: 'rgba(210,153,34,0.15)', border: '1px solid rgba(210,153,34,0.4)', color: '#e3b341', fontWeight: 600, opacity: fetching ? 0.6 : 1 }}>
-                            {fetching ? '…' : '📊 SNMP'}
+                          <button onClick={() => fetchSnmp(d)} disabled={fetching} title="Fetch SNMP data" style={btn({ background: 'rgba(210,153,34,0.12)', border: '1px solid rgba(210,153,34,0.35)', color: '#e3b341', opacity: fetching ? 0.55 : 1, cursor: fetching ? 'default' : 'pointer' })}>
+                            {fetching ? '…' : '📊'}
                           </button>
                         )}
+
+                        {/* View SNMP result */}
                         {d.snmp_enabled && d.snmp_last_fetched_at && !fetching && (
-                          <button onClick={async () => { const p = await api.get<NetworkProfile>(`/servers/${d.id}/network-profile`); setSnmpModal({ device: d, profile: p }) }} title="View SNMP data" style={{ fontSize: 11, padding: '4px 7px', borderRadius: 5, cursor: 'pointer', background: 'transparent', border: '1px solid var(--border-med)', color: 'var(--text-muted)' }}>📋</button>
+                          <button onClick={async () => { const p = await api.get<NetworkProfile>(`/servers/${d.id}/network-profile`); setSnmpModal({ device: d, profile: p }) }} title="View SNMP data" style={btn()}>📋</button>
                         )}
+
+                        {/* AI firmware check */}
                         {dAny.snmp_firmware && (
-                          <button onClick={() => checkFirmware(d)} disabled={firmChecks} title="AI firmware check" style={{ fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: firmChecks ? 'default' : 'pointer', background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.35)', color: '#a78bfa', fontWeight: 600, opacity: firmChecks ? 0.6 : 1 }}>
-                            {firmChecks ? '…' : '🤖 FW'}
+                          <button onClick={() => checkFirmware(d)} disabled={firmChecks} title="AI firmware check" style={btn({ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.35)', color: '#a78bfa', opacity: firmChecks ? 0.55 : 1, cursor: firmChecks ? 'default' : 'pointer' })}>
+                            {firmChecks ? '…' : '🤖'}
                           </button>
                         )}
+
+                        {/* View firmware result */}
                         {dAny.firmware_check_result && dAny.firmware_check_at && (
-                          <button onClick={() => setFirmModal({ device: d, result: dAny.firmware_check_result, checkedAt: dAny.firmware_check_at })} style={{ fontSize: 11, padding: '4px 7px', borderRadius: 5, cursor: 'pointer', background: 'transparent', border: '1px solid var(--border-med)', color: 'var(--text-muted)' }}>🔍</button>
+                          <button onClick={() => setFirmModal({ device: d, result: dAny.firmware_check_result, checkedAt: dAny.firmware_check_at })} title="View firmware analysis" style={btn()}>🔍</button>
                         )}
-                        <button onClick={() => setProfileDevice(d)} title="Configure" style={{ fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: 'pointer', background: 'transparent', border: '1px solid var(--border-med)', color: 'var(--text-muted)' }}>⚙</button>
-                        <button onClick={() => { setEditDevice(d); setEditForm({ name: d.name, hostname: d.hostname, ssh_port: d.ssh_port, environment: d.environment, os_type: (d.os_type as NetworkOsType) ?? 'other-network' }); setEditError('') }} style={{ fontSize: 11, padding: '4px 7px', borderRadius: 5, cursor: 'pointer', background: 'transparent', border: '1px solid var(--border-med)', color: 'var(--text-muted)' }}>✎</button>
-                        <button onClick={() => handleDelete(d)} style={{ fontSize: 11, padding: '4px 7px', borderRadius: 5, cursor: 'pointer', background: 'transparent', border: '1px solid var(--border-med)', color: 'var(--danger)' }}>✕</button>
+
+                        {/* Divider */}
+                        <span style={{ width: 1, height: 16, background: 'var(--border-med)', flexShrink: 0, margin: '0 1px' }} />
+
+                        {/* Configure */}
+                        <button onClick={() => setProfileDevice(d)} title="Configure SSH/Web/SNMP" style={btn()}>⚙</button>
+
+                        {/* Edit */}
+                        <button onClick={() => { setEditDevice(d); setEditForm({ name: d.name, hostname: d.hostname, ssh_port: d.ssh_port, environment: d.environment, os_type: (d.os_type as NetworkOsType) ?? 'other-network' }); setEditError('') }} title="Edit device" style={btn()}>✎</button>
+
+                        {/* Delete */}
+                        <button onClick={() => handleDelete(d)} title="Delete device" style={btn({ color: 'var(--danger)', borderColor: 'rgba(248,113,113,0.3)' })}>✕</button>
                       </div>
                     </td>
                   </tr>
