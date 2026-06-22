@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, Server, NetworkProfile, SshKey, SnmpProfile, PingResult, PingStatus, FirmwareCheckResult } from '../api/client'
 import Modal from '../components/Modal'
@@ -1461,6 +1461,8 @@ function speedLabel(mbps: number): string {
   return `${mbps}M`
 }
 
+type PortAction = 'description' | 'vlan' | 'mode' | 'portfast'
+
 function PortsTab({ devices }: { devices: Server[] }) {
   const snmpDevices = devices.filter(d => d.snmp_enabled)
   const [selectedId, setSelectedId] = useState<string>(snmpDevices[0]?.id ?? '')
@@ -1470,10 +1472,103 @@ function PortsTab({ devices }: { devices: Server[] }) {
   const [error, setError] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'up' | 'down'>('all')
   const [search, setSearch] = useState('')
+  // per-port SNMP toggle busy state
   const [toggling, setToggling] = useState<Record<number, boolean>>({})
+  // range-select state
+  const [checkedPorts, setCheckedPorts] = useState<Set<number>>(new Set())
+  const [lastCheckedIdx, setLastCheckedIdx] = useState<number | null>(null)
+  // action modal
+  const [actionModal, setActionModal] = useState<PortAction | null>(null)
+  const [actionInput, setActionInput] = useState('')
+  const [actionSelect, setActionSelect] = useState<string>('access')
+  const [actionRunning, setActionRunning] = useState(false)
+  const [actionError, setActionError] = useState('')
   const { requestElevation } = useTotpElevation()
 
   const selected = devices.find(d => d.id === selectedId)
+  const hasSsh = !!selected?.access_ssh_enabled
+
+  // Clear selection when device changes
+  useEffect(() => { setCheckedPorts(new Set()); setLastCheckedIdx(null) }, [selectedId])
+
+  // Checkbox with shift-click range support
+  const handleCheck = (p: SnmpPort, rowIdx: number, shiftKey: boolean) => {
+    if (shiftKey && lastCheckedIdx !== null) {
+      const lo = Math.min(lastCheckedIdx, rowIdx)
+      const hi = Math.max(lastCheckedIdx, rowIdx)
+      setCheckedPorts(prev => {
+        const next = new Set(prev)
+        filtered.slice(lo, hi + 1).forEach(x => next.add(x.index))
+        return next
+      })
+    } else {
+      setCheckedPorts(prev => {
+        const next = new Set(prev)
+        if (next.has(p.index)) next.delete(p.index)
+        else next.add(p.index)
+        return next
+      })
+      setLastCheckedIdx(rowIdx)
+    }
+  }
+
+  const toggleAllVisible = () => {
+    const allChecked = filtered.every(p => checkedPorts.has(p.index))
+    if (allChecked) {
+      setCheckedPorts(prev => { const n = new Set(prev); filtered.forEach(p => n.delete(p.index)); return n })
+    } else {
+      setCheckedPorts(prev => { const n = new Set(prev); filtered.forEach(p => n.add(p.index)); return n })
+    }
+  }
+
+  // Bulk SNMP enable/disable
+  const bulkAdmin = async (adminUp: boolean) => {
+    const targets = [...checkedPorts]
+    try { await requestElevation('network_port_shutdown') } catch { return }
+    const busy: Record<number, boolean> = {}
+    targets.forEach(i => { busy[i] = true })
+    setToggling(t => ({ ...t, ...busy }))
+    setError('')
+    await Promise.allSettled(targets.map(async ifIndex => {
+      try {
+        await api.post(`/servers/${selectedId}/snmp-port-admin`, { ifIndex, adminUp })
+        setPorts(prev => prev ? prev.map(x => x.index === ifIndex ? { ...x, admin_up: adminUp } : x) : prev)
+      } catch {}
+    }))
+    setToggling(t => { const n = { ...t }; targets.forEach(i => delete n[i]); return n })
+  }
+
+  // SSH port-cli action
+  const runPortCli = async (action: PortAction, params: Record<string, unknown>) => {
+    if (!selectedId) return
+    setActionRunning(true); setActionError('')
+    try { await requestElevation('network_port_config') } catch { setActionRunning(false); return }
+    const portsArg = [...checkedPorts].map(idx => {
+      const p = (ports ?? []).find(x => x.index === idx)
+      return { ifIndex: idx, ifName: p?.name ?? `ifIndex${idx}` }
+    })
+    try {
+      await api.post<any>(`/servers/${selectedId}/port-cli`, { ports: portsArg, action, params })
+      // Optimistic local state update
+      if (action === 'description') setPorts(prev => prev ? prev.map(x => checkedPorts.has(x.index) ? { ...x, alias: params.description as string } : x) : prev)
+      setCheckedPorts(new Set()); setActionModal(null); setActionInput(''); setActionSelect('access')
+    } catch (e: any) {
+      setActionError(e?.data?.error ?? e?.message ?? 'CLI action failed')
+    } finally { setActionRunning(false) }
+  }
+
+  // Single-port SNMP toggle (from row button)
+  const togglePort = async (p: SnmpPort) => {
+    if (!selectedId || toggling[p.index]) return
+    try { await requestElevation('network_port_shutdown') } catch { return }
+    setToggling(t => ({ ...t, [p.index]: true }))
+    try {
+      await api.post(`/servers/${selectedId}/snmp-port-admin`, { ifIndex: p.index, adminUp: !p.admin_up })
+      setPorts(prev => prev ? prev.map(x => x.index === p.index ? { ...x, admin_up: !p.admin_up } : x) : prev)
+    } catch (e: any) {
+      setError(e?.data?.error ?? e?.message ?? 'Toggle failed')
+    } finally { setToggling(t => { const n = { ...t }; delete n[p.index]; return n }) }
+  }
 
   // Load cached ports from snmp_interfaces on device switch
   useEffect(() => {
@@ -1488,22 +1583,6 @@ function PortsTab({ devices }: { devices: Server[] }) {
       })
       .catch(() => {})
   }, [selectedId])
-
-  const togglePort = async (p: SnmpPort) => {
-    if (!selectedId || toggling[p.index]) return
-    try {
-      await requestElevation('network_port_shutdown')
-    } catch { return }
-    setToggling(t => ({ ...t, [p.index]: true }))
-    try {
-      await api.post(`/servers/${selectedId}/snmp-port-admin`, { ifIndex: p.index, adminUp: !p.admin_up })
-      setPorts(prev => prev ? prev.map(x => x.index === p.index ? { ...x, admin_up: !p.admin_up } : x) : prev)
-    } catch (e: any) {
-      setError(e?.data?.error ?? e?.message ?? 'Toggle failed')
-    } finally {
-      setToggling(t => { const n = { ...t }; delete n[p.index]; return n })
-    }
-  }
 
   const pollPorts = async () => {
     if (!selectedId) return
@@ -1613,15 +1692,16 @@ function PortsTab({ devices }: { devices: Server[] }) {
                   <div
                     key={p.index}
                     title={`${p.name}${p.alias ? ` — ${p.alias}` : ''}\n${p.oper_up ? 'Up' : 'Down'} · ${speedLabel(p.speed_mbps)}${p.pvid ? ` · VLAN ${p.pvid}` : ''}`}
+                    onClick={() => { setCheckedPorts(prev => { const n = new Set(prev); if (n.has(p.index)) n.delete(p.index); else n.add(p.index); return n }) }}
                     style={{
                       width: 20, height: 20, borderRadius: 3,
-                      background: p.oper_up ? 'rgba(52,211,153,0.2)' : 'rgba(75,85,99,0.25)',
-                      border: `1px solid ${p.oper_up ? 'rgba(52,211,153,0.55)' : 'rgba(75,85,99,0.45)'}`,
+                      background: checkedPorts.has(p.index) ? 'rgba(99,102,241,0.35)' : p.oper_up ? 'rgba(52,211,153,0.2)' : 'rgba(75,85,99,0.25)',
+                      border: `1px solid ${checkedPorts.has(p.index) ? '#818cf8' : p.oper_up ? 'rgba(52,211,153,0.55)' : 'rgba(75,85,99,0.45)'}`,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      cursor: 'default',
+                      cursor: 'pointer',
                     }}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: 1, background: p.oper_up ? '#3fb950' : '#4b5563' }} />
+                    <span style={{ width: 6, height: 6, borderRadius: 1, background: checkedPorts.has(p.index) ? '#818cf8' : p.oper_up ? '#3fb950' : '#4b5563' }} />
                   </div>
                 ))}
               </div>
@@ -1632,6 +1712,15 @@ function PortsTab({ devices }: { devices: Server[] }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-med)' }}>
+                <th style={{ padding: '9px 10px 9px 14px', width: 32 }}>
+                  <input
+                    type="checkbox"
+                    checked={filtered.length > 0 && filtered.every(p => checkedPorts.has(p.index))}
+                    ref={el => { if (el) el.indeterminate = filtered.some(p => checkedPorts.has(p.index)) && !filtered.every(p => checkedPorts.has(p.index)) }}
+                    onChange={toggleAllVisible}
+                    title="Select all visible ports"
+                  />
+                </th>
                 {['#', 'Port', 'Description / Alias', 'MAC', 'Admin', 'Link', 'Speed', 'VLAN', ''].map(h => (
                   <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
@@ -1639,7 +1728,18 @@ function PortsTab({ devices }: { devices: Server[] }) {
             </thead>
             <tbody>
               {filtered.map((p, i) => (
-                <tr key={p.index} style={{ borderBottom: i < filtered.length - 1 ? '1px solid var(--border-weak)' : 'none' }}>
+                <tr
+                  key={p.index}
+                  style={{ borderBottom: i < filtered.length - 1 ? '1px solid var(--border-weak)' : 'none', background: checkedPorts.has(p.index) ? 'rgba(99,102,241,0.06)' : 'transparent' }}
+                >
+                  <td style={{ padding: '9px 10px 9px 14px' }}>
+                    <input
+                      type="checkbox"
+                      checked={checkedPorts.has(p.index)}
+                      onChange={e => handleCheck(p, i, e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey)}
+                      onClick={e => handleCheck(p, i, (e as React.MouseEvent).shiftKey)}
+                    />
+                  </td>
                   <td style={{ padding: '9px 14px', color: 'var(--text-muted)', fontSize: 11 }}>{p.index}</td>
                   <td style={{ padding: '9px 14px', fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{p.name}</td>
                   <td style={{ padding: '9px 14px', fontSize: 12 }}>
@@ -1680,9 +1780,125 @@ function PortsTab({ devices }: { devices: Server[] }) {
           </table>
         </div>
       )}
+
+      {/* ── Bulk action toolbar — floats when ports are selected ── */}
+      {checkedPorts.size > 0 && (
+        <div style={{ position: 'sticky', bottom: 16, marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '10px 16px', borderRadius: 10, background: 'var(--bg-card)', border: '1px solid var(--border-med)', boxShadow: '0 4px 20px rgba(0,0,0,0.35)' }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-hex)', marginRight: 4 }}>
+            {checkedPorts.size} port{checkedPorts.size > 1 ? 's' : ''} selected
+          </span>
+          <span style={{ width: 1, height: 18, background: 'var(--border-med)' }} />
+
+          {/* SNMP actions — always available */}
+          <button onClick={() => bulkAdmin(true)}  style={tbBtn('#34d399', 'rgba(52,211,153,0.15)', 'rgba(52,211,153,0.35)')}>✓ Enable</button>
+          <button onClick={() => bulkAdmin(false)} style={tbBtn('#f87171', 'rgba(248,113,113,0.12)', 'rgba(248,113,113,0.35)')}>✕ Disable</button>
+
+          {/* SSH CLI actions — only when device has SSH */}
+          {hasSsh && <>
+            <span style={{ width: 1, height: 18, background: 'var(--border-med)' }} />
+            <button onClick={() => { setActionModal('description'); setActionInput('') }}        style={tbBtn('#60a5fa', 'rgba(96,165,250,0.12)', 'rgba(96,165,250,0.35)')}>✎ Description</button>
+            <button onClick={() => { setActionModal('vlan');        setActionInput('') }}        style={tbBtn('#a78bfa', 'rgba(167,139,250,0.12)', 'rgba(167,139,250,0.35)')}>🏷 VLAN</button>
+            <button onClick={() => { setActionModal('mode');        setActionSelect('access') }} style={tbBtn('#fbbf24', 'rgba(251,191,36,0.12)',  'rgba(251,191,36,0.35)')}>⇄ Mode</button>
+            <button onClick={() => runPortCli('portfast', { enabled: true })}                   style={tbBtn('#34d399', 'rgba(52,211,153,0.12)',  'rgba(52,211,153,0.25)')}>⚡ Edge On</button>
+            <button onClick={() => runPortCli('portfast', { enabled: false })}                  style={tbBtn('#9ca3af', 'rgba(156,163,175,0.12)', 'rgba(156,163,175,0.3)')}>⚡ Edge Off</button>
+          </>}
+
+          <div style={{ flex: 1 }} />
+          <button onClick={() => setCheckedPorts(new Set())} style={tbBtn('var(--text-muted)', 'transparent', 'var(--border-weak)')}>✕ Clear</button>
+        </div>
+      )}
+
+      {/* ── Port action modal (description / vlan / mode) ── */}
+      {actionModal && (
+        <Modal title="" onClose={() => { setActionModal(null); setActionError('') }}>
+          <div style={{ padding: '24px 28px', minWidth: 340 }}>
+            <h3 style={{ margin: '0 0 16px', fontSize: 15, fontWeight: 700 }}>
+              {actionModal === 'description' ? '✎ Set Port Description' : actionModal === 'vlan' ? '🏷 Set VLAN' : '⇄ Set Port Mode'}
+              <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>
+                {checkedPorts.size} port{checkedPorts.size > 1 ? 's' : ''}
+              </span>
+            </h3>
+
+            {actionModal === 'description' && (
+              <>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Description / alias</label>
+                <input
+                  autoFocus value={actionInput} onChange={e => setActionInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && actionInput.trim() && runPortCli('description', { description: actionInput.trim() })}
+                  placeholder="e.g. Uplink to Core SW"
+                  style={{ ...inp, width: '100%' }}
+                />
+              </>
+            )}
+
+            {actionModal === 'vlan' && (
+              <>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>VLAN ID (1–4094)</label>
+                <input
+                  autoFocus type="number" min={1} max={4094} value={actionInput}
+                  onChange={e => setActionInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && +actionInput >= 1 && runPortCli('vlan', { vlan: +actionInput, mode: actionSelect })}
+                  placeholder="e.g. 100"
+                  style={{ ...inp, width: '100%' }}
+                />
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', margin: '10px 0 6px' }}>Apply as</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['access', 'trunk'] as const).map(m => (
+                    <button key={m} onClick={() => setActionSelect(m)}
+                      style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: `1px solid ${actionSelect === m ? 'var(--accent-hex)' : 'var(--border-med)'}`, background: actionSelect === m ? 'var(--accent-hex)' : 'transparent', color: actionSelect === m ? '#fff' : 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                      {m === 'access' ? 'Access (untagged)' : 'Trunk (tagged add)'}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {actionModal === 'mode' && (
+              <>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 8 }}>Port switchport mode</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['access', 'trunk'] as const).map(m => (
+                    <button key={m} onClick={() => setActionSelect(m)}
+                      style={{ flex: 1, padding: '8px 0', borderRadius: 6, border: `1px solid ${actionSelect === m ? 'var(--accent-hex)' : 'var(--border-med)'}`, background: actionSelect === m ? 'var(--accent-hex)' : 'transparent', color: actionSelect === m ? '#fff' : 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                      {m === 'access' ? '📥 Access' : '🔀 Trunk'}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {actionError && (
+              <p style={{ margin: '10px 0 0', fontSize: 12, color: '#f87171' }}>{actionError}</p>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
+              <button onClick={() => { setActionModal(null); setActionError('') }} style={{ padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }}>
+                Cancel
+              </button>
+              <button
+                disabled={actionRunning || (actionModal !== 'mode' && !actionInput.trim())}
+                onClick={() => {
+                  if (actionModal === 'description') runPortCli('description', { description: actionInput.trim() })
+                  else if (actionModal === 'vlan') runPortCli('vlan', { vlan: +actionInput, mode: actionSelect })
+                  else if (actionModal === 'mode') runPortCli('mode', { mode: actionSelect })
+                }}
+                style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: actionRunning ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: actionRunning ? 0.65 : 1 }}
+              >
+                {actionRunning ? 'Applying…' : 'Apply'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
+
+// Toolbar button helper
+const tbBtn = (color: string, bg: string, border: string): React.CSSProperties => ({
+  fontSize: 12, padding: '5px 12px', borderRadius: 6, border: `1px solid ${border}`,
+  background: bg, color, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap',
+})
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 

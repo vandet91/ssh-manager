@@ -718,6 +718,148 @@ ${deviceInfo}`
     }
   })
 
+  // ── Shared SSH helpers ────────────────────────────────────────────────────────
+
+  async function connectSsh(server: any, id: string, vaultKey: Buffer): Promise<Client> {
+    return new Promise(async (resolve, reject) => {
+      const client = new Client()
+      let cfg: any = { host: server.hostname, port: server.ssh_port ?? 22, readyTimeout: 12000 }
+      if (server.access_ssh_auth_type === 'password') {
+        const cred = await db.selectFrom('server_credentials').selectAll()
+          .where('server_id', '=', id).where('category', '=', 'linux').where('is_archived', '=', false)
+          .orderBy('created_at', 'desc').limit(1).executeTakeFirst()
+        if (!cred || !cred.password_enc) return reject(new Error('No SSH password credential configured'))
+        cfg = { ...cfg, username: cred.linux_user ?? 'admin', password: decryptSecret(cred.password_enc as string, vaultKey) }
+      } else {
+        if (!server.management_key_id) return reject(new Error('No SSH key configured'))
+        const key = await db.selectFrom('ssh_keys').selectAll().where('id', '=', server.management_key_id).executeTakeFirst()
+        if (!key) return reject(new Error('SSH key not found'))
+        cfg = { ...cfg, username: server.management_linux_user ?? 'admin', privateKey: decryptSecret(key.private_key_enc as string, vaultKey) }
+      }
+      client.on('ready', () => resolve(client))
+      client.on('error', reject)
+      client.connect(cfg)
+    })
+  }
+
+  function runSshShell(client: Client, commands: string, timeoutMs = 6000): Promise<string> {
+    return new Promise((resolve) => {
+      client.shell({ term: 'vt100', cols: 220, rows: 50 }, (err: any, stream: any) => {
+        if (err) { client.end(); resolve(`Shell error: ${err.message}`); return }
+        const chunks: Buffer[] = []
+        stream.on('data', (d: Buffer) => chunks.push(d))
+        stream.stderr?.on('data', (d: Buffer) => chunks.push(d))
+        stream.on('close', () => { client.end(); resolve(Buffer.concat(chunks).toString('utf8').slice(0, 3000)) })
+        stream.write(commands + '\nexit\n')
+        setTimeout(() => { try { stream.close() } catch {} }, timeoutMs)
+      })
+    })
+  }
+
+  function buildPortCliScript(
+    vendor: string, osType: string,
+    ports: Array<{ ifName: string }>,
+    action: string, params: Record<string, unknown>,
+  ): string {
+    const v = vendor.toLowerCase()
+    const isCisco   = v.includes('cisco') || ['switch','switch-l3','router','firewall'].includes(osType)
+    const isMikro   = v.includes('mikrotik') || v.includes('routeros') || osType === 'router' && v.includes('mikro')
+    const isJuniper = v.includes('juniper')
+    const isFortinet = v.includes('fortinet') || v.includes('fortigate')
+
+    if (isMikro) {
+      return ports.map(p => {
+        const iface = p.ifName
+        if (action === 'description') return `/interface ethernet set [find name="${iface}"] comment="${params.description}"`
+        if (action === 'vlan')        return `/interface bridge port set [find interface="${iface}"] pvid=${params.vlan}`
+        if (action === 'mode')        return `# mode not directly applicable in RouterOS`
+        if (action === 'portfast')    return `# portfast not applicable in RouterOS`
+        if (action === 'admin')       return `/interface ethernet ${params.enabled ? 'enable' : 'disable'} [find name="${iface}"]`
+        return `# unknown action: ${action}`
+      }).join('\n')
+    }
+
+    if (isJuniper) {
+      const lines: string[] = ['configure']
+      for (const p of ports) {
+        const iface = p.ifName
+        if (action === 'description') lines.push(`set interfaces ${iface} description "${params.description}"`)
+        if (action === 'vlan')        lines.push(`set interfaces ${iface} unit 0 family ethernet-switching vlan members ${params.vlan}`)
+        if (action === 'mode')        lines.push(`set interfaces ${iface} unit 0 family ethernet-switching interface-mode ${params.mode}`)
+        if (action === 'admin')       lines.push(params.enabled ? `delete interfaces ${iface} disable` : `set interfaces ${iface} disable`)
+      }
+      lines.push('commit and-quit')
+      return lines.join('\n')
+    }
+
+    if (isFortinet) {
+      return ports.map(p => {
+        const lines: string[] = ['config system interface', `edit ${p.ifName}`]
+        if (action === 'description') lines.push(`set description "${params.description}"`)
+        if (action === 'vlan')        lines.push(`set vlanid ${params.vlan}`)
+        if (action === 'admin')       lines.push(`set status ${params.enabled ? 'up' : 'down'}`)
+        lines.push('next', 'end')
+        return lines.join('\n')
+      }).join('\n')
+    }
+
+    // Default: Cisco IOS / IOS-XE / IOS-XR compatible
+    const lines: string[] = ['conf t']
+    for (const p of ports) {
+      lines.push(`interface ${p.ifName}`)
+      if (action === 'description') lines.push(` description ${params.description}`)
+      if (action === 'mode')        lines.push(` switchport mode ${params.mode}`)
+      if (action === 'vlan') {
+        if (params.mode === 'trunk') lines.push(` switchport trunk allowed vlan add ${params.vlan}`)
+        else                         lines.push(` switchport access vlan ${params.vlan}`)
+      }
+      if (action === 'portfast')    lines.push(params.enabled ? ` spanning-tree portfast` : ` no spanning-tree portfast`)
+      if (action === 'admin')       lines.push(params.enabled ? ` no shutdown` : ` shutdown`)
+    }
+    lines.push('end', 'wr')
+    return lines.join('\n')
+  }
+
+  // POST /servers/:id/port-cli — vendor-aware SSH CLI port configuration
+  fastify.post('/servers/:id/port-cli', {
+    preHandler: [requirePermission('servers:write'), requireTotpElevation('network_port_config')],
+  }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { ports, action, params } = z.object({
+      ports: z.array(z.object({ ifIndex: z.number().int().min(1), ifName: z.string().min(1) })).min(1),
+      action: z.enum(['description', 'vlan', 'mode', 'portfast', 'admin']),
+      params: z.record(z.unknown()).default({}),
+    }).parse(req.body)
+
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+    if (!server) return reply.code(404).send({ error: 'Server not found' })
+    if (!server.access_ssh_enabled) return reply.code(400).send({ error: 'SSH not enabled on this device' })
+
+    const vaultKey = getVaultKey()
+    const vendor = server.snmp_vendor ?? ''
+    const osType = server.os_type ?? ''
+
+    const script = buildPortCliScript(vendor, osType, ports, action, params as Record<string, unknown>)
+
+    try {
+      const client = await connectSsh(server, id, vaultKey)
+      const output = await runSshShell(client, script)
+
+      await writeAuditLog({
+        userId: (req.session.user as any)?.id,
+        userEmail: (req.session.user as any)?.email,
+        action: `network.port_${action}`,
+        resource: 'server', resourceId: id,
+        details: { ports: ports.map(p => p.ifName), action, params },
+        request: req,
+      })
+
+      return { ok: true, script, output: output.slice(0, 1000) }
+    } catch (err: any) {
+      return reply.code(400).send({ error: `CLI failed: ${err.message ?? err}` })
+    }
+  })
+
   // POST /servers/:id/reboot — send reboot command via SSH
   fastify.post('/servers/:id/reboot', {
     preHandler: [requirePermission('servers:write'), requireTotpElevation('network_device_reboot')],
@@ -730,7 +872,6 @@ ${deviceInfo}`
 
     const vaultKey = getVaultKey()
 
-    // Pick reboot command based on vendor/os_type
     const vendor = (server.snmp_vendor ?? '').toLowerCase()
     const osType = (server.os_type ?? '').toLowerCase()
     let rebootCmd: string
@@ -743,32 +884,8 @@ ${deviceInfo}`
     else if (osType === 'router' || osType === 'switch' || osType === 'switch-l3' || osType === 'firewall') rebootCmd = 'reload\nyes\n'
     else                                                                  rebootCmd = 'reboot'
 
-    // Build SSH connect config (key or password)
-    const connectSsh = (): Promise<{ client: Client; username: string }> => new Promise(async (resolve, reject) => {
-      const { Client: SshClient } = await import('ssh2') as any
-      const client = new SshClient()
-      let cfg: any = { host: server.hostname, port: server.ssh_port ?? 22, readyTimeout: 12000 }
-
-      if (server.access_ssh_auth_type === 'password') {
-        const cred = await db.selectFrom('server_credentials').selectAll()
-          .where('server_id', '=', id).where('category', '=', 'linux').where('is_archived', '=', false)
-          .orderBy('created_at', 'desc').limit(1).executeTakeFirst()
-        if (!cred || !cred.password_enc) return reject(new Error('No SSH password credential configured'))
-        cfg = { ...cfg, username: cred.linux_user ?? 'admin', password: decryptSecret(cred.password_enc, vaultKey) }
-      } else {
-        if (!server.management_key_id) return reject(new Error('No SSH key configured'))
-        const key = await db.selectFrom('ssh_keys').selectAll().where('id', '=', server.management_key_id).executeTakeFirst()
-        if (!key) return reject(new Error('SSH key not found'))
-        cfg = { ...cfg, username: server.management_linux_user ?? 'admin', privateKey: decryptSecret(key.private_key_enc, vaultKey) }
-      }
-
-      client.on('ready', () => resolve({ client, username: cfg.username }))
-      client.on('error', reject)
-      client.connect(cfg)
-    })
-
     try {
-      const { client } = await connectSsh()
+      const client = await connectSsh(server, id, vaultKey)
       const output = await new Promise<string>((resolve) => {
         client.exec(rebootCmd, (err: any, stream: any) => {
           if (err) { client.end(); resolve('') ; return }
