@@ -540,7 +540,8 @@ ${deviceInfo}`
         : snmp.createSession(server.hostname, community, sessionOpts)
 
       // Walk a subtree, returning map of index → value
-      const walkTable = (baseOid: string): Promise<Map<number, string>> =>
+      // isMac=true: treat 6-byte buffers as colon-separated MAC (only for ifPhysAddress)
+      const walkTable = (baseOid: string, isMac = false): Promise<Map<number, string>> =>
         new Promise((resolve) => {
           const result = new Map<number, string>()
           sess.subtree(baseOid, 20, (varbinds: any[]) => {
@@ -552,8 +553,7 @@ ${deviceInfo}`
               const raw = vb.value
               let val: string
               if (Buffer.isBuffer(raw)) {
-                // MAC address or binary — try hex first
-                if (raw.length === 6) {
+                if (isMac && raw.length === 6) {
                   val = Array.from(raw).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(':')
                 } else {
                   val = raw.toString('utf8').replace(/\0/g, '').trim()
@@ -566,7 +566,6 @@ ${deviceInfo}`
               result.set(idx, val)
             }
           }, (err: any) => {
-            // Ignore errors (device may not support all MIBs) — return what we have
             if (err) {} // best-effort
             resolve(result)
           })
@@ -575,14 +574,14 @@ ${deviceInfo}`
       // IF-MIB OIDs (standard, all devices)
       const [ifDescr, ifSpeed, ifPhysAddr, ifAdminStatus, ifOperStatus, ifName, ifHighSpeed, ifAlias] =
         await Promise.all([
-          walkTable('1.3.6.1.2.1.2.2.1.2'),   // ifDescr
-          walkTable('1.3.6.1.2.1.2.2.1.5'),   // ifSpeed (bps)
-          walkTable('1.3.6.1.2.1.2.2.1.6'),   // ifPhysAddress
-          walkTable('1.3.6.1.2.1.2.2.1.7'),   // ifAdminStatus (1=up,2=down)
-          walkTable('1.3.6.1.2.1.2.2.1.8'),   // ifOperStatus (1=up,2=down)
-          walkTable('1.3.6.1.2.1.31.1.1.1.1'),  // ifName (IF-MIB extension)
-          walkTable('1.3.6.1.2.1.31.1.1.1.15'), // ifHighSpeed (Mbps)
-          walkTable('1.3.6.1.2.1.31.1.1.1.18'), // ifAlias
+          walkTable('1.3.6.1.2.1.2.2.1.2'),        // ifDescr
+          walkTable('1.3.6.1.2.1.2.2.1.5'),        // ifSpeed (bps)
+          walkTable('1.3.6.1.2.1.2.2.1.6', true),  // ifPhysAddress — 6-byte MAC
+          walkTable('1.3.6.1.2.1.2.2.1.7'),        // ifAdminStatus (1=up,2=down)
+          walkTable('1.3.6.1.2.1.2.2.1.8'),        // ifOperStatus (1=up,2=down)
+          walkTable('1.3.6.1.2.1.31.1.1.1.1'),     // ifName (IF-MIB extension)
+          walkTable('1.3.6.1.2.1.31.1.1.1.15'),    // ifHighSpeed (Mbps)
+          walkTable('1.3.6.1.2.1.31.1.1.1.18'),    // ifAlias
         ])
 
       // Q-BRIDGE-MIB: port VLAN (PVID) — best effort
