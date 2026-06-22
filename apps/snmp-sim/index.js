@@ -21,6 +21,7 @@ const T = {
 const PDU_GET      = 0xa0
 const PDU_GETNEXT  = 0xa1
 const PDU_RESPONSE = 0xa2
+const PDU_SET      = 0xa3
 const PDU_GETBULK  = 0xa5
 
 // ── OID database ──────────────────────────────────────────────────────────────
@@ -185,9 +186,24 @@ function parseMsg(buf) {
     i++
     const { len: vblen, skip: vbs } = decLen(buf, i); i += vbs
     const vbEnd = i + vblen
-    i++  // OID tag 0x06
+    // OID
+    i++  // 0x06 tag
     const { len: ol, skip: os } = decLen(buf, i); i += os
-    varbinds.push(decOid(buf, i, ol))
+    const oid = decOid(buf, i, ol); i += ol
+    // value (only needed for SET)
+    let val = null
+    if (i < vbEnd) {
+      const vtype = buf[i++]
+      const { len: vl, skip: vs } = decLen(buf, i); i += vs
+      if (vtype === T.INTEGER || vtype === T.COUNTER32 || vtype === T.GAUGE32 || vtype === T.TIMETICKS) {
+        let n = 0
+        for (let j = 0; j < vl; j++) n = (n << 8) | buf[i + j]
+        val = { type: vtype, value: n }
+      } else if (vtype === T.OCTET_STRING) {
+        val = { type: vtype, value: buf.subarray(i, i + vl) }
+      }
+    }
+    varbinds.push({ oid, val })
     i = vbEnd
   }
   return { version, community, pduType, reqId, nonRepeaters, maxRepetitions, varbinds }
@@ -208,30 +224,41 @@ function handle(buf) {
   const out = []
 
   if (req.pduType === PDU_GET) {
-    for (const oid of req.varbinds) {
+    for (const { oid } of req.varbinds) {
       const e = oidMap.get(oid)
       out.push(e ? [oid, e.type, e.value] : [oid, T.NO_SUCH_OBJ, null])
     }
 
   } else if (req.pduType === PDU_GETNEXT) {
-    for (const oid of req.varbinds) {
+    for (const { oid } of req.varbinds) {
       const n = nextOid(oid)
       if (n) { const e = oidMap.get(n); out.push([n, e.type, e.value]) }
       else out.push([oid, T.END_OF_MIB, null])
     }
 
+  } else if (req.pduType === PDU_SET) {
+    // Apply each varbind value to oidMap, respond with echo of set values
+    for (const { oid, val } of req.varbinds) {
+      if (val !== null && oidMap.has(oid)) {
+        oidMap.set(oid, { type: val.type, value: val.value })
+        sortedCache = null  // invalidate sort cache
+      }
+      const e = oidMap.get(oid)
+      out.push(e ? [oid, e.type, e.value] : [oid, T.NO_SUCH_OBJ, null])
+    }
+
   } else if (req.pduType === PDU_GETBULK) {
     // non-repeaters treated as GETNEXT
     for (let i = 0; i < Math.min(req.nonRepeaters, req.varbinds.length); i++) {
-      const n = nextOid(req.varbinds[i])
+      const n = nextOid(req.varbinds[i].oid)
       if (n) { const e = oidMap.get(n); out.push([n, e.type, e.value]) }
-      else out.push([req.varbinds[i], T.END_OF_MIB, null])
+      else out.push([req.varbinds[i].oid, T.END_OF_MIB, null])
     }
     // repeaters
     const rep = Math.max(1, req.maxRepetitions || 10)
     for (let i = req.nonRepeaters; i < req.varbinds.length; i++) {
-      const nexts = oidsAfter(req.varbinds[i], rep)
-      if (nexts.length === 0) { out.push([req.varbinds[i], T.END_OF_MIB, null]); continue }
+      const nexts = oidsAfter(req.varbinds[i].oid, rep)
+      if (nexts.length === 0) { out.push([req.varbinds[i].oid, T.END_OF_MIB, null]); continue }
       for (const n of nexts) { const e = oidMap.get(n); out.push([n, e.type, e.value]) }
     }
   } else {

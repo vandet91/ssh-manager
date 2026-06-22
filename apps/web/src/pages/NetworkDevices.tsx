@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, Server, NetworkProfile, SshKey, SnmpProfile, PingResult, PingStatus, FirmwareCheckResult } from '../api/client'
 import Modal from '../components/Modal'
+import { useTotpElevation } from '../context/TotpElevationContext'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1102,6 +1103,8 @@ function DevicesTab({ devices, snmpProfiles, onChanged }: { devices: Server[]; s
   const [firmChecking, setFirmChecking] = useState<Record<string, boolean>>({})
   const [firmModal, setFirmModal] = useState<{ device: Server; result: FirmwareCheckResult; checkedAt: string } | null>(null)
   const [profileDevice, setProfileDevice] = useState<Server | null>(null)
+  const [rebooting, setRebooting] = useState<Record<string, boolean>>({})
+  const { requestElevation: reqElevation } = useTotpElevation()
   const navigate = useNavigate()
 
   const testConnection = useCallback(async (d: Server) => {
@@ -1118,6 +1121,20 @@ function DevicesTab({ devices, snmpProfiles, onChanged }: { devices: Server[]; s
       } catch { navigate(`/terminal?server=${d.id}`) }
     } else { navigate(`/terminal?server=${d.id}`) }
   }, [navigate])
+
+  const rebootDevice = useCallback(async (d: Server) => {
+    if (rebooting[d.id]) return
+    try { await reqElevation('network_device_reboot') } catch { return }
+    if (!window.confirm(`Reboot ${d.name} (${d.hostname})? The device will be unreachable for a moment.`)) return
+    setRebooting(r => ({ ...r, [d.id]: true }))
+    try {
+      await api.post(`/servers/${d.id}/reboot`, {})
+    } catch (e: any) {
+      alert(`Reboot failed: ${e?.data?.error ?? e?.message ?? 'Unknown error'}`)
+    } finally {
+      setRebooting(r => { const n = { ...r }; delete n[d.id]; return n })
+    }
+  }, [rebooting, reqElevation])
 
   const fetchSnmp = useCallback(async (d: Server) => {
     setSnmpFetching(s => ({ ...s, [d.id]: true }))
@@ -1306,6 +1323,13 @@ function DevicesTab({ devices, snmpProfiles, onChanged }: { devices: Server[]; s
                           </button>
                         )}
 
+                        {/* Reboot */}
+                        {d.access_ssh_enabled && (
+                          <button onClick={() => rebootDevice(d)} disabled={!!rebooting[d.id]} title="Reboot device via SSH" style={btn({ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.35)', color: '#fbbf24', opacity: rebooting[d.id] ? 0.55 : 1, cursor: rebooting[d.id] ? 'default' : 'pointer' })}>
+                            {rebooting[d.id] ? '…' : '↺'}
+                          </button>
+                        )}
+
                         {/* Web UI */}
                         {d.web_enabled && d.web_url && (
                           <a href={d.web_url} target="_blank" rel="noopener noreferrer" title="Open Web UI" style={{ ...btn({ background: 'rgba(56,139,253,0.12)', border: '1px solid rgba(56,139,253,0.35)', color: '#58a6ff', textDecoration: 'none' }) }}>🌐</a>
@@ -1446,6 +1470,8 @@ function PortsTab({ devices }: { devices: Server[] }) {
   const [error, setError] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'up' | 'down'>('all')
   const [search, setSearch] = useState('')
+  const [toggling, setToggling] = useState<Record<number, boolean>>({})
+  const { requestElevation } = useTotpElevation()
 
   const selected = devices.find(d => d.id === selectedId)
 
@@ -1462,6 +1488,22 @@ function PortsTab({ devices }: { devices: Server[] }) {
       })
       .catch(() => {})
   }, [selectedId])
+
+  const togglePort = async (p: SnmpPort) => {
+    if (!selectedId || toggling[p.index]) return
+    try {
+      await requestElevation('network_port_shutdown')
+    } catch { return }
+    setToggling(t => ({ ...t, [p.index]: true }))
+    try {
+      await api.post(`/servers/${selectedId}/snmp-port-admin`, { ifIndex: p.index, adminUp: !p.admin_up })
+      setPorts(prev => prev ? prev.map(x => x.index === p.index ? { ...x, admin_up: !p.admin_up } : x) : prev)
+    } catch (e: any) {
+      setError(e?.data?.error ?? e?.message ?? 'Toggle failed')
+    } finally {
+      setToggling(t => { const n = { ...t }; delete n[p.index]; return n })
+    }
+  }
 
   const pollPorts = async () => {
     if (!selectedId) return
@@ -1590,7 +1632,7 @@ function PortsTab({ devices }: { devices: Server[] }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-med)' }}>
-                {['#', 'Port', 'Description / Alias', 'MAC', 'Admin', 'Link', 'Speed', 'VLAN'].map(h => (
+                {['#', 'Port', 'Description / Alias', 'MAC', 'Admin', 'Link', 'Speed', 'VLAN', ''].map(h => (
                   <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -1621,6 +1663,16 @@ function PortsTab({ devices }: { devices: Server[] }) {
                         VLAN {p.pvid}
                       </span>
                     ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                  </td>
+                  <td style={{ padding: '9px 12px' }}>
+                    <button
+                      onClick={() => togglePort(p)}
+                      disabled={!!toggling[p.index]}
+                      title={p.admin_up ? 'Disable port (SNMP SET)' : 'Enable port (SNMP SET)'}
+                      style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: `1px solid ${p.admin_up ? 'rgba(248,113,113,0.4)' : 'rgba(52,211,153,0.4)'}`, background: p.admin_up ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)', color: p.admin_up ? '#f87171' : '#34d399', cursor: toggling[p.index] ? 'default' : 'pointer', opacity: toggling[p.index] ? 0.6 : 1, fontWeight: 600 }}
+                    >
+                      {toggling[p.index] ? '…' : p.admin_up ? 'Disable' : 'Enable'}
+                    </button>
                   </td>
                 </tr>
               ))}

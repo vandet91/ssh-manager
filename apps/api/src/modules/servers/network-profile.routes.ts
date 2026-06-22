@@ -5,6 +5,8 @@ import { requireAuth, requirePermission } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 import { type AiProvider } from '../../utils/ai-analyst'
+import { requireTotpElevation } from '../../utils/totp-guard'
+import { Client } from 'ssh2'
 
 // ── Zod schemas ───────────────────────────────────────────────────────────────
 
@@ -628,6 +630,167 @@ ${deviceInfo}`
       return { ok: true, fetched_at: now.toISOString(), ports }
     } catch (err: any) {
       return reply.code(400).send({ error: `SNMP port walk failed: ${err.message ?? err}` })
+    }
+  })
+
+  // POST /servers/:id/snmp-port-admin — enable/disable a port via SNMP SET ifAdminStatus
+  fastify.post('/servers/:id/snmp-port-admin', {
+    preHandler: [requirePermission('servers:write'), requireTotpElevation('network_port_shutdown')],
+  }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { ifIndex, adminUp } = z.object({ ifIndex: z.number().int().min(1), adminUp: z.boolean() }).parse(req.body)
+
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+    if (!server) return reply.code(404).send({ error: 'Server not found' })
+    if (!server.snmp_enabled) return reply.code(400).send({ error: 'SNMP not configured for this device' })
+
+    const vaultKey = getVaultKey()
+    let version  = server.snmp_version ?? 'v2c'
+    let port     = server.snmp_port ?? 161
+    let community = server.snmp_community_enc ? decryptSecret(server.snmp_community_enc, vaultKey) : ''
+    let v3User   = server.snmp_v3_user ?? ''
+    let v3AuthProto = server.snmp_v3_auth_proto ?? null
+    let v3AuthKey   = server.snmp_v3_auth_key_enc ? decryptSecret(server.snmp_v3_auth_key_enc, vaultKey) : ''
+    let v3PrivProto = server.snmp_v3_priv_proto ?? null
+    let v3PrivKey   = server.snmp_v3_priv_key_enc ? decryptSecret(server.snmp_v3_priv_key_enc, vaultKey) : ''
+
+    if (server.snmp_profile_id && !community) {
+      const profile = await db.selectFrom('snmp_profiles').selectAll().where('id', '=', server.snmp_profile_id).executeTakeFirst()
+      if (profile) {
+        version     = profile.version ?? version
+        port        = profile.port ?? port
+        community   = profile.community_enc ? decryptSecret(profile.community_enc, vaultKey) : community
+        v3User      = profile.v3_user ?? v3User
+        v3AuthProto = profile.v3_auth_proto ?? v3AuthProto
+        v3AuthKey   = profile.v3_auth_key_enc ? decryptSecret(profile.v3_auth_key_enc, vaultKey) : v3AuthKey
+        v3PrivProto = profile.v3_priv_proto ?? v3PrivProto
+        v3PrivKey   = profile.v3_priv_key_enc ? decryptSecret(profile.v3_priv_key_enc, vaultKey) : v3PrivKey
+      }
+    }
+    if (!community && version !== 'v3') community = 'public'
+
+    try {
+      const snmp = await import('net-snmp')
+      const sessionOpts: any = {
+        port, retries: 1, timeout: 5000, transport: 'udp4',
+        version: version === 'v1' ? snmp.Version1 : version === 'v3' ? snmp.Version3 : snmp.Version2c,
+      }
+      const sess = version === 'v3'
+        ? snmp.createV3Session(server.hostname, {
+            name: v3User,
+            level: v3PrivKey ? snmp.SecurityLevel.authPriv : v3AuthKey ? snmp.SecurityLevel.authNoPriv : snmp.SecurityLevel.noAuthNoPriv,
+            authProtocol: v3AuthProto === 'SHA' ? snmp.AuthProtocols.sha : snmp.AuthProtocols.md5,
+            authKey: v3AuthKey,
+            privProtocol: v3PrivProto === 'AES' ? snmp.PrivProtocols.aes : snmp.PrivProtocols.des,
+            privKey: v3PrivKey,
+          }, sessionOpts)
+        : snmp.createSession(server.hostname, community, sessionOpts)
+
+      await new Promise<void>((resolve, reject) => {
+        sess.set([{
+          oid: `1.3.6.1.2.1.2.2.1.7.${ifIndex}`,
+          type: snmp.ObjectType.Integer,
+          value: adminUp ? 1 : 2,
+        }], (err: any) => {
+          sess.close()
+          if (err) reject(err)
+          else resolve()
+        })
+      })
+
+      // Update cached snmp_interfaces in DB
+      const current: any[] = (server.snmp_interfaces as any[]) ?? []
+      const updated = current.map(p => p.index === ifIndex ? { ...p, admin_up: adminUp, oper_up: adminUp ? p.oper_up : false } : p)
+      await db.updateTable('servers').set({ snmp_interfaces: JSON.stringify(updated), updated_at: new Date() } as any).where('id', '=', id).execute()
+
+      await writeAuditLog({
+        userId: (req.session.user as any)?.id,
+        userEmail: (req.session.user as any)?.email,
+        action: adminUp ? 'network.port_enabled' : 'network.port_disabled',
+        resource: 'server', resourceId: id,
+        details: { ifIndex },
+        request: req,
+      })
+
+      return { ok: true, ifIndex, adminUp }
+    } catch (err: any) {
+      return reply.code(400).send({ error: `SNMP SET failed: ${err.message ?? err}` })
+    }
+  })
+
+  // POST /servers/:id/reboot — send reboot command via SSH
+  fastify.post('/servers/:id/reboot', {
+    preHandler: [requirePermission('servers:write'), requireTotpElevation('network_device_reboot')],
+  }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+    if (!server) return reply.code(404).send({ error: 'Server not found' })
+    if (!server.access_ssh_enabled) return reply.code(400).send({ error: 'SSH not enabled for this device' })
+
+    const vaultKey = getVaultKey()
+
+    // Pick reboot command based on vendor/os_type
+    const vendor = (server.snmp_vendor ?? '').toLowerCase()
+    const osType = (server.os_type ?? '').toLowerCase()
+    let rebootCmd: string
+    if      (vendor.includes('cisco'))                                    rebootCmd = 'reload\nyes\n'
+    else if (vendor.includes('mikrotik') || vendor.includes('routeros')) rebootCmd = '/system reboot\ny\n'
+    else if (vendor.includes('fortinet') || vendor.includes('fortigate'))rebootCmd = 'execute reboot\ny\n'
+    else if (vendor.includes('juniper'))                                  rebootCmd = 'request system reboot'
+    else if (vendor.includes('aruba') || vendor.includes('hpe'))         rebootCmd = 'reload\nyes\n'
+    else if (vendor.includes('ubiquiti'))                                 rebootCmd = 'reboot'
+    else if (osType === 'router' || osType === 'switch' || osType === 'switch-l3' || osType === 'firewall') rebootCmd = 'reload\nyes\n'
+    else                                                                  rebootCmd = 'reboot'
+
+    // Build SSH connect config (key or password)
+    const connectSsh = (): Promise<{ client: Client; username: string }> => new Promise(async (resolve, reject) => {
+      const { Client: SshClient } = await import('ssh2') as any
+      const client = new SshClient()
+      let cfg: any = { host: server.hostname, port: server.ssh_port ?? 22, readyTimeout: 12000 }
+
+      if (server.access_ssh_auth_type === 'password') {
+        const cred = await db.selectFrom('server_credentials').selectAll()
+          .where('server_id', '=', id).where('category', '=', 'linux').where('is_archived', '=', false)
+          .orderBy('created_at', 'desc').limit(1).executeTakeFirst()
+        if (!cred || !cred.password_enc) return reject(new Error('No SSH password credential configured'))
+        cfg = { ...cfg, username: cred.linux_user ?? 'admin', password: decryptSecret(cred.password_enc, vaultKey) }
+      } else {
+        if (!server.management_key_id) return reject(new Error('No SSH key configured'))
+        const key = await db.selectFrom('ssh_keys').selectAll().where('id', '=', server.management_key_id).executeTakeFirst()
+        if (!key) return reject(new Error('SSH key not found'))
+        cfg = { ...cfg, username: server.management_linux_user ?? 'admin', privateKey: decryptSecret(key.private_key_enc, vaultKey) }
+      }
+
+      client.on('ready', () => resolve({ client, username: cfg.username }))
+      client.on('error', reject)
+      client.connect(cfg)
+    })
+
+    try {
+      const { client } = await connectSsh()
+      const output = await new Promise<string>((resolve) => {
+        client.exec(rebootCmd, (err: any, stream: any) => {
+          if (err) { client.end(); resolve('') ; return }
+          const chunks: Buffer[] = []
+          stream.on('data', (d: Buffer) => chunks.push(d))
+          stream.stderr.on('data', (d: Buffer) => chunks.push(d))
+          stream.on('close', () => { client.end(); resolve(Buffer.concat(chunks).toString('utf8').trim()) })
+        })
+      })
+
+      await writeAuditLog({
+        userId: (req.session.user as any)?.id,
+        userEmail: (req.session.user as any)?.email,
+        action: 'network.device_rebooted',
+        resource: 'server', resourceId: id,
+        details: { command: rebootCmd.replace(/\n/g, '\\n') },
+        request: req,
+      })
+
+      return { ok: true, command: rebootCmd.split('\n')[0], output: output.slice(0, 500) }
+    } catch (err: any) {
+      return reply.code(400).send({ error: `Reboot failed: ${err.message ?? err}` })
     }
   })
 }
