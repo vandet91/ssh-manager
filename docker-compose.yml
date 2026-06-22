@@ -132,6 +132,14 @@ services:
       - TFTP_ROOT=/tftp-root
     restart: unless-stopped
 
+  # SNMP device simulator — 24-port Cisco Catalyst 2960X for testing Port Dashboard
+  # Add a Network Device in SSH Manager: hostname=snmp-sim, SNMP enabled, community=public
+  snmp-sim:
+    build: ./apps/snmp-sim
+    ports:
+      - "16100:161/udp"
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
