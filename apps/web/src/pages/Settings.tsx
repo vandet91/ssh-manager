@@ -1012,6 +1012,24 @@ export default function Settings() {
               <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
                 Downloads a <code style={{ fontFamily: 'monospace' }}>.pvd</code> file containing all active credentials encrypted with your passphrase.
               </p>
+              <div style={{ borderTop: '1px solid var(--border-weak)', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>KeePass Compatible Export</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button type="button" onClick={() => {
+                    const a = document.createElement('a')
+                    a.href = '/api/vault/export/keepass'
+                    a.download = ''
+                    document.body.appendChild(a)
+                    a.click()
+                    document.body.removeChild(a)
+                  }} style={{ padding: '8px 20px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
+                    ⬇ KeePass Export (.xml)
+                  </button>
+                </div>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
+                  Exports all active vault entries as plain KeePass 2.x XML. Import via <strong>File → Import → KeePass XML 2.x</strong> in KeePass.
+                </p>
+              </div>
             </div>
 
             {/* Import */}
