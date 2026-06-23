@@ -519,6 +519,15 @@ ${deviceInfo}`
     }
     if (!community && version !== 'v3') community = 'public'
 
+    // Detect model family for OID selection
+    const snmpModel   = (server.snmp_model ?? '').toLowerCase()
+    const snmpVendor  = (server.snmp_vendor ?? '').toLowerCase()
+    const lastData    = (server as any).snmp_last_data
+    const sysDescr    = ((typeof lastData === 'string' ? JSON.parse(lastData) : lastData)?.sysDescr ?? '').toLowerCase()
+    const isCiscoIos  = (snmpVendor.includes('cisco') || sysDescr.includes('cisco')) &&
+                        !sysDescr.includes('small business') && !/^sg[23456]|^cbs[23]/.test(snmpModel)
+    const isCiscoSmb  = sysDescr.includes('small business') || /^sg[23456]|^cbs[23]/.test(snmpModel)
+
     try {
       const snmp = await import('net-snmp')
 
@@ -541,16 +550,15 @@ ${deviceInfo}`
           }, sessionOpts)
         : snmp.createSession(server.hostname, community, sessionOpts)
 
-      // Walk a subtree, returning map of index → value
-      // isMac=true: treat 6-byte buffers as colon-separated MAC (only for ifPhysAddress)
+      // Walk a subtree — last OID component is the key (usually ifIndex or bridge port)
       const walkTable = (baseOid: string, isMac = false): Promise<Map<number, string>> =>
         new Promise((resolve) => {
           const result = new Map<number, string>()
           sess.subtree(baseOid, 20, (varbinds: any[]) => {
             for (const vb of varbinds) {
               if (snmp.isVarbindError(vb)) continue
-              const oidParts = vb.oid.split('.')
-              const idx = parseInt(oidParts[oidParts.length - 1], 10)
+              const parts = vb.oid.split('.')
+              const idx = parseInt(parts[parts.length - 1], 10)
               if (isNaN(idx)) continue
               const raw = vb.value
               let val: string
@@ -567,30 +575,10 @@ ${deviceInfo}`
               }
               result.set(idx, val)
             }
-          }, (err: any) => {
-            if (err) {} // best-effort
-            resolve(result)
-          })
+          }, () => resolve(result))
         })
 
-      // IF-MIB OIDs (standard, all devices)
-      const [ifDescr, ifSpeed, ifPhysAddr, ifAdminStatus, ifOperStatus, ifName, ifHighSpeed, ifAlias] =
-        await Promise.all([
-          walkTable('1.3.6.1.2.1.2.2.1.2'),        // ifDescr
-          walkTable('1.3.6.1.2.1.2.2.1.5'),        // ifSpeed (bps)
-          walkTable('1.3.6.1.2.1.2.2.1.6', true),  // ifPhysAddress — 6-byte MAC
-          walkTable('1.3.6.1.2.1.2.2.1.7'),        // ifAdminStatus (1=up,2=down)
-          walkTable('1.3.6.1.2.1.2.2.1.8'),        // ifOperStatus (1=up,2=down)
-          walkTable('1.3.6.1.2.1.31.1.1.1.1'),     // ifName (IF-MIB extension)
-          walkTable('1.3.6.1.2.1.31.1.1.1.15'),    // ifHighSpeed (Mbps)
-          walkTable('1.3.6.1.2.1.31.1.1.1.18'),    // ifAlias
-        ])
-
-      // Q-BRIDGE-MIB: port VLAN (PVID) — best effort
-      const dot1qPvid = await walkTable('1.3.6.1.2.1.17.7.1.4.5.1.1').catch(() => new Map<number, string>())
-
-      // Q-BRIDGE-MIB: dot1qVlanStaticEgressPorts — bitmask of ports per VLAN
-      // Used to detect trunk (port in >1 VLAN) vs access (port in exactly 1 VLAN)
+      // Walk bitmask table — key is VLAN id, value is port bitmask Buffer
       const walkBitmask = (baseOid: string): Promise<Map<number, Buffer>> =>
         new Promise((resolve) => {
           const result = new Map<number, Buffer>()
@@ -604,37 +592,299 @@ ${deviceInfo}`
           }, () => resolve(result))
         })
 
-      const egressByVlan = await walkBitmask('1.3.6.1.2.1.17.7.1.4.3.1.2').catch(() => new Map<number, Buffer>())
+      // Walk LLDP neighbors — OID ends in <localPortNum>.<remoteIndex>
+      // Returns map of localPortNum → { chassis, portId, sysName, sysDesc }
+      const walkLldp = (): Promise<Map<number, { chassis: string; portId: string; sysName: string; sysDesc: string }>> =>
+        new Promise((resolve) => {
+          const chassis = new Map<number, string>()
+          const portId  = new Map<number, string>()
+          const sysName = new Map<number, string>()
+          const sysDesc = new Map<number, string>()
 
-      // Decode: port n → byte floor((n-1)/8), bit (n-1)%8 from MSB
-      const portVlanCount = new Map<number, number>()
+          const walk = (baseOid: string, dest: Map<number, string>, isMac = false) =>
+            new Promise<void>((res) => {
+              sess.subtree(baseOid, 20, (vbs: any[]) => {
+                for (const vb of vbs) {
+                  if (snmp.isVarbindError(vb)) continue
+                  const parts = vb.oid.split('.')
+                  // OID: ....<localPort>.<remoteIndex> — take second-to-last
+                  const localPort = parseInt(parts[parts.length - 2], 10)
+                  if (isNaN(localPort)) continue
+                  const raw = vb.value
+                  let val = ''
+                  if (Buffer.isBuffer(raw)) {
+                    if (isMac && raw.length === 6) {
+                      val = Array.from(raw).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(':')
+                    } else {
+                      val = raw.toString('utf8').replace(/\0/g, '').trim()
+                    }
+                  } else if (raw != null) val = String(raw)
+                  if (!dest.has(localPort)) dest.set(localPort, val)
+                }
+              }, () => res())
+            })
+
+          Promise.allSettled([
+            walk('1.0.8802.1.1.2.1.4.1.1.5', chassis, true), // lldpRemChassisId (MAC)
+            walk('1.0.8802.1.1.2.1.4.1.1.7', portId),        // lldpRemPortId
+            walk('1.0.8802.1.1.2.1.4.1.1.9', sysName),       // lldpRemSysName
+            walk('1.0.8802.1.1.2.1.4.1.1.10', sysDesc),      // lldpRemSysDesc
+          ]).then(() => {
+            const result = new Map<number, { chassis: string; portId: string; sysName: string; sysDesc: string }>()
+            for (const lp of new Set([...chassis.keys(), ...sysName.keys()])) {
+              result.set(lp, {
+                chassis: chassis.get(lp) ?? '',
+                portId:  portId.get(lp) ?? '',
+                sysName: sysName.get(lp) ?? '',
+                sysDesc: sysDesc.get(lp) ?? '',
+              })
+            }
+            resolve(result)
+          })
+        })
+
+      // Walk CDP neighbors (Cisco IOS only) — key is ifIndex (first sub-index component)
+      const walkCdp = (): Promise<Map<number, { deviceId: string; ipAddr: string; portId: string; platform: string }>> =>
+        new Promise((resolve) => {
+          const deviceId = new Map<number, string>()
+          const ipAddr   = new Map<number, string>()
+          const portIdC  = new Map<number, string>()
+          const platform = new Map<number, string>()
+
+          const walkCdpTable = (baseOid: string, dest: Map<number, string>, isIp = false) =>
+            new Promise<void>((res) => {
+              sess.subtree(baseOid, 20, (vbs: any[]) => {
+                for (const vb of vbs) {
+                  if (snmp.isVarbindError(vb)) continue
+                  const parts = vb.oid.split('.')
+                  // CDP OID ends in <ifIndex>.<neighborIndex>
+                  const ifIdx = parseInt(parts[parts.length - 2], 10)
+                  if (isNaN(ifIdx)) continue
+                  const raw = vb.value
+                  let val = ''
+                  if (Buffer.isBuffer(raw)) {
+                    if (isIp && raw.length === 4) {
+                      val = Array.from(raw).join('.')
+                    } else {
+                      val = raw.toString('utf8').replace(/\0/g, '').trim()
+                    }
+                  } else if (raw != null) val = String(raw)
+                  if (!dest.has(ifIdx)) dest.set(ifIdx, val)
+                }
+              }, () => res())
+            })
+
+          Promise.allSettled([
+            walkCdpTable('1.3.6.1.4.1.9.9.23.1.2.1.1.6', deviceId),      // cdpCacheDeviceId
+            walkCdpTable('1.3.6.1.4.1.9.9.23.1.2.1.1.4', ipAddr, true),   // cdpCacheAddress (IP bytes)
+            walkCdpTable('1.3.6.1.4.1.9.9.23.1.2.1.1.7', portIdC),        // cdpCacheDevicePort
+            walkCdpTable('1.3.6.1.4.1.9.9.23.1.2.1.1.8', platform),       // cdpCachePlatform
+          ]).then(() => {
+            const result = new Map<number, { deviceId: string; ipAddr: string; portId: string; platform: string }>()
+            for (const ifIdx of new Set([...deviceId.keys(), ...ipAddr.keys()])) {
+              result.set(ifIdx, {
+                deviceId: deviceId.get(ifIdx) ?? '',
+                ipAddr:   ipAddr.get(ifIdx) ?? '',
+                portId:   portIdC.get(ifIdx) ?? '',
+                platform: platform.get(ifIdx) ?? '',
+              })
+            }
+            resolve(result)
+          })
+        })
+
+      // ── Phase 1: IF-MIB (standard, all devices) ─────────────────────────────
+      const [ifDescr, ifSpeed, ifPhysAddr, ifAdminStatus, ifOperStatus, ifName, ifHighSpeed, ifAlias] =
+        await Promise.all([
+          walkTable('1.3.6.1.2.1.2.2.1.2'),        // ifDescr
+          walkTable('1.3.6.1.2.1.2.2.1.5'),        // ifSpeed (bps)
+          walkTable('1.3.6.1.2.1.2.2.1.6', true),  // ifPhysAddress — 6-byte MAC
+          walkTable('1.3.6.1.2.1.2.2.1.7'),        // ifAdminStatus (1=up,2=down)
+          walkTable('1.3.6.1.2.1.2.2.1.8'),        // ifOperStatus (1=up,2=down)
+          walkTable('1.3.6.1.2.1.31.1.1.1.1'),     // ifName (IF-MIB extension)
+          walkTable('1.3.6.1.2.1.31.1.1.1.15'),    // ifHighSpeed (Mbps)
+          walkTable('1.3.6.1.2.1.31.1.1.1.18'),    // ifAlias / description
+        ])
+
+      // ── Phase 2: Bridge MIB — bridge port → ifIndex mapping ─────────────────
+      // CRITICAL: Q-BRIDGE bitmasks use bridge port numbers, not ifIndex.
+      // dot1dBasePortIfIndex maps bridge port n → ifIndex.
+      // Without this, VLAN membership is matched to the wrong interface on most switches.
+      const bridgePortToIfIndex = await walkTable('1.3.6.1.2.1.17.1.4.1.2')
+        .catch(() => new Map<number, string>())
+      // Build reverse map: ifIndex → bridge port number
+      const ifIndexToBridgePort = new Map<number, number>()
+      for (const [bp, ifIdxStr] of bridgePortToIfIndex) {
+        const ifIdx = parseInt(ifIdxStr, 10)
+        if (!isNaN(ifIdx)) ifIndexToBridgePort.set(ifIdx, bp)
+      }
+
+      // ── Phase 3: Q-BRIDGE-MIB (VLAN membership + names) ─────────────────────
+      // dot1qPvid: bridge port → native/access VLAN
+      const [dot1qPvid, dot1qVlanStaticName] = await Promise.all([
+        walkTable('1.3.6.1.2.1.17.7.1.4.5.1.1').catch(() => new Map<number, string>()),
+        // dot1qVlanStaticName: vlanId → name configured on the switch
+        walkTable('1.3.6.1.2.1.17.7.1.4.3.1.1').catch(() => new Map<number, string>()),
+      ])
+      // Build ifIndex → PVID using the bridge port mapping
+      const ifIndexToPvid = new Map<number, number>()
+      for (const [bp, pvid] of dot1qPvid) {
+        const ifIdx = parseInt(bridgePortToIfIndex.get(bp) ?? '', 10)
+        if (!isNaN(ifIdx)) ifIndexToPvid.set(ifIdx, parseInt(pvid, 10) || 1)
+      }
+
+      // dot1qVlanStaticEgressPorts bitmask — bridge port is the bit position
+      const egressByVlan = await walkBitmask('1.3.6.1.2.1.17.7.1.4.3.1.2')
+        .catch(() => new Map<number, Buffer>())
+      // Count how many VLANs each bridge port appears in (>1 = trunk)
+      const bridgePortVlanCount = new Map<number, number>()
       for (const bitmask of egressByVlan.values()) {
         for (let b = 0; b < bitmask.length; b++) {
           for (let bit = 0; bit < 8; bit++) {
             if (bitmask[b] & (0x80 >> bit)) {
-              const portN = b * 8 + bit + 1
-              portVlanCount.set(portN, (portVlanCount.get(portN) ?? 0) + 1)
+              const bp = b * 8 + bit + 1
+              bridgePortVlanCount.set(bp, (bridgePortVlanCount.get(bp) ?? 0) + 1)
             }
           }
         }
       }
 
-      // Collect all interface indexes
+      // ── Phase 4: Model-aware port mode ───────────────────────────────────────
+      // Cisco IOS: CISCO-VLAN-MEMBERSHIP-MIB vlanTrunkPortDynamicStatus
+      // Cisco SMB: proprietary rlPortSwVlanMode
+      // Standard fallback: derive from VLAN count
+      let ifIndexToMode = new Map<number, 'access' | 'trunk' | 'unknown'>()
+
+      if (isCiscoIos) {
+        // vlanTrunkPortDynamicStatus: 1=trunking, 2=notTrunking — keyed by ifIndex
+        const trunkStatus = await walkTable('1.3.6.1.4.1.9.9.46.1.6.1.1.14')
+          .catch(() => new Map<number, string>())
+        for (const [idx, val] of trunkStatus) {
+          ifIndexToMode.set(idx, val === '1' ? 'trunk' : 'access')
+        }
+      } else if (isCiscoSmb) {
+        // rlPortSwVlanMode: 1=general, 2=access, 3=trunk, 4=customer — keyed by ifIndex
+        const smbMode = await walkTable('1.3.6.1.4.1.9.6.1.101.48.22.1.1')
+          .catch(() => new Map<number, string>())
+        for (const [idx, val] of smbMode) {
+          const v = parseInt(val, 10)
+          ifIndexToMode.set(idx, v === 3 ? 'trunk' : v === 1 ? 'trunk' : 'access')
+        }
+      }
+      // Fallback: use Q-BRIDGE VLAN count via bridge port mapping
+      if (ifIndexToMode.size === 0) {
+        for (const [ifIdx, bp] of ifIndexToBridgePort) {
+          const count = bridgePortVlanCount.get(bp) ?? 0
+          ifIndexToMode.set(ifIdx, count === 0 ? 'unknown' : count === 1 ? 'access' : 'trunk')
+        }
+      }
+
+      // ── Phase 5: STP state ───────────────────────────────────────────────────
+      // dot1dStpPortState: 1=disabled,2=blocking,3=listening,4=learning,5=forwarding,6=broken
+      // Keyed by bridge port — map back to ifIndex
+      const stpStateByBp = await walkTable('1.3.6.1.2.1.17.2.15.1.3')
+        .catch(() => new Map<number, string>())
+      const STP_STATES: Record<string, string> = { '1':'disabled','2':'blocking','3':'listening','4':'learning','5':'forwarding','6':'broken' }
+      const ifIndexToStp = new Map<number, string>()
+      for (const [bp, val] of stpStateByBp) {
+        const ifIdx = parseInt(bridgePortToIfIndex.get(bp) ?? '', 10)
+        if (!isNaN(ifIdx)) ifIndexToStp.set(ifIdx, STP_STATES[val] ?? 'unknown')
+      }
+
+      // ── Phase 6: PortFast / Edge ─────────────────────────────────────────────
+      // Cisco IOS: stpxFastStartPortEnable (1=enable,2=disable) — keyed by ifIndex
+      // Standard:  dot1dStpPortFastEnabled  (1=enable,2=disable) — keyed by bridge port
+      const ifIndexToEdge = new Map<number, boolean>()
+      if (isCiscoIos) {
+        const pf = await walkTable('1.3.6.1.4.1.9.9.82.1.9.3.1.3').catch(() => new Map<number, string>())
+        for (const [idx, val] of pf) ifIndexToEdge.set(idx, val === '1')
+      } else {
+        const pf = await walkTable('1.3.6.1.2.1.17.2.19.1.2').catch(() => new Map<number, string>())
+        for (const [bp, val] of pf) {
+          const ifIdx = parseInt(bridgePortToIfIndex.get(bp) ?? '', 10)
+          if (!isNaN(ifIdx)) ifIndexToEdge.set(ifIdx, val === '1')
+        }
+      }
+
+      // ── Phase 7: 802.1X port control ─────────────────────────────────────────
+      // dot1xPaePortAdminControl (1=forceUnauth, 2=auto, 3=forceAuth) — keyed by ifIndex
+      const dot1xControl = await walkTable('1.0.8802.1.1.1.1.2.1.1.6')
+        .catch(() => new Map<number, string>())
+      const DOT1X_MODES: Record<string, string> = { '1':'force-unauthorized','2':'auto','3':'force-authorized' }
+      const ifIndexTo8021x = new Map<number, string>()
+      for (const [idx, val] of dot1xControl) {
+        ifIndexTo8021x.set(idx, DOT1X_MODES[val] ?? 'unknown')
+      }
+
+      // ── Phase 8: LLDP neighbors ──────────────────────────────────────────────
+      // LLDP local port → ifIndex: lldpLocPortIfIndex (1.0.8802.1.1.2.1.3.7.1.3)
+      const lldpLocalPortIfIndex = await walkTable('1.0.8802.1.1.2.1.3.7.1.3')
+        .catch(() => new Map<number, string>())
+      // Map lldpLocalPort → ifIndex
+      const lldpPortToIfIndex = new Map<number, number>()
+      for (const [lp, ifIdxStr] of lldpLocalPortIfIndex) {
+        const ifIdx = parseInt(ifIdxStr, 10)
+        if (!isNaN(ifIdx)) lldpPortToIfIndex.set(lp, ifIdx)
+      }
+      const lldpNeighborsByLocalPort = await walkLldp().catch(() => new Map())
+      // Remap: lldpLocalPort → ifIndex → neighbor
+      const ifIndexToLldp = new Map<number, { chassis: string; portId: string; sysName: string; sysDesc: string }>()
+      for (const [lp, neighbor] of lldpNeighborsByLocalPort) {
+        const ifIdx = lldpPortToIfIndex.get(lp)
+        if (ifIdx !== undefined) ifIndexToLldp.set(ifIdx, neighbor)
+      }
+
+      // ── Phase 9: CDP neighbors (Cisco IOS only) ───────────────────────────────
+      const ifIndexToCdp = new Map<number, { deviceId: string; ipAddr: string; portId: string; platform: string }>()
+      if (isCiscoIos) {
+        const cdpNeighbors = await walkCdp().catch(() => new Map())
+        for (const [ifIdx, n] of cdpNeighbors) ifIndexToCdp.set(ifIdx, n)
+      }
+
+      // ── Phase 10: RADIUS-AUTH-CLIENT-MIB (RFC 2618) ─────────────────────────
+      // radiusAuthServerAddress   .2, radiusAuthServerUDPPort .3
+      // radiusAuthClientAccessRequests .5, Accepts .11, Rejects .12
+      const [radiusAddr, radiusPort, radiusReqs, radiusAccepts, radiusRejects] = await Promise.all([
+        walkTable('1.3.6.1.2.1.67.1.1.1.1.2').catch(() => new Map<number, string>()),
+        walkTable('1.3.6.1.2.1.67.1.1.1.1.3').catch(() => new Map<number, string>()),
+        walkTable('1.3.6.1.2.1.67.1.1.1.1.5').catch(() => new Map<number, string>()),
+        walkTable('1.3.6.1.2.1.67.1.1.1.1.11').catch(() => new Map<number, string>()),
+        walkTable('1.3.6.1.2.1.67.1.1.1.1.12').catch(() => new Map<number, string>()),
+      ])
+      const discoveredRadius = Array.from(radiusAddr.keys()).map(idx => ({
+        radius_index: idx,
+        address:      radiusAddr.get(idx) ?? '',
+        auth_port:    parseInt(radiusPort.get(idx) ?? '1812', 10) || 1812,
+        access_requests: parseInt(radiusReqs.get(idx) ?? '0', 10) || 0,
+        access_accepts:  parseInt(radiusAccepts.get(idx) ?? '0', 10) || 0,
+        access_rejects:  parseInt(radiusRejects.get(idx) ?? '0', 10) || 0,
+      })).filter(r => r.address && r.address !== '0.0.0.0')
+
+      // ── Assemble port records ────────────────────────────────────────────────
       const allIndexes = new Set<number>([
         ...ifDescr.keys(), ...ifName.keys(), ...ifOperStatus.keys(),
       ])
 
       const ports = Array.from(allIndexes)
         .map(idx => {
-          const adminRaw = ifAdminStatus.get(idx)
-          const operRaw  = ifOperStatus.get(idx)
-          const adminUp  = adminRaw === '1' || adminRaw === 'up'
-          const operUp   = operRaw  === '1' || operRaw  === 'up'
-          const speedBps = parseInt(ifSpeed.get(idx) ?? '0', 10)
-          const speedMbps = parseInt(ifHighSpeed.get(idx) ?? '0', 10) || (speedBps > 0 ? Math.round(speedBps / 1_000_000) : 0)
-          const vlanCount = portVlanCount.get(idx) ?? 0
-          const mode: 'access' | 'trunk' | 'unknown' =
-            vlanCount === 0 ? 'unknown' : vlanCount === 1 ? 'access' : 'trunk'
+          const adminRaw  = ifAdminStatus.get(idx)
+          const operRaw   = ifOperStatus.get(idx)
+          const adminUp   = adminRaw === '1' || adminRaw === 'up'
+          const operUp    = operRaw  === '1' || operRaw  === 'up'
+          const speedBps  = parseInt(ifSpeed.get(idx) ?? '0', 10)
+          const speedMbps = parseInt(ifHighSpeed.get(idx) ?? '0', 10) ||
+                            (speedBps > 0 ? Math.round(speedBps / 1_000_000) : 0)
+
+          const mode = ifIndexToMode.get(idx) ?? 'unknown'
+          const pvid = ifIndexToPvid.get(idx) ?? null
+
+          const lldp = ifIndexToLldp.get(idx) ?? null
+          const cdp  = ifIndexToCdp.get(idx) ?? null
+          // Prefer LLDP; fall back to CDP if available
+          const neighbor = lldp?.sysName ? lldp : cdp ? {
+            chassis: cdp.deviceId, portId: cdp.portId, sysName: cdp.deviceId, sysDesc: cdp.platform,
+          } : null
+
           return {
             index:       idx,
             name:        ifName.get(idx) ?? ifDescr.get(idx) ?? `if${idx}`,
@@ -644,11 +894,19 @@ ${deviceInfo}`
             admin_up:    adminUp,
             oper_up:     operUp,
             speed_mbps:  speedMbps,
-            pvid:        dot1qPvid.has(idx) ? parseInt(dot1qPvid.get(idx)!, 10) || null : null,
+            pvid,
             mode,
+            stp_state:   ifIndexToStp.get(idx) ?? null,
+            edge_port:   ifIndexToEdge.has(idx) ? ifIndexToEdge.get(idx)! : null,
+            dot1x:       ifIndexTo8021x.get(idx) ?? null,
+            neighbor:    neighbor ? {
+              chassis:  neighbor.chassis,
+              port_id:  neighbor.portId,
+              sys_name: neighbor.sysName,
+              sys_desc: neighbor.sysDesc,
+            } : null,
           }
         })
-        // Filter out loopback and irrelevant types (typically index 1 is lo on Linux routers)
         .filter(p => p.name !== 'lo' && !p.name.startsWith('Loopback'))
         .sort((a, b) => a.index - b.index)
 
@@ -661,10 +919,92 @@ ${deviceInfo}`
         updated_at: now,
       } as any).where('id', '=', id).execute()
 
-      return { ok: true, fetched_at: now.toISOString(), ports }
+      // Upsert discovered VLANs
+      if (dot1qVlanStaticName.size > 0) {
+        for (const [vlanId, name] of dot1qVlanStaticName) {
+          await (db as any).insertInto('snmp_vlans')
+            .values({ server_id: id, vlan_id: vlanId, name, discovered_at: now })
+            .onConflict((oc: any) => oc.columns(['server_id', 'vlan_id']).doUpdateSet({ name, discovered_at: now }))
+            .execute()
+        }
+        // Remove VLANs no longer present on the switch
+        const currentVlanIds = Array.from(dot1qVlanStaticName.keys())
+        await (db as any).deleteFrom('snmp_vlans')
+          .where('server_id', '=', id)
+          .where('vlan_id', 'not in', currentVlanIds)
+          .execute()
+      }
+
+      // Upsert discovered RADIUS servers
+      if (discoveredRadius.length > 0) {
+        await (db as any).deleteFrom('snmp_discovered_radius').where('server_id', '=', id).execute()
+        await (db as any).insertInto('snmp_discovered_radius')
+          .values(discoveredRadius.map(r => ({ ...r, server_id: id, discovered_at: now })))
+          .execute()
+      }
+
+      // Fetch stored VLAN descriptions to merge with names
+      const storedVlans = await (db as any).selectFrom('snmp_vlans')
+        .selectAll().where('server_id', '=', id).orderBy('vlan_id', 'asc').execute()
+
+      return { ok: true, fetched_at: now.toISOString(), ports, vlans: storedVlans, discovered_radius: discoveredRadius }
     } catch (err: any) {
       return reply.code(400).send({ error: `SNMP port walk failed: ${err.message ?? err}` })
     }
+  })
+
+  // GET /servers/:id/snmp-vlans — return VLANs discovered for this device
+  fastify.get('/servers/:id/snmp-vlans', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const vlans = await (db as any).selectFrom('snmp_vlans').selectAll()
+      .where('server_id', '=', id).orderBy('vlan_id', 'asc').execute()
+    return vlans
+  })
+
+  // POST /servers/:id/snmp-vlans — manually add a VLAN
+  fastify.post('/servers/:id/snmp-vlans', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { vlan_id, name, description } = z.object({
+      vlan_id: z.number().int().min(1).max(4094),
+      name: z.string().default(''),
+      description: z.string().optional(),
+    }).parse(req.body)
+    const row = await (db as any).insertInto('snmp_vlans')
+      .values({ server_id: id, vlan_id, name, description: description ?? null, discovered_at: new Date() })
+      .onConflict((oc: any) => oc.columns(['server_id', 'vlan_id']).doUpdateSet({ name, description: description ?? null }))
+      .returningAll()
+      .executeTakeFirst()
+    return row
+  })
+
+  // PATCH /servers/:id/snmp-vlans/:vlanId — update name and/or description
+  fastify.patch('/servers/:id/snmp-vlans/:vlanId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { id, vlanId } = z.object({ id: z.string().uuid(), vlanId: z.string() }).parse(req.params)
+    const body = z.object({ name: z.string().optional(), description: z.string().optional() }).parse(req.body)
+    await (db as any).updateTable('snmp_vlans')
+      .set(body)
+      .where('server_id', '=', id)
+      .where('vlan_id', '=', parseInt(vlanId, 10))
+      .execute()
+    return { ok: true }
+  })
+
+  // DELETE /servers/:id/snmp-vlans/:vlanId — remove a manually added VLAN
+  fastify.delete('/servers/:id/snmp-vlans/:vlanId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+    const { id, vlanId } = z.object({ id: z.string().uuid(), vlanId: z.string() }).parse(req.params)
+    await (db as any).deleteFrom('snmp_vlans')
+      .where('server_id', '=', id)
+      .where('vlan_id', '=', parseInt(vlanId, 10))
+      .execute()
+    return { ok: true }
+  })
+
+  // GET /servers/:id/snmp-discovered-radius — return RADIUS servers discovered via SNMP
+  fastify.get('/servers/:id/snmp-discovered-radius', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const rows = await (db as any).selectFrom('snmp_discovered_radius').selectAll()
+      .where('server_id', '=', id).orderBy('radius_index', 'asc').execute()
+    return rows
   })
 
   // POST /servers/:id/snmp-port-admin — enable/disable a port via SNMP SET ifAdminStatus
@@ -790,65 +1130,358 @@ ${deviceInfo}`
     })
   }
 
+  // ── Vendor detection helpers ────────────────────────────────────────────────
+
+  function detectCiscoVariant(vendor: string, model: string, sysDescr: string): 'nxos' | 'xr' | 'sb' | 'ios' {
+    const m = model.toLowerCase()
+    const d = sysDescr.toLowerCase()
+    // NX-OS: Nexus model numbers start with N (N2K, N3K, N5K, N7K, N9K) or C9x (9300/9500 NX-OS)
+    if (d.includes('nx-os') || d.includes('nxos') || /^n[2359]k/.test(m) || /^c9[35]\d{2}/.test(m)) return 'nxos'
+    // IOS-XR: carrier-grade ASR 9000, NCS, CRS
+    if (d.includes('ios xr') || d.includes('iosxr') || /^asr9|^ncs[456]|^crs/.test(m)) return 'xr'
+    // Small Business: SG, CBS series
+    if (d.includes('small business') || /^sg[23456]|^cbs[23]/.test(m)) return 'sb'
+    return 'ios'
+  }
+
+  function normalizeCiscoIface(ifName: string, model = ''): string {
+    // SNMP walks return short names like "1", "gi1", "Gi1/0/1", "Te1/0/25" etc.
+    // We need to produce the exact string the CLI "interface <x>" command expects.
+    // Logic derived from Cisco VBA tooling (confirmed against SG/CBS/IOS hardware):
+    const m = model.toLowerCase()
+    const p = ifName.toLowerCase()
+
+    // Already a full interface name — pass through unchanged
+    // e.g. "GigabitEthernet1/0/1", "TenGigabitEthernet1/0/25", "Ethernet1/1"
+    if (/^(gigabit|tengigabit|fastethernet|ethernet|vlan)/i.test(ifName)) return ifName
+
+    // SG350X-24: 10G uplinks come back as "te*" or "xg*" — use as-is;
+    // copper ports come back as bare numbers → prefix "gi1/0/"
+    if (/^sg350x/.test(m)) {
+      if (/^te|^xg/i.test(p)) return ifName
+      return `gi1/0/${ifName}`
+    }
+
+    // SF350X-24: gigabit ports already prefixed "gi*"/"ge*" — use as-is;
+    // fast ethernet ports come as bare numbers → prefix "fa"
+    if (/^sf350x/.test(m)) {
+      if (/^gi|^ge/i.test(p)) return ifName
+      return `fa${ifName}`
+    }
+
+    // SG500-28, SG500-52, SG300-52: ports exposed as bare numbers → "gi1/<n>"
+    if (/^sg5\d\d_?(28|52)|^sg3\d\d_?(52)/.test(m) || /^sg500|^sg300/.test(m)) {
+      if (/^\d+$/.test(ifName)) return `gi1/${ifName}`
+      return ifName
+    }
+
+    // CBS350, CBS250, SG350, SG250, SG220 and all other Cisco SMB:
+    // bare number → "gi<n>"; already prefixed → pass through
+    if (/^\d+$/.test(ifName)) return `gi${ifName}`
+
+    return ifName
+  }
+
   function buildPortCliScript(
     vendor: string, osType: string,
     ports: Array<{ ifName: string }>,
     action: string, params: Record<string, unknown>,
+    sysDescr = '', model = '',
   ): string {
-    const v = vendor.toLowerCase()
-    const isCisco   = v.includes('cisco') || ['switch','switch-l3','router','firewall'].includes(osType)
-    const isMikro   = v.includes('mikrotik') || v.includes('routeros') || osType === 'router' && v.includes('mikro')
-    const isJuniper = v.includes('juniper')
-    const isFortinet = v.includes('fortinet') || v.includes('fortigate')
+    const v  = vendor.toLowerCase()
+    const md = model.toLowerCase()
+    const sd = sysDescr.toLowerCase()
 
+    // ── Vendor detection ────────────────────────────────────────────────────
+    const isMikro    = v.includes('mikrotik') || v.includes('routeros') || sd.includes('routeros')
+    const isJuniper  = v.includes('juniper') || sd.includes('junos')
+    const isFortinet = v.includes('fortinet') || v.includes('fortigate') || sd.includes('fortigate')
+    const isHP       = v.includes('hp') || v.includes('aruba') || v.includes('hewlett') || sd.includes('procurve') || sd.includes('aruba')
+    const isCisco    = !isMikro && !isJuniper && !isFortinet && !isHP &&
+                       (v.includes('cisco') || ['switch','switch-l3','router','firewall'].includes(osType))
+
+    const ciscoVariant = isCisco ? detectCiscoVariant(vendor, model, sysDescr) : null
+
+    // Helper: allowed VLANs string (comma-separated list or 'all')
+    const allowedVlans  = (params.allowedVlans as string | undefined)?.trim() || 'all'
+    const nativeVlan    = (params.nativeVlan  as string | undefined)?.trim() || '1'
+    const accessVlan    = (params.accessVlan  as string | undefined)?.trim() || '1'
+    const toTrunk       = action === 'mode' && params.mode === 'trunk'
+    const toAccess      = action === 'mode' && params.mode === 'access'
+    const portIsTrunk   = params.currentMode === 'trunk'
+
+    // ── MikroTik RouterOS ───────────────────────────────────────────────────
     if (isMikro) {
       return ports.map(p => {
         const iface = p.ifName
         if (action === 'description') return `/interface ethernet set [find name="${iface}"] comment="${params.description}"`
-        if (action === 'vlan')        return `/interface bridge port set [find interface="${iface}"] pvid=${params.vlan}`
-        if (action === 'mode')        return `# mode not directly applicable in RouterOS`
-        if (action === 'portfast')    return `# portfast not applicable in RouterOS`
         if (action === 'admin')       return `/interface ethernet ${params.enabled ? 'enable' : 'disable'} [find name="${iface}"]`
+        if (action === 'vlan') {
+          // Untagged (access) VLAN = pvid on bridge port; tagged = add to bridge vlan table
+          if (params.vlanMode === 'tagged') {
+            return [
+              `/interface bridge vlan add bridge=bridge vlan-ids=${params.vlan} tagged=${iface}`,
+            ].join('\n')
+          }
+          return `/interface bridge port set [find interface="${iface}"] pvid=${params.vlan}`
+        }
+        if (action === 'mode') {
+          if (params.mode === 'trunk') {
+            // Trunk: set frame-types to admit-all and frame-types tagged-only on bridge port
+            return [
+              `/interface bridge port set [find interface="${iface}"] frame-types=admit-all`,
+              `/interface bridge vlan add bridge=bridge vlan-ids=${allowedVlans} tagged=${iface}`,
+            ].join('\n')
+          }
+          // Access: admit only untagged, set pvid
+          return [
+            `/interface bridge port set [find interface="${iface}"] frame-types=admit-only-untagged-and-priority-tagged pvid=${accessVlan}`,
+          ].join('\n')
+        }
+        if (action === 'portfast') return `# STP edge not applicable in RouterOS (uses RSTP by default)`
         return `# unknown action: ${action}`
       }).join('\n')
     }
 
+    // ── Juniper JunOS ───────────────────────────────────────────────────────
     if (isJuniper) {
       const lines: string[] = ['configure']
       for (const p of ports) {
         const iface = p.ifName
-        if (action === 'description') lines.push(`set interfaces ${iface} description "${params.description}"`)
-        if (action === 'vlan')        lines.push(`set interfaces ${iface} unit 0 family ethernet-switching vlan members ${params.vlan}`)
-        if (action === 'mode')        lines.push(`set interfaces ${iface} unit 0 family ethernet-switching interface-mode ${params.mode}`)
-        if (action === 'admin')       lines.push(params.enabled ? `delete interfaces ${iface} disable` : `set interfaces ${iface} disable`)
+        if (action === 'description') {
+          lines.push(`set interfaces ${iface} description "${params.description}"`)
+        }
+        if (action === 'admin') {
+          lines.push(params.enabled
+            ? `delete interfaces ${iface} disable`
+            : `set interfaces ${iface} disable`)
+        }
+        if (action === 'vlan') {
+          lines.push(`set interfaces ${iface} unit 0 family ethernet-switching vlan members ${params.vlan}`)
+        }
+        if (action === 'mode') {
+          if (toAccess) {
+            // Remove all vlan members first, then set access mode
+            lines.push(`delete interfaces ${iface} unit 0 family ethernet-switching vlan members`)
+            lines.push(`set interfaces ${iface} unit 0 family ethernet-switching interface-mode access`)
+            lines.push(`set interfaces ${iface} unit 0 family ethernet-switching vlan members ${accessVlan}`)
+          } else {
+            // Trunk: clear existing members, set trunk, add allowed vlans
+            lines.push(`delete interfaces ${iface} unit 0 family ethernet-switching vlan members`)
+            lines.push(`set interfaces ${iface} unit 0 family ethernet-switching interface-mode trunk`)
+            if (allowedVlans !== 'all') {
+              for (const vl of allowedVlans.split(',')) {
+                lines.push(`set interfaces ${iface} unit 0 family ethernet-switching vlan members ${vl.trim()}`)
+              }
+            }
+          }
+        }
+        if (action === 'portfast') {
+          // Juniper uses RSTP edge port concept
+          lines.push(params.enabled
+            ? `set protocols rstp interface ${iface} edge`
+            : `delete protocols rstp interface ${iface} edge`)
+        }
       }
       lines.push('commit and-quit')
       return lines.join('\n')
     }
 
+    // ── Fortinet FortiOS ────────────────────────────────────────────────────
     if (isFortinet) {
       return ports.map(p => {
-        const lines: string[] = ['config system interface', `edit ${p.ifName}`]
-        if (action === 'description') lines.push(`set description "${params.description}"`)
-        if (action === 'vlan')        lines.push(`set vlanid ${params.vlan}`)
-        if (action === 'admin')       lines.push(`set status ${params.enabled ? 'up' : 'down'}`)
-        lines.push('next', 'end')
+        const lines: string[] = []
+        if (action === 'mode') {
+          // FortiGate: hardware-switch member ports use 'config system switch-interface'
+          // For standalone physical ports, mode is set via 'set mode'
+          lines.push('config system interface', `edit ${p.ifName}`)
+          lines.push(`set mode ${params.mode === 'trunk' ? 'trunk' : 'access'}`)
+          if (toTrunk && allowedVlans !== 'all') {
+            lines.push(`set allowed-vlans ${allowedVlans}`)
+          }
+          if (toAccess) lines.push(`set native-vlan-id ${accessVlan}`)
+          lines.push('next', 'end')
+        } else if (action === 'description') {
+          lines.push('config system interface', `edit ${p.ifName}`, `set description "${params.description}"`, 'next', 'end')
+        } else if (action === 'vlan') {
+          lines.push('config system interface', `edit ${p.ifName}`, `set vlanid ${params.vlan}`, 'next', 'end')
+        } else if (action === 'admin') {
+          lines.push('config system interface', `edit ${p.ifName}`, `set status ${params.enabled ? 'up' : 'down'}`, 'next', 'end')
+        } else if (action === 'portfast') {
+          lines.push(`# portfast (STP edge) not configurable per-port on FortiGate via CLI`)
+        }
         return lines.join('\n')
       }).join('\n')
     }
 
-    // Default: Cisco IOS / IOS-XE / IOS-XR compatible
+    // ── HP / Aruba ProCurve / ArubaOS-Switch ────────────────────────────────
+    if (isHP) {
+      const lines: string[] = []
+      for (const p of ports) {
+        const iface = p.ifName
+        if (action === 'description') {
+          lines.push(`interface ${iface}`, ` name "${params.description}"`, 'exit')
+        }
+        if (action === 'admin') {
+          lines.push(`interface ${iface}`, params.enabled ? ' enable' : ' disable', 'exit')
+        }
+        if (action === 'vlan') {
+          if (params.vlanMode === 'tagged') {
+            lines.push(`vlan ${params.vlan}`, ` tagged ${iface}`, 'exit')
+          } else {
+            lines.push(`vlan ${params.vlan}`, ` untagged ${iface}`, 'exit')
+          }
+        }
+        if (action === 'mode') {
+          if (toAccess) {
+            // Remove tagged memberships, set untagged on access vlan
+            lines.push(`no vlan 1-4094 tagged ${iface}`)
+            lines.push(`vlan ${accessVlan}`, ` untagged ${iface}`, 'exit')
+          } else {
+            // Trunk: remove from untagged, add tagged vlans
+            lines.push(`no vlan 1-4094 untagged ${iface}`)
+            if (allowedVlans !== 'all') {
+              for (const vl of allowedVlans.split(',')) {
+                lines.push(`vlan ${vl.trim()}`, ` tagged ${iface}`, 'exit')
+              }
+            }
+            lines.push(`vlan ${nativeVlan}`, ` untagged ${iface}`, 'exit')
+          }
+        }
+        if (action === 'portfast') {
+          lines.push(`spanning-tree ${iface} ${params.enabled ? 'admin-edge-port' : 'no admin-edge-port'}`)
+        }
+      }
+      lines.push('write memory')
+      return lines.join('\n')
+    }
+
+    // ── Cisco IOS-XR ────────────────────────────────────────────────────────
+    if (ciscoVariant === 'xr') {
+      const lines: string[] = []
+      for (const p of ports) {
+        const iface = p.ifName
+        lines.push(`interface ${iface}`)
+        if (action === 'description') lines.push(` description ${params.description}`)
+        if (action === 'admin')       lines.push(params.enabled ? ' no shutdown' : ' shutdown')
+        if (action === 'mode' || action === 'vlan') {
+          // IOS-XR uses l2transport + encapsulation for L2 ports
+          lines.push(` l2transport`)
+          if (action === 'vlan') lines.push(` encapsulation dot1q ${params.vlan}`)
+          lines.push(` !`)
+        }
+        if (action === 'portfast') lines.push(` # portfast/edge not configurable on IOS-XR l2transport interfaces`)
+        lines.push('!')
+      }
+      lines.push('commit', 'end')
+      return lines.join('\n')
+    }
+
+    // ── Cisco NX-OS ─────────────────────────────────────────────────────────
+    if (ciscoVariant === 'nxos') {
+      const lines: string[] = ['configure terminal']
+      for (const p of ports) {
+        const iface = normalizeCiscoIface(p.ifName, model)
+        lines.push(`interface ${iface}`)
+        if (action === 'description') lines.push(` description ${params.description}`)
+        if (action === 'admin')       lines.push(params.enabled ? ' no shutdown' : ' shutdown')
+        if (action === 'mode') {
+          if (toAccess) {
+            lines.push(` no switchport trunk allowed vlan`)
+            lines.push(` no switchport trunk native vlan`)
+            lines.push(` switchport mode access`)
+            lines.push(` switchport access vlan ${accessVlan}`)
+            // NX-OS portfast equivalent
+            lines.push(` spanning-tree port type edge`)
+          } else {
+            lines.push(` no switchport port-security`)
+            lines.push(` switchport mode trunk`)
+            lines.push(` switchport trunk native vlan ${nativeVlan}`)
+            lines.push(` switchport trunk allowed vlan ${allowedVlans}`)
+            if (portIsTrunk) lines.push(` spanning-tree port type normal`)
+          }
+        }
+        if (action === 'vlan') {
+          if (params.vlanMode === 'tagged') lines.push(` switchport trunk allowed vlan add ${params.vlan}`)
+          else                              lines.push(` switchport access vlan ${params.vlan}`)
+        }
+        if (action === 'portfast') {
+          // NX-OS uses 'spanning-tree port type edge' instead of portfast
+          lines.push(params.enabled ? ` spanning-tree port type edge` : ` spanning-tree port type normal`)
+        }
+      }
+      lines.push('end', 'copy running-config startup-config')
+      return lines.join('\n')
+    }
+
+    // ── Cisco Small Business (SG/CBS) ────────────────────────────────────────
+    if (ciscoVariant === 'sb') {
+      const lines: string[] = []
+      for (const p of ports) {
+        const iface = p.ifName
+        lines.push(`interface ${iface}`)
+        if (action === 'description') lines.push(` description ${params.description}`)
+        if (action === 'admin')       lines.push(params.enabled ? ' no shutdown' : ' shutdown')
+        if (action === 'mode') {
+          if (toAccess) {
+            lines.push(` switchport mode access`)
+            lines.push(` switchport access vlan ${accessVlan}`)
+          } else {
+            lines.push(` switchport mode trunk`)
+            lines.push(` switchport trunk native vlan ${nativeVlan}`)
+            if (allowedVlans !== 'all') lines.push(` switchport trunk allowed vlan add ${allowedVlans}`)
+          }
+        }
+        if (action === 'vlan') {
+          if (params.vlanMode === 'tagged') lines.push(` switchport trunk allowed vlan add ${params.vlan}`)
+          else                              lines.push(` switchport access vlan ${params.vlan}`)
+        }
+        if (action === 'portfast') lines.push(params.enabled ? ` spanning-tree portfast` : ` no spanning-tree portfast`)
+        lines.push('exit')
+      }
+      lines.push('end', 'write memory')
+      return lines.join('\n')
+    }
+
+    // ── Cisco IOS / IOS-XE (default) ────────────────────────────────────────
     const lines: string[] = ['conf t']
     for (const p of ports) {
-      lines.push(`interface ${p.ifName}`)
+      const iface = normalizeCiscoIface(p.ifName, model)
+      lines.push(`interface ${iface}`)
       if (action === 'description') lines.push(` description ${params.description}`)
-      if (action === 'mode')        lines.push(` switchport mode ${params.mode}`)
-      if (action === 'vlan') {
-        if (params.mode === 'trunk') lines.push(` switchport trunk allowed vlan add ${params.vlan}`)
-        else                         lines.push(` switchport access vlan ${params.vlan}`)
-      }
-      if (action === 'portfast')    lines.push(params.enabled ? ` spanning-tree portfast` : ` no spanning-tree portfast`)
       if (action === 'admin')       lines.push(params.enabled ? ` no shutdown` : ` shutdown`)
+      if (action === 'mode') {
+        if (toAccess) {
+          // Trunk → Access: remove tagged VLANs first (required by some IOS versions)
+          lines.push(` switchport trunk allowed vlan none`)
+          lines.push(` no switchport trunk native vlan`)
+          lines.push(` no switchport port-security`)
+          lines.push(` no switchport port-security maximum`)
+          lines.push(` no switchport port-security violation`)
+          lines.push(` switchport mode access`)
+          lines.push(` switchport access vlan ${accessVlan}`)
+          lines.push(` spanning-tree portfast`)
+        } else {
+          // Access → Trunk: remove port-security + portfast, then set trunk
+          lines.push(` no switchport port-security`)
+          lines.push(` no switchport port-security maximum`)
+          lines.push(` no switchport port-security violation`)
+          lines.push(` no spanning-tree portfast`)
+          lines.push(` switchport mode trunk`)
+          lines.push(` switchport trunk native vlan ${nativeVlan}`)
+          lines.push(` switchport trunk allowed vlan ${allowedVlans}`)
+          lines.push(` switchport nonegotiate`)
+        }
+      }
+      if (action === 'vlan') {
+        if (params.vlanMode === 'tagged') lines.push(` switchport trunk allowed vlan add ${params.vlan}`)
+        else                              lines.push(` switchport access vlan ${params.vlan}`)
+      }
+      if (action === 'portfast') {
+        // Use 'portfast trunk' when port is trunk to avoid IOS warning
+        const pfSuffix = portIsTrunk ? ' trunk' : ''
+        lines.push(params.enabled ? ` spanning-tree portfast${pfSuffix}` : ` no spanning-tree portfast`)
+      }
     }
     lines.push('end', 'wr')
     return lines.join('\n')
@@ -870,10 +1503,13 @@ ${deviceInfo}`
     if (!server.access_ssh_enabled) return reply.code(400).send({ error: 'SSH not enabled on this device' })
 
     const vaultKey = getVaultKey()
-    const vendor = server.snmp_vendor ?? ''
-    const osType = server.os_type ?? ''
+    const vendor   = server.snmp_vendor ?? ''
+    const osType   = server.os_type ?? ''
+    const model    = server.snmp_model ?? ''
+    const lastData = (server as any).snmp_last_data
+    const sysDescr = (typeof lastData === 'string' ? JSON.parse(lastData) : lastData)?.sysDescr ?? ''
 
-    const script = buildPortCliScript(vendor, osType, ports, action, params as Record<string, unknown>)
+    const script = buildPortCliScript(vendor, osType, ports, action, params as Record<string, unknown>, sysDescr, model)
 
     try {
       const client = await connectSsh(server, id, vaultKey)

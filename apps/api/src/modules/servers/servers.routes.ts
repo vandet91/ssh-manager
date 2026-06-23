@@ -1284,6 +1284,68 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
+  // GET /servers/:id/ndb-status — query MySQL NDB Cluster topology via ndb_mgm
+  fastify.get('/servers/:id/ndb-status', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    try {
+      const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
+      if (!server) return reply.code(404).send({ error: 'Server not found' })
+
+      const { sshExec } = await import('../../utils/ssh')
+
+      type NdbNode = {
+        id: number
+        type: 'mgmd' | 'ndbd' | 'mysqld'
+        host: string
+        status: 'connected' | 'not_connected' | 'unknown'
+        nodegroup?: number
+        master?: boolean
+      }
+
+      const nodes: NdbNode[] = []
+
+      await withServerSsh(id, async (client) => {
+        const { stdout } = await sshExec(client,
+          'ndb_mgm -e "show" 2>/dev/null || ndb_mgm --ndb-connectstring=localhost -e "show" 2>/dev/null || echo "ERROR: ndb_mgm not found"')
+
+        // ndb_mgm output uses section headers to identify node type:
+        //   [ndbd(NDB)]    → ndbd data nodes
+        //   [ndb_mgmd(MGM)] → management nodes
+        //   [mysqld(API)]  → SQL/API nodes
+        // Individual node lines just have the version string, not the type.
+        let currentType: NdbNode['type'] = 'mysqld'
+        for (const line of stdout.split('\n')) {
+          const sectionMatch = line.match(/\[(\w+)\(/)
+          if (sectionMatch) {
+            const s = sectionMatch[1].toLowerCase()
+            if (s === 'ndbd' || s === 'ndbmtd') currentType = 'ndbd'
+            else if (s === 'ndb_mgmd') currentType = 'mgmd'
+            else currentType = 'mysqld'
+            continue
+          }
+          // Connected node: "id=2  @192.168.88.224  (mysql-8.0.47 ndbcluster, Nodegroup: 0, *)"
+          const connMatch = line.match(/id=(\d+)\s+@([\d.a-zA-Z.-]+)\s+\(/)
+          if (connMatch) {
+            const [, rawId, host] = connMatch
+            const ngMatch = line.match(/Nodegroup:\s*(\d+)/)
+            const master = line.includes('*')
+            nodes.push({ id: parseInt(rawId), type: currentType, host, status: 'connected', nodegroup: ngMatch ? parseInt(ngMatch[1]) : undefined, master })
+            continue
+          }
+          // Not connected: "id=3 (not connected, accepting connect from ...)"
+          const discMatch = line.match(/id=(\d+)\s+\(not connected/)
+          if (discMatch) {
+            nodes.push({ id: parseInt(discMatch[1]), type: currentType, host: '?', status: 'not_connected' })
+          }
+        }
+      })
+
+      return { detected: nodes.length > 0, nodes }
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: (err as Error).message })
+    }
+  })
+
   // POST /servers/:id/root/activate — Ubuntu: unlock root by setting a password via sudo passwd root
   fastify.post('/servers/:id/root/activate', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)

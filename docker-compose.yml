@@ -46,7 +46,7 @@ services:
   web:
     build: ./apps/web
     ports:
-      - "3000:3000"
+      - "4004:4004"
     depends_on:
       - api
       - guac-proxy

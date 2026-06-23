@@ -8,7 +8,7 @@ services:
       SNMP_COMMUNITY: public
       BASE_PORT: "1161"
     ports:
-      - "1161-1166:1161-1166/udp"
+      - "1161-1167:1161-1167/udp"
     networks:
       - ssh-manager_default
     restart: unless-stopped

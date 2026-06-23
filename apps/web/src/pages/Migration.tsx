@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api, Server, MigrationSnapshotMeta, MigrationSnapshotFull, CompareResult, DiffItem, DiffStatus, TransferJob, TransferType, BrowseResult, VerifyReport, VerifyItem, DumpResult, ReadinessReport, ReadinessItem } from '../api/client'
 
 const STATUS_COLOR: Record<DiffStatus, string> = {
@@ -515,7 +515,7 @@ export default function Migration() {
       api.get<Server[]>('/servers').catch(() => [] as Server[]),
       api.get<MigrationSnapshotMeta[]>('/migration/snapshots').catch(() => [] as MigrationSnapshotMeta[]),
     ])
-    setServers(svrs.filter(s => s.os_type !== 'windows'))
+    setServers(svrs.filter(s => s.os_type === 'linux'))
     setSnapshots(snaps)
   }
 
@@ -938,6 +938,42 @@ export default function Migration() {
           <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
             Nodes: {cl.pacemaker.nodes.length > 0 ? cl.pacemaker.nodes.join(', ') : '—'}<br/>
             Resources: {cl.pacemaker.resources.length}
+          </div>
+        )})
+
+        if (cl.mysql_ndb?.detected) entries.push({ name: 'MySQL NDB Cluster', icon: '🗄', detail: (
+          <div>
+            {/* Summary row */}
+            {(['mgmd', 'ndbd', 'mysqld'] as const).map(type => {
+              const typeNodes = cl.mysql_ndb.nodes.filter((n: any) => n.type === type)
+              if (!typeNodes.length) return null
+              const connected = typeNodes.filter((n: any) => n.status === 'connected').length
+              const label = type === 'mgmd' ? 'Mgmt' : type === 'ndbd' ? 'Data' : 'SQL'
+              return (
+                <span key={type} style={{ marginRight: 14, fontSize: 11, color: 'var(--text-secondary)' }}>
+                  {label}: <strong style={{ color: connected === typeNodes.length ? '#22c55e' : '#f59e0b' }}>{connected}/{typeNodes.length}</strong>
+                </span>
+              )
+            })}
+            {/* Node table */}
+            <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'auto auto 1fr auto', gap: '3px 12px', alignItems: 'center' }}>
+              {cl.mysql_ndb.nodes.map((n: any) => (
+                <React.Fragment key={n.id}>
+                  <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-muted)' }}>#{n.id}</span>
+                  <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: n.type === 'mgmd' ? 'rgba(96,165,250,0.15)' : n.type === 'ndbd' ? 'rgba(167,139,250,0.15)' : 'rgba(52,211,153,0.12)', color: n.type === 'mgmd' ? '#60a5fa' : n.type === 'ndbd' ? '#a78bfa' : '#34d399', fontWeight: 600 }}>
+                    {n.type === 'mgmd' ? 'MGM' : n.type === 'ndbd' ? 'DATA' : 'SQL'}
+                  </span>
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
+                    {n.host}
+                    {n.nodegroup !== undefined && <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>ng{n.nodegroup}</span>}
+                    {n.master && <span style={{ color: '#fbbf24', marginLeft: 5 }}>★</span>}
+                  </span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: n.status === 'connected' ? '#22c55e' : '#f87171' }}>
+                    {n.status === 'connected' ? '● online' : '○ offline'}
+                  </span>
+                </React.Fragment>
+              ))}
+            </div>
           </div>
         )})
 

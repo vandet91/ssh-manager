@@ -207,37 +207,36 @@ function HostRow({ host, onAdd }: { host: ScanHost; onAdd: () => void }) {
   return (
     <>
       <tr onClick={() => setExpanded(e => !e)}
-        style={{ borderBottom: '1px solid #1f2937', cursor: 'pointer', background: expanded ? 'rgba(99,102,241,0.05)' : 'transparent' }}
-        className="hover:bg-gray-800/30">
-        <td style={{ padding: '10px 14px', fontFamily: 'monospace', fontSize: 13, color: '#e5e7eb', whiteSpace: 'nowrap' }}>
-          <span style={{ marginRight: 6, opacity: 0.5 }}>{expanded ? '▾' : '▸'}</span>
+        style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', background: expanded ? 'rgba(99,102,241,0.07)' : 'transparent' }}>
+        <td style={{ padding: '10px 14px', fontFamily: 'monospace', fontSize: 13, fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap' }}>
+          <span style={{ marginRight: 6, opacity: 0.4 }}>{expanded ? '▾' : '▸'}</span>
           {host.ip}
         </td>
-        <td style={{ padding: '10px 14px', fontSize: 12, color: '#9ca3af', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {host.hostname ?? <span style={{ color: '#4b5563' }}>—</span>}
+        <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-muted)', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {host.hostname ?? <span style={{ color: 'var(--border-med)' }}>—</span>}
         </td>
         <td style={{ padding: '10px 14px', fontSize: 11 }}>
-          <div style={{ fontFamily: 'monospace', color: '#6b7280', letterSpacing: '0.02em' }}>
-            {host.mac_address ?? <span style={{ color: '#374151' }}>—</span>}
+          <div style={{ fontFamily: 'monospace', color: 'var(--text-muted)', letterSpacing: '0.02em' }}>
+            {host.mac_address ?? <span style={{ color: 'var(--border-med)' }}>—</span>}
           </div>
           {host.mac_vendor && (
-            <div style={{ fontSize: 10, color: '#4b5563', marginTop: 2 }}>{host.mac_vendor}</div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{host.mac_vendor}</div>
           )}
         </td>
         <td style={{ padding: '10px 14px', fontSize: 13 }}>
           <span title={host.os_hint ?? 'Unknown'}>{osIcon(host.os_hint)}</span>
-          {host.os_hint && <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 5 }}>{host.os_hint}</span>}
+          {host.os_hint && <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 5 }}>{host.os_hint}</span>}
         </td>
-        <td style={{ padding: '10px 14px', fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>
+        <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
           {host.latency_ms != null ? `${host.latency_ms.toFixed(1)} ms` : '—'}
         </td>
         <td style={{ padding: '10px 14px' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: 360 }}>
             {host.open_ports.slice(0, 7).map(p => portTag(p))}
             {host.open_ports.length > 7 && (
-              <span style={{ fontSize: 10, color: '#6b7280', alignSelf: 'center' }}>+{host.open_ports.length - 7} more</span>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', alignSelf: 'center' }}>+{host.open_ports.length - 7} more</span>
             )}
-            {host.open_ports.length === 0 && <span style={{ fontSize: 11, color: '#4b5563' }}>No open ports</span>}
+            {host.open_ports.length === 0 && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>No open ports</span>}
           </div>
         </td>
         <td style={{ padding: '10px 14px', textAlign: 'right' }}>
@@ -248,21 +247,21 @@ function HostRow({ host, onAdd }: { host: ScanHost; onAdd: () => void }) {
               </span>
             )}
             <button onClick={e => { e.stopPropagation(); onAdd() }}
-              style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
               + Add
             </button>
           </div>
         </td>
       </tr>
       {expanded && (
-        <tr style={{ background: '#111827', borderBottom: '1px solid #1f2937' }}>
+        <tr style={{ background: 'var(--bg-body)', borderBottom: '1px solid var(--border)' }}>
           <td colSpan={7} style={{ padding: '12px 28px 16px' }}>
             {host.open_ports.length === 0 ? (
-              <span style={{ fontSize: 12, color: '#4b5563' }}>No open ports found on this host.</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>No open ports found on this host.</span>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
-                  <tr style={{ color: '#6b7280', textAlign: 'left', fontSize: 11 }}>
+                  <tr style={{ color: 'var(--text-muted)', textAlign: 'left', fontSize: 11 }}>
                     <th style={{ padding: '4px 10px 8px 0', width: 70 }}>Port</th>
                     <th style={{ padding: '4px 10px 8px', width: 140 }}>Service</th>
                     <th style={{ padding: '4px 10px 8px', width: 80 }}>Risk</th>
@@ -273,14 +272,14 @@ function HostRow({ host, onAdd }: { host: ScanHost; onAdd: () => void }) {
                   {host.open_ports.map(p => {
                     const rs = RISK_STYLE[p.risk] ?? RISK_STYLE.low
                     return (
-                      <tr key={p.port} style={{ borderTop: '1px solid #1f2937' }}>
+                      <tr key={p.port} style={{ borderTop: '1px solid var(--border)' }}>
                         <td style={{ padding: '6px 10px 6px 0', fontFamily: 'monospace', color: '#a5b4fc', fontWeight: 700 }}>{p.port}</td>
-                        <td style={{ padding: '6px 10px', color: '#e5e7eb' }}>{p.service}</td>
+                        <td style={{ padding: '6px 10px', color: 'var(--text)' }}>{p.service}</td>
                         <td style={{ padding: '6px 10px' }}>
                           <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: rs.bg, color: rs.color, textTransform: 'uppercase' }}>{p.risk}</span>
                         </td>
-                        <td style={{ padding: '6px 10px', color: '#6b7280', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' }}>
-                          {p.banner ?? <span style={{ color: '#374151' }}>—</span>}
+                        <td style={{ padding: '6px 10px', color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' }}>
+                          {p.banner ?? <span style={{ color: 'var(--border-med)' }}>—</span>}
                         </td>
                       </tr>
                     )
@@ -394,31 +393,31 @@ export default function NetworkScan() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1400 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 800, color: '#e5e7eb', marginBottom: 4 }}>Network Scanner</h1>
-      <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 24 }}>Discover hosts and scan open ports across your network. Deep scan includes service detection and banner grabbing.</p>
+      <h1 style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)', marginBottom: 4 }}>Network Scanner</h1>
+      <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 24 }}>Discover hosts and scan open ports across your network. Deep scan includes service detection and banner grabbing.</p>
 
       {/* ── Scan Setup ── */}
-      <div style={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 12, padding: 20, marginBottom: 20 }}>
+      <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 20 }}>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           {/* Target */}
           <div style={{ flex: '1 1 280px' }}>
-            <label style={{ display: 'block', fontSize: 11, color: '#9ca3af', marginBottom: 6, fontWeight: 600 }}>TARGET</label>
+            <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>TARGET</label>
             <input value={target} onChange={e => setTarget(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && !scanning && startScan()}
               placeholder="192.168.1.0/24  ·  10.0.0.1-254  ·  192.168.1.100"
               disabled={scanning}
-              style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#e5e7eb', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace' }} />
+              style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace' }} />
           </div>
 
           {/* Mode selector */}
           <div>
-            <label style={{ display: 'block', fontSize: 11, color: '#9ca3af', marginBottom: 6, fontWeight: 600 }}>SCAN MODE</label>
+            <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>SCAN MODE</label>
             <div style={{ display: 'flex', gap: 4 }}>
               {(Object.keys(modeInfo) as ScanMode[]).map(m => {
                 const mi = modeInfo[m]; const active = mode === m
                 return (
                   <button key={m} onClick={() => setMode(m)} disabled={scanning}
-                    style={{ padding: '8px 14px', borderRadius: 7, border: `1px solid ${active ? mi.color : '#374151'}`, background: active ? `${mi.color}22` : 'transparent', color: active ? mi.color : '#6b7280', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    style={{ padding: '8px 14px', borderRadius: 7, border: `1px solid ${active ? mi.color : 'var(--border)'}`, background: active ? `${mi.color}22` : 'transparent', color: active ? mi.color : 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                     {mi.label}
                   </button>
                 )
@@ -430,14 +429,14 @@ export default function NetworkScan() {
           {mode === 'custom' && (
             <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
               <div>
-                <label style={{ display: 'block', fontSize: 11, color: '#9ca3af', marginBottom: 6 }}>FROM PORT</label>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>FROM PORT</label>
                 <input type="number" value={portFrom} onChange={e => setPortFrom(e.target.value)} min={1} max={65535}
-                  style={{ width: 80, padding: '9px 10px', borderRadius: 7, border: '1px solid #374151', background: '#111827', color: '#e5e7eb', fontSize: 13 }} />
+                  style={{ width: 80, padding: '9px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13 }} />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: 11, color: '#9ca3af', marginBottom: 6 }}>TO PORT</label>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>TO PORT</label>
                 <input type="number" value={portTo} onChange={e => setPortTo(e.target.value)} min={1} max={65535}
-                  style={{ width: 80, padding: '9px 10px', borderRadius: 7, border: '1px solid #374151', background: '#111827', color: '#e5e7eb', fontSize: 13 }} />
+                  style={{ width: 80, padding: '9px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13 }} />
               </div>
             </div>
           )}
@@ -446,7 +445,7 @@ export default function NetworkScan() {
           <div style={{ display: 'flex', gap: 8 }}>
             {!scanning ? (
               <button onClick={startScan} disabled={!target.trim()}
-                style={{ padding: '9px 24px', borderRadius: 8, border: 'none', background: target.trim() ? '#6366f1' : '#374151', color: '#fff', fontSize: 13, fontWeight: 700, cursor: target.trim() ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>
+                style={{ padding: '9px 24px', borderRadius: 8, border: 'none', background: target.trim() ? '#6366f1' : 'var(--border)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: target.trim() ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>
                 ▶ Start Scan
               </button>
             ) : (
@@ -457,7 +456,7 @@ export default function NetworkScan() {
             )}
             {done && hostList.length > 0 && (
               <button onClick={() => downloadCSV(hostList)}
-                style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
+                style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: 13, cursor: 'pointer' }}>
                 ↓ CSV
               </button>
             )}
@@ -465,7 +464,7 @@ export default function NetworkScan() {
         </div>
 
         {/* Mode description */}
-        <div style={{ marginTop: 10, fontSize: 11, color: '#6b7280' }}>
+        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)' }}>
           {modeInfo[mode].desc}
           {mode === 'deep' && totalIps > 8 && (
             <span style={{ color: '#f97316', marginLeft: 8 }}>⚠ Deep scan on large ranges can take a long time. Consider custom range 1–10000.</span>
@@ -475,9 +474,9 @@ export default function NetworkScan() {
 
       {/* ── Progress ── */}
       {(scanning || done) && (
-        <div style={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 10, padding: '14px 18px', marginBottom: 20 }}>
+        <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 18px', marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#e5e7eb' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
               {scanning ? (
                 pinged < totalIps
                   ? `🔍 Discovering hosts… ${pinged} / ${totalIps} IPs pinged`
@@ -486,7 +485,7 @@ export default function NetworkScan() {
                 `✅ Scan complete — ${aliveCount} host${aliveCount !== 1 ? 's' : ''} found, ${hostList.filter(h => h.open_ports.length > 0).length} with open ports`
               ) : status === 'cancelled' ? '⚪ Scan cancelled' : `❌ Error: ${err}`}
             </div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
               {aliveCount > 0 && <span style={{ color: '#22c55e', marginRight: 12 }}>● {aliveCount} alive</span>}
               {hostList.filter(h => h.open_ports.some(p => p.risk === 'critical')).length > 0 && (
                 <span style={{ color: '#ef4444' }}>⚠ {hostList.filter(h => h.open_ports.some(p => p.risk === 'critical')).length} critical risk</span>
@@ -494,7 +493,7 @@ export default function NetworkScan() {
             </div>
           </div>
           {totalIps > 0 && (
-            <div style={{ background: '#111827', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+            <div style={{ background: 'var(--input-bg)', borderRadius: 4, height: 6, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${progressPct}%`, background: done ? '#22c55e' : '#6366f1', transition: 'width 0.3s ease', borderRadius: 4 }} />
             </div>
           )}
@@ -509,17 +508,17 @@ export default function NetworkScan() {
 
       {/* ── Results ── */}
       {hostList.length > 0 && (
-        <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 12, overflow: 'hidden', marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #1f2937', background: '#1f2937' }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#e5e7eb' }}>{hostList.length} Host{hostList.length !== 1 ? 's' : ''} Found</span>
+        <div style={{ background: 'var(--bg-body)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginBottom: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{hostList.length} Host{hostList.length !== 1 ? 's' : ''} Found</span>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-              <span style={{ color: '#6b7280' }}>Sort:</span>
+              <span style={{ color: 'var(--text-muted)' }}>Sort:</span>
               {(['ip', 'ports', 'risk'] as const).map(s => (
                 <button key={s} onClick={() => setSortBy(s)}
                   style={{ padding: '3px 10px', borderRadius: 5, border: '1px solid', cursor: 'pointer', fontSize: 11, fontWeight: 600,
-                    borderColor: sortBy === s ? '#6366f1' : '#374151',
+                    borderColor: sortBy === s ? '#6366f1' : 'var(--border)',
                     background: sortBy === s ? 'rgba(99,102,241,0.15)' : 'transparent',
-                    color: sortBy === s ? '#818cf8' : '#6b7280' }}>
+                    color: sortBy === s ? '#818cf8' : 'var(--text-muted)' }}>
                   {s === 'ip' ? 'IP' : s === 'ports' ? 'Most Ports' : 'Risk'}
                 </button>
               ))}
@@ -527,7 +526,7 @@ export default function NetworkScan() {
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ background: '#1a2332', fontSize: 11, color: '#6b7280', textAlign: 'left', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <tr style={{ background: 'var(--bg-panel)', fontSize: 11, color: 'var(--text-muted)', textAlign: 'left', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 <th style={{ padding: '8px 14px' }}>IP Address</th>
                 <th style={{ padding: '8px 14px' }}>Hostname</th>
                 <th style={{ padding: '8px 14px' }}>MAC / Vendor</th>
@@ -548,11 +547,11 @@ export default function NetworkScan() {
 
       {/* ── Scan History ── */}
       {history.length > 0 && status === 'idle' && (
-        <div style={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 10, overflow: 'hidden' }}>
-          <div style={{ padding: '10px 16px', borderBottom: '1px solid #374151', fontSize: 13, fontWeight: 600, color: '#9ca3af' }}>Recent Scans</div>
+        <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', fontSize: 13, fontWeight: 600, color: 'var(--text-muted)' }}>Recent Scans</div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
-              <tr style={{ background: '#111827', color: '#6b7280', textAlign: 'left', fontSize: 11 }}>
+              <tr style={{ background: 'var(--bg-body)', color: 'var(--text-muted)', textAlign: 'left', fontSize: 11 }}>
                 {['Target', 'Mode', 'Status', 'Hosts Found', 'Started'].map(h => (
                   <th key={h} style={{ padding: '8px 14px', fontWeight: 600 }}>{h}</th>
                 ))}
@@ -560,9 +559,9 @@ export default function NetworkScan() {
             </thead>
             <tbody>
               {history.map(j => (
-                <tr key={j.id} style={{ borderTop: '1px solid #1f2937' }}>
+                <tr key={j.id} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '9px 14px', fontFamily: 'monospace', color: '#a5b4fc' }}>{j.target}</td>
-                  <td style={{ padding: '9px 14px', color: '#9ca3af', textTransform: 'capitalize' }}>{j.mode}</td>
+                  <td style={{ padding: '9px 14px', color: 'var(--text-muted)', textTransform: 'capitalize' }}>{j.mode}</td>
                   <td style={{ padding: '9px 14px' }}>
                     <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
                       background: j.status === 'complete' ? 'rgba(34,197,94,0.1)' : j.status === 'running' ? 'rgba(99,102,241,0.1)' : 'rgba(107,114,128,0.1)',
@@ -570,8 +569,8 @@ export default function NetworkScan() {
                       {j.status}
                     </span>
                   </td>
-                  <td style={{ padding: '9px 14px', color: '#9ca3af' }}>{j.alive_count}</td>
-                  <td style={{ padding: '9px 14px', color: '#6b7280' }}>{new Date(j.started_at).toLocaleString()}</td>
+                  <td style={{ padding: '9px 14px', color: 'var(--text-muted)' }}>{j.alive_count}</td>
+                  <td style={{ padding: '9px 14px', color: 'var(--text-muted)' }}>{new Date(j.started_at).toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>

@@ -160,6 +160,8 @@ export default function Servers() {
   const [softwareError, setSoftwareError] = useState('')
   const [serviceWorking, setServiceWorking] = useState<string | null>(null)  // 'svcName:action'
   const [serviceResults, setServiceResults] = useState<Record<string, string>>({})  // svcName → new status
+  const [ndbNodes, setNdbNodes] = useState<Array<{ id: number; type: 'mgmd' | 'ndbd' | 'mysqld'; host: string; status: 'connected' | 'not_connected' | 'unknown'; nodegroup?: number; master?: boolean }>>([])
+  const [ndbLoading, setNdbLoading] = useState(false)
   const [credentials, setCredentials] = useState<ServerCredential[]>([])
   const [credLoading, setCredLoading] = useState(false)
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, string>>({})
@@ -457,6 +459,7 @@ export default function Servers() {
     setSoftware([])
     setSoftwareError('')
     setServiceResults({})
+    setNdbNodes([])
     setRecommendations([])
     setRecError('')
     setRecFilter('all')
@@ -518,6 +521,18 @@ export default function Servers() {
       setBenchmarkError((err as Error).message)
     } finally {
       setBenchmarkLoading(false)
+    }
+  }
+
+  const loadNdbStatus = async (serverId: string) => {
+    setNdbLoading(true)
+    try {
+      const res = await api.get<{ detected: boolean; nodes: typeof ndbNodes }>(`/servers/${serverId}/ndb-status`)
+      setNdbNodes(res.nodes)
+    } catch {
+      setNdbNodes([])
+    } finally {
+      setNdbLoading(false)
     }
   }
 
@@ -1491,20 +1506,20 @@ export default function Servers() {
                     sshdStatusLoading ? (
                       <div className="bg-gray-800 rounded-lg p-3 text-xs text-gray-500 animate-pulse">Reading sshd config…</div>
                     ) : sshdStatus && (
-                      <div className={`rounded-lg p-3 space-y-1 ${sshdStatus.permitRootLogin === 'yes' ? 'bg-orange-900/30 border border-orange-700/50' : 'bg-gray-800'}`}>
+                      <div className={`rounded-lg p-3 space-y-1 ${sshdStatus.permitRootLogin === 'yes' ? 'bg-orange-950 border border-orange-700' : 'bg-gray-800'}`}>
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Root Login (sshd)</p>
+                          <p className={`text-xs font-medium uppercase tracking-wide ${sshdStatus.permitRootLogin === 'yes' ? 'text-orange-300' : 'text-gray-400'}`}>Root Login (sshd)</p>
                           <span className={`text-xs font-mono px-2 py-0.5 rounded ${
-                            sshdStatus.permitRootLogin === 'yes' ? 'bg-orange-700/60 text-orange-200' :
+                            sshdStatus.permitRootLogin === 'yes' ? 'bg-orange-700 text-white' :
                             sshdStatus.permitRootLogin === 'prohibit-password' ? 'bg-green-900/50 text-green-300' :
                             'bg-gray-700 text-gray-300'
                           }`}>{sshdStatus.permitRootLogin}</span>
                         </div>
                         {sshdStatus.rootLocked && (
-                          <p className="text-xs text-amber-400">⚠ Root account is locked (no password set)</p>
+                          <p className="text-xs text-amber-300">⚠ Root account is locked (no password set)</p>
                         )}
                         {sshdStatus.permitRootLogin === 'yes' && (
-                          <p className="text-xs text-orange-300">⚠ Root can log in with password — consider hardening to <span className="font-mono">prohibit-password</span> after SSH key is set up</p>
+                          <p className="text-xs text-orange-200">⚠ Root can log in with password — consider hardening to <span className="font-mono">prohibit-password</span> after SSH key is set up</p>
                         )}
                         {sshdStatus.permitRootLogin === 'prohibit-password' && (
                           <p className="text-xs text-green-400">✓ Root login via SSH key only (recommended)</p>
@@ -2839,8 +2854,11 @@ export default function Servers() {
                               : item.status
                             const isActive = currentStatus === 'active'
 
+                            const isNdbCluster = item.category === 'database' && item.name === 'MySQL' && item.version?.toLowerCase().includes('cluster')
+
                             return (
-                              <div key={item.name} className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 flex items-center gap-3">
+                              <div key={item.name}>
+                              <div className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 flex items-center gap-3">
                                 {/* Status dot */}
                                 {statusDot && (
                                   <span className={`text-xs ${statusColor} shrink-0`}>{statusDot}</span>
@@ -2895,6 +2913,49 @@ export default function Servers() {
                                     )}
                                   </div>
                                 )}
+                              </div>
+                              {/* NDB Cluster panel — shown below MySQL when cluster version detected */}
+                              {isNdbCluster && (
+                                <div className="mt-1.5 bg-gray-900 border border-blue-900/50 rounded-lg p-3">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <span className="text-xs font-medium text-blue-400 uppercase tracking-wide">NDB Cluster Nodes</span>
+                                    <button
+                                      onClick={() => loadNdbStatus(infoServer!.id)}
+                                      disabled={ndbLoading}
+                                      className="text-xs px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors disabled:opacity-50">
+                                      {ndbLoading ? '…' : '↻ Refresh'}
+                                    </button>
+                                  </div>
+                                  {ndbLoading && ndbNodes.length === 0 && (
+                                    <p className="text-xs text-gray-500">Querying cluster…</p>
+                                  )}
+                                  {!ndbLoading && ndbNodes.length === 0 && (
+                                    <p className="text-xs text-gray-500">Click Refresh to load cluster topology.</p>
+                                  )}
+                                  {ndbNodes.length > 0 && (
+                                    <div className="space-y-1">
+                                      {ndbNodes.map((node) => {
+                                        const typeBadge = node.type === 'mgmd'
+                                          ? 'bg-blue-900/60 text-blue-300 border border-blue-800'
+                                          : node.type === 'ndbd'
+                                          ? 'bg-purple-900/60 text-purple-300 border border-purple-800'
+                                          : 'bg-green-900/60 text-green-300 border border-green-800'
+                                        const typeLabel = node.type === 'mgmd' ? 'MGM' : node.type === 'ndbd' ? 'DATA' : 'SQL'
+                                        return (
+                                          <div key={node.id} className="flex items-center gap-2 text-xs">
+                                            <span className="text-gray-600 w-5 text-right shrink-0">#{node.id}</span>
+                                            <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] shrink-0 ${typeBadge}`}>{typeLabel}</span>
+                                            <span className="text-gray-400 font-mono flex-1 truncate">{node.host}{node.nodegroup !== undefined ? ` · ng${node.nodegroup}` : ''}{node.master ? ' ★' : ''}</span>
+                                            <span className={node.status === 'connected' ? 'text-green-400' : 'text-red-400'}>
+                                              {node.status === 'connected' ? '●' : '○'}
+                                            </span>
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                               </div>
                             )
                           })}

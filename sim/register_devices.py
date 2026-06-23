@@ -89,6 +89,14 @@ DEVICES = [
         "os_type": "nvr",
         "snmp_port": BASE_PORT + 5,
     },
+    {
+        "name": "Test Switch (snmp-sim)",
+        "hostname": SNMP_HOST,
+        "ssh_port": 22,
+        "environment": "lab",
+        "os_type": "switch",
+        "snmp_port": BASE_PORT + 6,
+    },
 ]
 
 

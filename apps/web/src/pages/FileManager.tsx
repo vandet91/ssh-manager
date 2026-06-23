@@ -802,7 +802,7 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
         </div>
 
         {/* ── Editor + history ── */}
-        <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+        <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,background:C.bg}}>
           {/* File tab bar */}
           <div style={{display:'flex',alignItems:'center',gap:8,padding:'4px 12px',
             borderBottom:`1px solid ${C.border}`,background:C.sidebarBg,flexShrink:0,minHeight:30}}>
@@ -1055,7 +1055,7 @@ export default function FileManager() {
   useEffect(() => { localStorage.setItem(LS_TABS, JSON.stringify(tabs)) }, [tabs])
   useEffect(() => { localStorage.setItem(LS_ACTIVE, activeId) }, [activeId])
 
-  useEffect(() => { api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type !== 'windows'))).catch(()=>{}) }, [])
+  useEffect(() => { api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type === 'linux'))).catch(()=>{}) }, [])
 
   // ── Drag state ────────────────────────────────────────────────────────────
   const dragInfoRef = useRef<DragInfo|null>(null)

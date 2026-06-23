@@ -24,7 +24,7 @@ export default function Assignments() {
     api.get<{ data: Assignment[] } | Assignment[]>('/assignments').then((r) => setAssignments(Array.isArray(r) ? r : (r as { data: Assignment[] }).data ?? [])).catch(() => {})
     api.get<{ users: User[] }>('/users?limit=200').then((r) => setUsers(r.users)).catch(() => {})
     api.get<SshKey[]>('/keys').then(setKeys).catch(() => {})
-    api.get<Server[]>('/servers').then(setServers).catch(() => {})
+    api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))).catch(() => {})
   }
 
   useEffect(() => { load() }, [])

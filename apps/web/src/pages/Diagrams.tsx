@@ -478,10 +478,10 @@ export default function Diagrams() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: 'var(--bg-body)', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', gap: 0 }}>
 
       {/* ── Diagram list sidebar ── */}
-      <div style={{ width: 200, flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--sidebar-bg)', borderRight: '1px solid var(--border)' }}>
+      <div style={{ width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-panel)', borderRight: '1px solid var(--border-med)' }}>
         <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>📐 Diagrams</span>
           <button style={btnPri} onClick={() => setShowNewForm(v => !v)}>+ New</button>
@@ -512,11 +512,10 @@ export default function Diagrams() {
 
       {/* ── Main area ── */}
       {!activeDiagram ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: 'var(--text-muted)' }}>
           <div style={{ fontSize: 48 }}>📐</div>
-          <div style={{ fontSize: 16, color: 'var(--text)', fontWeight: 600 }}>No diagram open</div>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Select a diagram or create a new one</div>
-          <button style={btnPri} onClick={() => setShowNewForm(true)}>+ New Diagram</button>
+          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-secondary)' }}>Select a diagram to open</div>
+          <div style={{ fontSize: 13 }}>or create a new one with "+ New"</div>
         </div>
       ) : (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

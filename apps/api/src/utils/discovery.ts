@@ -159,6 +159,10 @@ export interface DiscoverySnapshot {
       nodes: number
       status: string
     }
+    mysql_ndb: {
+      detected: boolean
+      nodes: Array<{ id: number; type: 'mgmd' | 'ndbd' | 'mysqld'; host: string; status: 'connected' | 'not_connected' | 'unknown'; nodegroup?: number; master?: boolean }>
+    }
   }
 }
 
@@ -747,6 +751,29 @@ async function collectCluster(client: Client): Promise<DiscoverySnapshot['cluste
     } catch { /* parse error */ }
   }
 
+  // ── MySQL NDB Cluster ────────────────────────────────────────────────────────
+  type NdbNode = DiscoverySnapshot['cluster']['mysql_ndb']['nodes'][number]
+  const ndbMgmRaw = await exec(client, 'ndb_mgm -e "show" 2>/dev/null || ndb_mgm --ndb-connectstring=localhost -e "show" 2>/dev/null')
+  const ndbNodes: NdbNode[] = []
+  if (ndbMgmRaw.includes('Cluster Configuration')) {
+    let currentType: NdbNode['type'] = 'mgmd'
+    for (const line of ndbMgmRaw.split('\n')) {
+      if (line.includes('ndb_mgmd(MGM)'))  currentType = 'mgmd'
+      else if (line.includes('ndbd(NDB)')) currentType = 'ndbd'
+      else if (line.includes('mysqld(API)')) currentType = 'mysqld'
+      const m = line.match(/id=(\d+)\s+@([\d.]+)/)
+      const mDisc = line.match(/id=(\d+)\s+\(not connected/)
+      if (m) {
+        const ngMatch = line.match(/Nodegroup:\s*(\d+)/)
+        const isMaster = line.includes('*')
+        ndbNodes.push({ id: parseInt(m[1]), type: currentType, host: m[2], status: 'connected', nodegroup: ngMatch ? parseInt(ngMatch[1]) : undefined, master: isMaster })
+      } else if (mDisc) {
+        ndbNodes.push({ id: parseInt(mDisc[1]), type: currentType, host: '—', status: 'not_connected' })
+      }
+    }
+  }
+  const ndbDetected = ndbNodes.length > 0
+
   return {
     kubernetes: k8sResult,
     docker_swarm: swarmResult,
@@ -789,6 +816,7 @@ async function collectCluster(client: Client): Promise<DiscoverySnapshot['cluste
       nodes: esNodeCount,
       status: esStatus,
     },
+    mysql_ndb: { detected: ndbDetected, nodes: ndbNodes },
   }
 }
 

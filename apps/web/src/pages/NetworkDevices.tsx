@@ -1448,6 +1448,22 @@ interface SnmpPort {
   speed_mbps: number
   pvid: number | null
   mode?: 'access' | 'trunk' | 'unknown'
+  stp_state?: string | null
+  edge_port?: boolean | null
+  dot1x?: string | null
+  neighbor?: { chassis: string; port_id: string; sys_name: string; sys_desc: string } | null
+}
+
+interface RadiusServer {
+  id: string
+  name: string
+  description?: string | null
+  host: string
+  auth_port: number
+  acct_port: number
+  secret: string
+  timeout: number
+  retries: number
 }
 
 function ModeBadge({ mode }: { mode?: 'access' | 'trunk' | 'unknown' }) {
@@ -1494,9 +1510,50 @@ function PortsTab({ devices }: { devices: Server[] }) {
   // action modal
   const [actionModal, setActionModal] = useState<PortAction | null>(null)
   const [actionInput, setActionInput] = useState('')
-  const [actionSelect, setActionSelect] = useState<string>('access')
   const [actionRunning, setActionRunning] = useState(false)
   const [actionError, setActionError] = useState('')
+  // extended mode-change fields
+  const [modeTarget, setModeTarget] = useState<'access' | 'trunk'>('access')
+  const [allowedVlans, setAllowedVlans] = useState('') // trunk: VLANs to tag e.g. "10,20,30"
+  const [nativeVlan, setNativeVlan] = useState('1')    // trunk: native/untagged VLAN
+  const [accessVlan, setAccessVlan] = useState('1')    // access: access VLAN
+  const [vlanMode, setVlanMode] = useState<'tagged' | 'untagged'>('untagged')
+
+  // VLANs discovered via SNMP
+  type SnmpVlan = { id: string; server_id: string; vlan_id: number; name: string; description: string | null; discovered_at: string }
+  type DiscoveredRadius = { id: string; server_id: string; radius_index: number; address: string; auth_port: number; access_requests: number; access_accepts: number; access_rejects: number }
+  const [vlans, setVlans] = useState<SnmpVlan[]>([])
+  const [showVlanPanel, setShowVlanPanel] = useState(false)
+  const [vlanDescEdit, setVlanDescEdit] = useState<Record<number, string>>({})
+  const [vlanNameEdit, setVlanNameEdit] = useState<Record<number, string>>({})
+  const [vlanSaving, setVlanSaving] = useState<number | null>(null)
+  const [vlanSelected, setVlanSelected] = useState<Set<number>>(new Set())
+  const [vlanCopied, setVlanCopied] = useState(false)
+  const [vlanAddForm, setVlanAddForm] = useState({ vlan_id: '', name: '', description: '' })
+  const [vlanAdding, setVlanAdding] = useState(false)
+  const [vlanAddError, setVlanAddError] = useState('')
+  const [discoveredRadius, setDiscoveredRadius] = useState<DiscoveredRadius[]>([])
+
+  // RADIUS management
+  const [radiusServers, setRadiusServers] = useState<RadiusServer[]>([])
+  const [showRadiusPanel, setShowRadiusPanel] = useState(false)
+  const [radiusModal, setRadiusModal] = useState<'new' | 'edit' | 'push' | null>(null)
+  const [editingRadius, setEditingRadius] = useState<RadiusServer | null>(null)
+  const [radiusForm, setRadiusForm] = useState({ name: '', description: '', host: '', auth_port: 1812, acct_port: 1813, secret: '', timeout: 5, retries: 2 })
+  const [radiusSelected, setRadiusSelected] = useState<Set<string>>(new Set())
+  const [radiusSaving, setRadiusSaving] = useState(false)
+  const [radiusPushing, setRadiusPushing] = useState(false)
+  const [radiusError, setRadiusError] = useState('')
+  // 802.1X port push
+  const [dot1xPushing, setDot1xPushing] = useState(false)
+  // Authenticated hosts panel per port
+  const [dot1xHosts, setDot1xHosts] = useState<Record<number, { mac: string; status: string }[]>>({})
+  const [loadingHosts, setLoadingHosts] = useState<number | null>(null)
+
+  useEffect(() => {
+    api.get<RadiusServer[]>('/radius-servers').then(setRadiusServers).catch(() => {})
+  }, [])
+
   const { requestElevation } = useTotpElevation()
 
   const selected = devices.find(d => d.id === selectedId)
@@ -1572,7 +1629,8 @@ function PortsTab({ devices }: { devices: Server[] }) {
       await api.post<any>(`/servers/${selectedId}/port-cli`, { ports: portsArg, action, params })
       // Optimistic local state update
       if (action === 'description') setPorts(prev => prev ? prev.map(x => checkedPorts.has(x.index) ? { ...x, alias: params.description as string } : x) : prev)
-      setCheckedPorts(new Set()); setActionModal(null); setActionInput(''); setActionSelect('access')
+      setCheckedPorts(new Set()); setActionModal(null); setActionInput('')
+      setModeTarget('access'); setAllowedVlans(''); setNativeVlan('1'); setAccessVlan('1'); setVlanMode('untagged')
     } catch (e: any) {
       setActionError(e?.data?.error ?? e?.message ?? 'CLI action failed')
     } finally { setActionRunning(false) }
@@ -1603,18 +1661,61 @@ function PortsTab({ devices }: { devices: Server[] }) {
         }
       })
       .catch(() => {})
+    api.get<SnmpVlan[]>(`/servers/${selectedId}/snmp-vlans`).then(setVlans).catch(() => {})
+    api.get<DiscoveredRadius[]>(`/servers/${selectedId}/snmp-discovered-radius`).then(setDiscoveredRadius).catch(() => {})
   }, [selectedId])
 
   const pollPorts = async () => {
     if (!selectedId) return
     setFetching(true); setError('')
     try {
-      const r = await api.post<{ ok: boolean; fetched_at: string; ports: SnmpPort[] }>(`/servers/${selectedId}/snmp-ports`)
+      const r = await api.post<{ ok: boolean; fetched_at: string; ports: SnmpPort[]; vlans?: SnmpVlan[]; discovered_radius?: DiscoveredRadius[] }>(`/servers/${selectedId}/snmp-ports`)
       setPorts(r.ports)
       setFetchedAt(r.fetched_at)
+      if (r.vlans) setVlans(r.vlans)
+      if (r.discovered_radius) setDiscoveredRadius(r.discovered_radius)
     } catch (e: any) {
       setError(e?.data?.error ?? e?.message ?? 'Port poll failed')
     } finally { setFetching(false) }
+  }
+
+  const saveVlan = async (vlanId: number) => {
+    if (!selectedId) return
+    setVlanSaving(vlanId)
+    try {
+      const patch: any = {}
+      if (vlanDescEdit[vlanId] !== undefined) patch.description = vlanDescEdit[vlanId]
+      if (vlanNameEdit[vlanId] !== undefined) patch.name = vlanNameEdit[vlanId]
+      await api.patch(`/servers/${selectedId}/snmp-vlans/${vlanId}`, patch)
+      setVlans(prev => prev.map(v => v.vlan_id === vlanId ? { ...v, ...patch } : v))
+      setVlanDescEdit(prev => { const n = { ...prev }; delete n[vlanId]; return n })
+      setVlanNameEdit(prev => { const n = { ...prev }; delete n[vlanId]; return n })
+    } finally { setVlanSaving(null) }
+  }
+
+  const addVlan = async () => {
+    if (!selectedId || !vlanAddForm.vlan_id) return
+    setVlanAdding(true); setVlanAddError('')
+    try {
+      const row = await api.post<SnmpVlan>(`/servers/${selectedId}/snmp-vlans`, {
+        vlan_id: parseInt(vlanAddForm.vlan_id, 10),
+        name: vlanAddForm.name,
+        description: vlanAddForm.description || undefined,
+      })
+      setVlans(prev => {
+        const filtered = prev.filter(v => v.vlan_id !== row.vlan_id)
+        return [...filtered, row].sort((a, b) => a.vlan_id - b.vlan_id)
+      })
+      setVlanAddForm({ vlan_id: '', name: '', description: '' })
+    } catch (e: any) {
+      setVlanAddError(e?.data?.error ?? e?.message ?? 'Failed to add VLAN')
+    } finally { setVlanAdding(false) }
+  }
+
+  const deleteVlan = async (vlanId: number) => {
+    if (!selectedId || !confirm(`Remove VLAN ${vlanId} from the list?`)) return
+    await api.delete(`/servers/${selectedId}/snmp-vlans/${vlanId}`)
+    setVlans(prev => prev.filter(v => v.vlan_id !== vlanId))
   }
 
   const filtered = (ports ?? []).filter(p => {
@@ -1752,20 +1853,49 @@ function PortsTab({ devices }: { devices: Server[] }) {
           )}
 
           {/* Table */}
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', minWidth: 1060, borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: 36 }} />   {/* checkbox */}
+              <col style={{ width: 34 }} />   {/* # */}
+              <col style={{ width: 82 }} />   {/* port */}
+              <col style={{ width: 175 }} />  {/* description */}
+              <col style={{ width: 125 }} />  {/* mac */}
+              <col style={{ width: 74 }} />   {/* mode */}
+              <col style={{ width: 84 }} />   {/* status */}
+              <col style={{ width: 52 }} />   {/* speed */}
+              <col style={{ width: 58 }} />   {/* vlan */}
+              <col style={{ width: 106 }} />  {/* stp */}
+              <col style={{ width: 120 }} />  {/* 802.1x */}
+              <col style={{ width: 170 }} />  {/* neighbor */}
+              <col style={{ width: 90 }} />   {/* action — enough for "Disable" */}
+            </colgroup>
             <thead>
-              <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-med)' }}>
-                <th style={{ padding: '9px 8px 9px 16px', width: 36, minWidth: 36 }}>
+              <tr style={{ background: 'var(--bg-table-header)', borderBottom: '2px solid var(--border-med)' }}>
+                <th style={{ padding: '8px 0 8px 12px' }}>
                   <input
                     type="checkbox"
                     checked={filtered.length > 0 && filtered.every(p => checkedPorts.has(p.index))}
                     ref={el => { if (el) el.indeterminate = filtered.some(p => checkedPorts.has(p.index)) && !filtered.every(p => checkedPorts.has(p.index)) }}
                     onChange={toggleAllVisible}
-                    title="Select all visible ports (Shift+click rows for range)"
+                    title="Select all visible ports"
                   />
                 </th>
-                {['#', 'Port', 'Description / Alias', 'MAC', 'Mode', 'Admin', 'Link', 'Speed', 'VLAN', ''].map(h => (
-                  <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
+                {[
+                  ['#', 'left'],
+                  ['Port', 'left'],
+                  ['Description / Alias', 'left'],
+                  ['MAC', 'left'],
+                  ['Mode', 'center'],
+                  ['Status', 'center'],
+                  ['Speed', 'center'],
+                  ['VLAN', 'center'],
+                  ['STP', 'left'],
+                  ['802.1X', 'left'],
+                  ['Neighbor', 'left'],
+                  ['', 'right'],
+                ].map(([h, align]) => (
+                  <th key={h} style={{ padding: '8px 10px', textAlign: align as any, fontWeight: 600, fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'nowrap', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1773,47 +1903,148 @@ function PortsTab({ devices }: { devices: Server[] }) {
               {filtered.map((p, i) => (
                 <tr
                   key={p.index}
-                  style={{ borderBottom: i < filtered.length - 1 ? '1px solid var(--border-weak)' : 'none', background: checkedPorts.has(p.index) ? 'rgba(99,102,241,0.06)' : 'transparent' }}
+                  style={{
+                    borderBottom: i < filtered.length - 1 ? '1px solid var(--border-weak)' : 'none',
+                    background: checkedPorts.has(p.index) ? 'rgba(99,102,241,0.06)' : 'transparent',
+                    transition: 'background 0.1s',
+                  }}
                 >
-                  <td style={{ padding: '9px 8px 9px 16px' }}>
+                  {/* Checkbox */}
+                  <td style={{ padding: '10px 0 10px 12px', verticalAlign: 'middle' }}>
                     <input
                       type="checkbox"
                       checked={checkedPorts.has(p.index)}
-                      onChange={() => {/* handled by onClick */}}
+                      onChange={() => {}}
                       onClick={e => { e.stopPropagation(); handleCheck(p, i, (e as React.MouseEvent).shiftKey) }}
                     />
                   </td>
-                  <td style={{ padding: '9px 14px', color: 'var(--text-muted)', fontSize: 11 }}>{p.index}</td>
-                  <td style={{ padding: '9px 14px', fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{p.name}</td>
-                  <td style={{ padding: '9px 14px', fontSize: 12 }}>
-                    {p.descr && <div style={{ color: 'var(--text-secondary)' }}>{p.descr}</div>}
-                    {p.alias && p.alias !== p.descr && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>↪ {p.alias}</div>}
+                  {/* # */}
+                  <td style={{ padding: '10px 6px', color: 'var(--text-muted)', fontSize: 10, textAlign: 'left', verticalAlign: 'middle' }}>{p.index}</td>
+                  {/* Port name */}
+                  <td style={{ padding: '10px 10px', verticalAlign: 'middle' }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{p.name}</span>
                   </td>
-                  <td style={{ padding: '9px 14px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>{p.mac || '—'}</td>
-                  <td style={{ padding: '9px 14px' }}><ModeBadge mode={p.mode} /></td>
-                  <td style={{ padding: '9px 14px' }}>
-                    <span style={{ fontSize: 11, color: p.admin_up ? '#3fb950' : '#9ca3af' }}>{p.admin_up ? 'Enabled' : 'Disabled'}</span>
+                  {/* Description / Alias */}
+                  <td style={{ padding: '10px 10px', verticalAlign: 'middle', overflow: 'hidden' }}>
+                    {p.descr && (
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.descr}>{p.descr}</div>
+                    )}
+                    {p.alias && p.alias !== p.descr && (
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.alias}>
+                        <span style={{ opacity: 0.5, marginRight: 3 }}>↪</span>{p.alias}
+                      </div>
+                    )}
                   </td>
-                  <td style={{ padding: '9px 14px' }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: p.oper_up ? '#3fb950' : '#6b7280' }}>
-                      <PortStatusDot up={p.oper_up} />
-                      {p.oper_up ? 'Up' : 'Down'}
+                  {/* MAC */}
+                  <td style={{ padding: '10px 10px', verticalAlign: 'middle', overflow: 'hidden' }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.02em' }} title={p.mac || undefined}>
+                      {p.mac || '—'}
                     </span>
                   </td>
-                  <td style={{ padding: '9px 14px', fontSize: 12, fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{speedLabel(p.speed_mbps)}</td>
-                  <td style={{ padding: '9px 14px', fontSize: 12 }}>
-                    {p.pvid ? (
-                      <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: '1px 7px', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: '#818cf8' }}>
-                        VLAN {p.pvid}
-                      </span>
-                    ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                  {/* Mode */}
+                  <td style={{ padding: '10px 10px', textAlign: 'center', verticalAlign: 'middle' }}>
+                    <ModeBadge mode={p.mode} />
                   </td>
-                  <td style={{ padding: '9px 12px' }}>
+                  {/* Status: Admin + Link stacked */}
+                  <td style={{ padding: '10px 10px', textAlign: 'center', verticalAlign: 'middle' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: p.oper_up ? '#3fb950' : '#6b7280', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <PortStatusDot up={p.oper_up} />
+                        {p.oper_up ? 'Up' : 'Down'}
+                      </span>
+                      <span style={{ fontSize: 9, color: p.admin_up ? 'var(--text-muted)' : '#f87171' }}>
+                        {p.admin_up ? 'admin on' : 'admin off'}
+                      </span>
+                    </div>
+                  </td>
+                  {/* Speed */}
+                  <td style={{ padding: '10px 10px', textAlign: 'center', verticalAlign: 'middle' }}>
+                    <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-secondary)', fontWeight: 600 }}>{speedLabel(p.speed_mbps)}</span>
+                  </td>
+                  {/* VLAN */}
+                  <td style={{ padding: '10px 10px', textAlign: 'center', verticalAlign: 'middle' }}>
+                    {p.pvid ? (() => {
+                      const vlan = vlans.find(v => v.vlan_id === p.pvid)
+                      return (
+                        <div title={vlan?.description ? `${vlan.name}${vlan.description ? ` — ${vlan.description}` : ''}` : vlan?.name ?? ''}>
+                          <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '2px 6px', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: '#818cf8', whiteSpace: 'nowrap' }}>
+                            {p.pvid}
+                          </span>
+                          {vlan?.name && (
+                            <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2, maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vlan.name}</div>
+                          )}
+                        </div>
+                      )
+                    })() : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>}
+                  </td>
+                  {/* STP */}
+                  <td style={{ padding: '10px 10px', verticalAlign: 'middle' }}>
+                    {p.stp_state ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: p.stp_state === 'forwarding' ? '#34d399' : p.stp_state === 'blocking' ? '#f87171' : 'var(--text-muted)' }}>
+                          {p.stp_state}
+                        </span>
+                        {p.edge_port && <span style={{ fontSize: 9, color: '#fbbf24' }}>⚡ edge</span>}
+                      </div>
+                    ) : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>}
+                  </td>
+                  {/* 802.1X */}
+                  <td style={{ padding: '10px 10px', verticalAlign: 'middle' }}>
+                    {p.dot1x ? (
+                      <div>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: p.dot1x === 'auto' ? '#fbbf24' : p.dot1x === 'force-authorized' ? '#34d399' : '#f87171' }}>
+                          {p.dot1x === 'force-authorized' ? 'authorized' : p.dot1x === 'force-unauthorized' ? 'unauthorized' : p.dot1x}
+                        </span>
+                        {p.dot1x === 'auto' && discoveredRadius.length === 0 && (
+                          <span title="802.1X enabled but no RADIUS server detected on this device" style={{ marginLeft: 4, fontSize: 10, color: '#fbbf24', cursor: 'default' }}>⚠</span>
+                        )}
+                        {p.dot1x === 'auto' && (
+                          <button
+                            onClick={async () => {
+                              setLoadingHosts(p.index)
+                              try {
+                                const r = await api.get<{ hosts: { mac: string; status: string }[] }>(`/servers/${selectedId}/dot1x-hosts/${p.index}`)
+                                setDot1xHosts(prev => ({ ...prev, [p.index]: r.hosts }))
+                              } catch {}
+                              setLoadingHosts(null)
+                            }}
+                            style={{ marginLeft: 5, fontSize: 9, padding: '1px 5px', borderRadius: 3, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}
+                          >
+                            {loadingHosts === p.index ? '…' : 'hosts'}
+                          </button>
+                        )}
+                        {dot1xHosts[p.index]?.length > 0 && (
+                          <div style={{ marginTop: 3 }}>
+                            {dot1xHosts[p.index].map(h => (
+                              <div key={h.mac} style={{ fontSize: 9, fontFamily: 'monospace', color: '#34d399' }}>{h.mac}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>}
+                  </td>
+                  {/* Neighbor */}
+                  <td style={{ padding: '10px 10px', verticalAlign: 'middle', overflow: 'hidden' }}>
+                    {p.neighbor?.sys_name ? (
+                      <div title={`${p.neighbor.sys_name}\n${p.neighbor.sys_desc ?? ''}\nPort: ${p.neighbor.port_id}\nMAC: ${p.neighbor.chassis}`} style={{ cursor: 'help' }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          🔗 {p.neighbor.sys_name}
+                        </div>
+                        {p.neighbor.port_id && (
+                          <div style={{ fontSize: 9, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
+                            {p.neighbor.port_id}
+                          </div>
+                        )}
+                      </div>
+                    ) : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>}
+                  </td>
+                  {/* Action */}
+                  <td style={{ padding: '10px 10px', textAlign: 'right', verticalAlign: 'middle' }}>
                     <button
                       onClick={() => togglePort(p)}
                       disabled={!!toggling[p.index]}
                       title={p.admin_up ? 'Disable port (SNMP SET)' : 'Enable port (SNMP SET)'}
-                      style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: `1px solid ${p.admin_up ? 'rgba(248,113,113,0.4)' : 'rgba(52,211,153,0.4)'}`, background: p.admin_up ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)', color: p.admin_up ? '#f87171' : '#34d399', cursor: toggling[p.index] ? 'default' : 'pointer', opacity: toggling[p.index] ? 0.6 : 1, fontWeight: 600 }}
+                      style={{ fontSize: 10, padding: '3px 9px', borderRadius: 4, border: `1px solid ${p.admin_up ? 'rgba(248,113,113,0.4)' : 'rgba(52,211,153,0.4)'}`, background: p.admin_up ? 'rgba(248,113,113,0.08)' : 'rgba(52,211,153,0.08)', color: p.admin_up ? '#f87171' : '#34d399', cursor: toggling[p.index] ? 'default' : 'pointer', opacity: toggling[p.index] ? 0.6 : 1, fontWeight: 600, whiteSpace: 'nowrap' }}
                     >
                       {toggling[p.index] ? '…' : p.admin_up ? 'Disable' : 'Enable'}
                     </button>
@@ -1822,6 +2053,7 @@ function PortsTab({ devices }: { devices: Server[] }) {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -1858,32 +2090,64 @@ function PortsTab({ devices }: { devices: Server[] }) {
                 ✎ Description
               </button>
               <button
-                onClick={() => !hasMixedModes && (setActionModal('vlan'), setActionInput(''), setActionSelect(allSameMode ? ([...selModes][0] as string) : 'access'))}
+                onClick={() => !hasMixedModes && (setActionModal('vlan'), setActionInput(''))}
                 disabled={hasMixedModes}
                 title={hasMixedModes ? 'Deselect mixed port modes first' : undefined}
                 style={{ ...tbBtn('#a78bfa', 'rgba(167,139,250,0.12)', 'rgba(167,139,250,0.35)'), opacity: hasMixedModes ? 0.4 : 1, cursor: hasMixedModes ? 'not-allowed' : 'pointer' }}>
                 🏷 VLAN
               </button>
               <button
-                onClick={() => !hasMixedModes && (setActionModal('mode'), setActionSelect('access'))}
+                onClick={() => { if (hasMixedModes) return; const cur = [...selModes][0] as 'access'|'trunk'|'unknown'; setModeTarget(cur === 'trunk' ? 'access' : 'trunk'); setAllowedVlans(''); setNativeVlan('1'); setAccessVlan('1'); setActionModal('mode') }}
                 disabled={hasMixedModes}
                 title={hasMixedModes ? 'Deselect mixed port modes first' : undefined}
                 style={{ ...tbBtn('#fbbf24', 'rgba(251,191,36,0.12)', 'rgba(251,191,36,0.35)'), opacity: hasMixedModes ? 0.4 : 1, cursor: hasMixedModes ? 'not-allowed' : 'pointer' }}>
                 ⇄ Mode
               </button>
               <button
-                onClick={() => !hasMixedModes && runPortCli('portfast', { enabled: true })}
+                onClick={() => { if (hasMixedModes) return; const curMode = [...selModes][0] as string; runPortCli('portfast', { enabled: true, currentMode: curMode }) }}
                 disabled={hasMixedModes}
                 title={hasMixedModes ? 'Deselect mixed port modes first' : undefined}
                 style={{ ...tbBtn('#34d399', 'rgba(52,211,153,0.12)', 'rgba(52,211,153,0.25)'), opacity: hasMixedModes ? 0.4 : 1, cursor: hasMixedModes ? 'not-allowed' : 'pointer' }}>
                 ⚡ Edge On
               </button>
               <button
-                onClick={() => !hasMixedModes && runPortCli('portfast', { enabled: false })}
+                onClick={() => { if (hasMixedModes) return; const curMode = [...selModes][0] as string; runPortCli('portfast', { enabled: false, currentMode: curMode }) }}
                 disabled={hasMixedModes}
                 title={hasMixedModes ? 'Deselect mixed port modes first' : undefined}
                 style={{ ...tbBtn('#9ca3af', 'rgba(156,163,175,0.12)', 'rgba(156,163,175,0.3)'), opacity: hasMixedModes ? 0.4 : 1, cursor: hasMixedModes ? 'not-allowed' : 'pointer' }}>
                 ⚡ Edge Off
+              </button>
+              <span style={{ width: 1, height: 18, background: 'var(--border-med)' }} />
+              {/* 802.1X port control */}
+              <button
+                disabled={dot1xPushing}
+                onClick={async () => {
+                  if (!selectedId) return
+                  const ifNames = [...checkedPorts].map(idx => ports?.find(p => p.index === idx)?.name).filter(Boolean) as string[]
+                  setDot1xPushing(true)
+                  try {
+                    await requestElevation('network_config_push')
+                    await api.post(`/servers/${selectedId}/push-dot1x-ports`, { if_names: ifNames, enabled: true })
+                  } catch {}
+                  setDot1xPushing(false)
+                }}
+                style={{ ...tbBtn('#f97316', 'rgba(249,115,22,0.12)', 'rgba(249,115,22,0.35)'), opacity: dot1xPushing ? 0.6 : 1 }}>
+                🔐 802.1X On
+              </button>
+              <button
+                disabled={dot1xPushing}
+                onClick={async () => {
+                  if (!selectedId) return
+                  const ifNames = [...checkedPorts].map(idx => ports?.find(p => p.index === idx)?.name).filter(Boolean) as string[]
+                  setDot1xPushing(true)
+                  try {
+                    await requestElevation('network_config_push')
+                    await api.post(`/servers/${selectedId}/push-dot1x-ports`, { if_names: ifNames, enabled: false })
+                  } catch {}
+                  setDot1xPushing(false)
+                }}
+                style={{ ...tbBtn('#6b7280', 'rgba(107,114,128,0.12)', 'rgba(107,114,128,0.35)'), opacity: dot1xPushing ? 0.6 : 1 }}>
+                🔓 802.1X Off
               </button>
             </>}
 
@@ -1922,16 +2186,15 @@ function PortsTab({ devices }: { devices: Server[] }) {
                 <input
                   autoFocus type="number" min={1} max={4094} value={actionInput}
                   onChange={e => setActionInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && +actionInput >= 1 && runPortCli('vlan', { vlan: +actionInput, mode: actionSelect })}
                   placeholder="e.g. 100"
                   style={{ ...inp, width: '100%' }}
                 />
                 <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', margin: '10px 0 6px' }}>Apply as</label>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {(['access', 'trunk'] as const).map(m => (
-                    <button key={m} onClick={() => setActionSelect(m)}
-                      style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: `1px solid ${actionSelect === m ? 'var(--accent-hex)' : 'var(--border-med)'}`, background: actionSelect === m ? 'var(--accent-hex)' : 'transparent', color: actionSelect === m ? '#fff' : 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                      {m === 'access' ? 'Access (untagged)' : 'Trunk (tagged add)'}
+                  {(['untagged', 'tagged'] as const).map(m => (
+                    <button key={m} onClick={() => setVlanMode(m)}
+                      style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: `1px solid ${vlanMode === m ? 'var(--accent-hex)' : 'var(--border-med)'}`, background: vlanMode === m ? 'var(--accent-hex)' : 'transparent', color: vlanMode === m ? '#fff' : 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                      {m === 'untagged' ? '📥 Untagged (access)' : '🏷 Tagged (trunk)'}
                     </button>
                   ))}
                 </div>
@@ -1940,15 +2203,39 @@ function PortsTab({ devices }: { devices: Server[] }) {
 
             {actionModal === 'mode' && (
               <>
-                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 8 }}>Port switchport mode</label>
-                <div style={{ display: 'flex', gap: 6 }}>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 8 }}>Target mode</label>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
                   {(['access', 'trunk'] as const).map(m => (
-                    <button key={m} onClick={() => setActionSelect(m)}
-                      style={{ flex: 1, padding: '8px 0', borderRadius: 6, border: `1px solid ${actionSelect === m ? 'var(--accent-hex)' : 'var(--border-med)'}`, background: actionSelect === m ? 'var(--accent-hex)' : 'transparent', color: actionSelect === m ? '#fff' : 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    <button key={m} onClick={() => setModeTarget(m)}
+                      style={{ flex: 1, padding: '8px 0', borderRadius: 6, border: `1px solid ${modeTarget === m ? 'var(--accent-hex)' : 'var(--border-med)'}`, background: modeTarget === m ? 'var(--accent-hex)' : 'transparent', color: modeTarget === m ? '#fff' : 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                       {m === 'access' ? '📥 Access' : '🔀 Trunk'}
                     </button>
                   ))}
                 </div>
+
+                {modeTarget === 'trunk' && (
+                  <>
+                    <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                      Allowed VLANs <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(comma-separated, or leave blank for all)</span>
+                    </label>
+                    <input value={allowedVlans} onChange={e => setAllowedVlans(e.target.value)}
+                      placeholder="e.g. 10,20,30  or blank = all"
+                      style={{ ...inp, width: '100%', marginBottom: 10 }} />
+                    <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Native VLAN</label>
+                    <input type="number" min={1} max={4094} value={nativeVlan} onChange={e => setNativeVlan(e.target.value)}
+                      style={{ ...inp, width: 90 }} />
+                  </>
+                )}
+
+                {modeTarget === 'access' && (
+                  <>
+                    <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                      Access VLAN <span style={{ color: '#f97316', fontWeight: 400, fontSize: 11 }}>⚠ Tagged VLANs will be removed first</span>
+                    </label>
+                    <input type="number" min={1} max={4094} value={accessVlan} onChange={e => setAccessVlan(e.target.value)}
+                      style={{ ...inp, width: 90 }} />
+                  </>
+                )}
               </>
             )}
 
@@ -1964,12 +2251,397 @@ function PortsTab({ devices }: { devices: Server[] }) {
                 disabled={actionRunning || (actionModal !== 'mode' && !actionInput.trim())}
                 onClick={() => {
                   if (actionModal === 'description') runPortCli('description', { description: actionInput.trim() })
-                  else if (actionModal === 'vlan') runPortCli('vlan', { vlan: +actionInput, mode: actionSelect })
-                  else if (actionModal === 'mode') runPortCli('mode', { mode: actionSelect })
+                  else if (actionModal === 'vlan') runPortCli('vlan', { vlan: +actionInput, vlanMode })
+                  else if (actionModal === 'mode') runPortCli('mode', {
+                    mode: modeTarget,
+                    allowedVlans: allowedVlans || 'all',
+                    nativeVlan,
+                    accessVlan,
+                    currentMode: [...selModes][0] ?? 'unknown',
+                  })
                 }}
                 style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: actionRunning ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: actionRunning ? 0.65 : 1 }}
               >
                 {actionRunning ? 'Applying…' : 'Apply'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Bottom-right action buttons ── */}
+      {selected && (
+        <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 50, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+          <button
+            onClick={() => setShowVlanPanel(v => !v)}
+            style={{ padding: '10px 18px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.4)', background: 'rgba(99,102,241,0.15)', color: '#818cf8', fontWeight: 700, fontSize: 13, cursor: 'pointer', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
+            🏷 VLANs{vlans.length > 0 ? ` (${vlans.length})` : ''}
+          </button>
+          <button
+            onClick={() => setShowRadiusPanel(v => !v)}
+            style={{ padding: '10px 18px', borderRadius: 8, border: '1px solid rgba(249,115,22,0.4)', background: discoveredRadius.length > 0 ? 'rgba(249,115,22,0.25)' : 'rgba(249,115,22,0.15)', color: '#f97316', fontWeight: 700, fontSize: 13, cursor: 'pointer', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
+            🔐 RADIUS{discoveredRadius.length > 0 ? ` ✓` : ''}
+          </button>
+        </div>
+      )}
+
+      {/* ── RADIUS panel ── */}
+      {showRadiusPanel && (
+        <Modal title="" onClose={() => setShowRadiusPanel(false)}>
+          <div style={{ padding: '24px 28px', minWidth: 500, maxWidth: 660 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>🔐 RADIUS Servers</h3>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => { setRadiusForm({ name: '', description: '', host: '', auth_port: 1812, acct_port: 1813, secret: '', timeout: 5, retries: 2 }); setEditingRadius(null); setRadiusModal('new') }}
+                  style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, border: '1px solid rgba(99,102,241,0.4)', background: 'rgba(99,102,241,0.12)', color: '#818cf8', cursor: 'pointer', fontWeight: 600 }}>
+                  + New Server
+                </button>
+                {radiusSelected.size > 0 && (
+                  <button
+                    onClick={() => setRadiusModal('push')}
+                    style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, border: '1px solid rgba(249,115,22,0.4)', background: 'rgba(249,115,22,0.12)', color: '#f97316', cursor: 'pointer', fontWeight: 600 }}>
+                    Push to {selected?.name ?? 'device'} ({radiusSelected.size})
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Discovered RADIUS servers from SNMP */}
+            {discoveredRadius.length > 0 && (
+              <div style={{ marginBottom: 20, padding: '12px 14px', borderRadius: 8, background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)' }}>
+                <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 700, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  ✓ Detected on {selected?.name ?? 'device'} via SNMP
+                </p>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(52,211,153,0.15)' }}>
+                      {['Server IP', 'Port', 'Requests', 'Accepts', 'Rejects'].map(h => (
+                        <th key={h} style={{ padding: '4px 8px', textAlign: 'left', fontWeight: 600, fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {discoveredRadius.map(r => (
+                      <tr key={r.radius_index} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#34d399', fontWeight: 600 }}>{r.address}</td>
+                        <td style={{ padding: '6px 8px', color: 'var(--text-muted)' }}>{r.auth_port}</td>
+                        <td style={{ padding: '6px 8px', color: 'var(--text-secondary)' }}>{r.access_requests.toLocaleString()}</td>
+                        <td style={{ padding: '6px 8px', color: r.access_accepts > 0 ? '#34d399' : 'var(--text-muted)' }}>{r.access_accepts.toLocaleString()}</td>
+                        <td style={{ padding: '6px 8px', color: r.access_rejects > 0 ? '#f87171' : 'var(--text-muted)' }}>{r.access_rejects.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {discoveredRadius.length === 0 && (ports ?? []).length > 0 && (
+              <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 8, background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)', fontSize: 12, color: '#fbbf24' }}>
+                ⚠ No RADIUS servers detected on this device via SNMP. Poll Ports to check.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                📋 Saved Profiles
+              </p>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Select profiles below then push to device</span>
+            </div>
+            {radiusServers.length === 0 ? (
+              <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No RADIUS servers configured. Add one to get started.</p>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)' }}></th>
+                    {['Name', 'Host', 'Auth Port', 'Timeout', ''].map(h => (
+                      <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {radiusServers.map(r => (
+                    <tr key={r.id} style={{ borderBottom: '1px solid var(--border-weak)' }}>
+                      <td style={{ padding: '8px 10px' }}>
+                        <input type="checkbox" checked={radiusSelected.has(r.id)}
+                          onChange={e => setRadiusSelected(prev => { const s = new Set(prev); e.target.checked ? s.add(r.id) : s.delete(r.id); return s })} />
+                      </td>
+                      <td style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text)' }}>{r.name}</td>
+                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: 12, color: 'var(--text-secondary)' }}>{r.host}</td>
+                      <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{r.auth_port}</td>
+                      <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{r.timeout}s</td>
+                      <td style={{ padding: '8px 10px', display: 'flex', gap: 6 }}>
+                        <button onClick={() => { setEditingRadius(r); setRadiusForm({ name: r.name, description: r.description ?? '', host: r.host, auth_port: r.auth_port, acct_port: r.acct_port, secret: r.secret, timeout: r.timeout, retries: r.retries }); setRadiusModal('edit') }}
+                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>Edit</button>
+                        <button onClick={async () => { if (!confirm(`Delete "${r.name}"?`)) return; await api.delete(`/radius-servers/${r.id}`); setRadiusServers(prev => prev.filter(x => x.id !== r.id)) }}
+                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(248,113,113,0.3)', background: 'transparent', color: '#f87171', cursor: 'pointer' }}>Del</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ── VLAN reference panel ── */}
+      {showVlanPanel && (
+        <Modal title="" onClose={() => setShowVlanPanel(false)}>
+          <div style={{ padding: '20px 20px', minWidth: 520, maxWidth: 680, display: 'flex', flexDirection: 'column', maxHeight: '85vh', overflow: 'hidden' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700 }}>🏷 VLAN Reference — {selected?.name}</h3>
+            <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--text-muted)' }}>
+              {vlans.length > 0 ? `${vlans.length} VLANs · ` : ''}Auto-discovered via SNMP on Poll Ports, or add manually. Names and descriptions help when assigning ports.
+            </p>
+
+            {/* Add VLAN form */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'flex-end', padding: '12px 14px', borderRadius: 8, background: 'rgba(99,102,241,0.07)', border: '1px solid rgba(99,102,241,0.2)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>VLAN ID *</label>
+                <input
+                  type="number" min={1} max={4094} placeholder="e.g. 10"
+                  value={vlanAddForm.vlan_id}
+                  onChange={e => setVlanAddForm(p => ({ ...p, vlan_id: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') addVlan() }}
+                  style={{ width: 72, padding: '5px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13 }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Name</label>
+                <input
+                  type="text" placeholder="e.g. Management"
+                  value={vlanAddForm.name}
+                  onChange={e => setVlanAddForm(p => ({ ...p, name: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') addVlan() }}
+                  style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13 }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Description</label>
+                <input
+                  type="text" placeholder="e.g. Core network management"
+                  value={vlanAddForm.description}
+                  onChange={e => setVlanAddForm(p => ({ ...p, description: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') addVlan() }}
+                  style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13 }}
+                />
+              </div>
+              <button
+                onClick={addVlan} disabled={vlanAdding || !vlanAddForm.vlan_id}
+                style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: 'var(--accent-hex)', color: '#fff', fontWeight: 600, fontSize: 13, cursor: vlanAdding || !vlanAddForm.vlan_id ? 'default' : 'pointer', opacity: vlanAdding || !vlanAddForm.vlan_id ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                {vlanAdding ? '…' : '+ Add'}
+              </button>
+            </div>
+            {vlanAddError && <p style={{ color: '#f87171', fontSize: 12, margin: '-8px 0 12px' }}>{vlanAddError}</p>}
+
+            {/* Scrollable table area — grows to fill available space */}
+            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            {vlans.length === 0 ? (
+              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>🏷</div>
+                No VLANs yet. Add one above or click <strong>Poll Ports</strong> to auto-discover from the switch.
+              </div>
+            ) : (<>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ padding: '6px 8px', width: 32 }}>
+                      <input type="checkbox"
+                        checked={vlanSelected.size === vlans.length && vlans.length > 0}
+                        ref={el => { if (el) el.indeterminate = vlanSelected.size > 0 && vlanSelected.size < vlans.length }}
+                        onChange={e => setVlanSelected(e.target.checked ? new Set(vlans.map(v => v.vlan_id)) : new Set())}
+                      />
+                    </th>
+                    {['ID', 'Name', 'Description', ''].map(h => (
+                      <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {vlans.map(v => {
+                    const isUnnamed = !v.name || /^vlan\s*\d+$/i.test(v.name)
+                    const nameVal  = vlanNameEdit[v.vlan_id]  !== undefined ? vlanNameEdit[v.vlan_id]  : v.name
+                    const descVal  = vlanDescEdit[v.vlan_id] !== undefined ? vlanDescEdit[v.vlan_id] : (v.description ?? '')
+                    const isDirty  = vlanNameEdit[v.vlan_id] !== undefined || vlanDescEdit[v.vlan_id] !== undefined
+                    const isChecked = vlanSelected.has(v.vlan_id)
+                    return (
+                      <tr key={v.vlan_id} style={{ borderBottom: '1px solid var(--border-weak)', background: isChecked ? 'rgba(99,102,241,0.08)' : isUnnamed ? 'rgba(251,191,36,0.04)' : 'transparent' }}>
+                        <td style={{ padding: '7px 8px', width: 32 }}>
+                          <input type="checkbox" checked={isChecked}
+                            onChange={e => setVlanSelected(prev => {
+                              const s = new Set(prev)
+                              e.target.checked ? s.add(v.vlan_id) : s.delete(v.vlan_id)
+                              return s
+                            })}
+                          />
+                        </td>
+                        <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 700, color: '#818cf8', width: 50 }}>{v.vlan_id}</td>
+                        <td style={{ padding: '7px 10px', width: '28%' }}>
+                          <input
+                            value={nameVal}
+                            placeholder={isUnnamed ? 'Unnamed ⚠' : ''}
+                            onChange={e => setVlanNameEdit(prev => ({ ...prev, [v.vlan_id]: e.target.value }))}
+                            onKeyDown={e => { if (e.key === 'Enter') saveVlan(v.vlan_id) }}
+                            style={{ width: '100%', padding: '3px 7px', borderRadius: 4, border: `1px solid ${isUnnamed && !vlanNameEdit[v.vlan_id] ? 'rgba(251,191,36,0.4)' : 'var(--border-med)'}`, background: 'var(--input-bg)', color: isUnnamed && !vlanNameEdit[v.vlan_id] ? '#fbbf24' : 'var(--text)', fontSize: 12, boxSizing: 'border-box' }}
+                          />
+                        </td>
+                        <td style={{ padding: '7px 10px' }}>
+                          <input
+                            value={descVal}
+                            placeholder="Add description…"
+                            onChange={e => setVlanDescEdit(prev => ({ ...prev, [v.vlan_id]: e.target.value }))}
+                            onKeyDown={e => { if (e.key === 'Enter') saveVlan(v.vlan_id) }}
+                            style={{ width: '100%', padding: '3px 7px', borderRadius: 4, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 12, boxSizing: 'border-box' }}
+                          />
+                        </td>
+                        <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', display: 'flex', gap: 5, alignItems: 'center' }}>
+                          {isDirty && (
+                            <button onClick={() => saveVlan(v.vlan_id)} disabled={vlanSaving === v.vlan_id}
+                              style={{ fontSize: 11, padding: '2px 9px', borderRadius: 4, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: 'pointer', opacity: vlanSaving === v.vlan_id ? 0.6 : 1 }}>
+                              {vlanSaving === v.vlan_id ? '…' : 'Save'}
+                            </button>
+                          )}
+                          <button onClick={() => deleteVlan(v.vlan_id)}
+                            style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(248,113,113,0.3)', background: 'transparent', color: '#f87171', cursor: 'pointer' }}>
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+
+            </>)}
+            </div>{/* end scroll area */}
+
+            {/* Selection summary bar — always at bottom, no layout jump */}
+            {vlanSelected.size > 0 && ((): React.ReactElement => {
+              const sel = vlans.filter(v => vlanSelected.has(v.vlan_id)).sort((a, b) => a.vlan_id - b.vlan_id)
+              const idList = sel.map(v => v.vlan_id).join(',')
+              return (
+                <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 8, background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)', flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {sel.length} VLAN{sel.length > 1 ? 's' : ''} selected — trunk allowed list
+                    </span>
+                    <button onClick={() => setVlanSelected(new Set())}
+                      style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                      Clear
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                    <code style={{ flex: 1, fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: '#e2e8f0', background: 'rgba(0,0,0,0.3)', padding: '6px 10px', borderRadius: 6, userSelect: 'all', wordBreak: 'break-all' }}>
+                      {idList}
+                    </code>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(idList); setVlanCopied(true); setTimeout(() => setVlanCopied(false), 2000) }}
+                      style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: vlanCopied ? '#34d399' : 'var(--accent-hex)', color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      {vlanCopied ? '✓ Copied!' : '📋 Copy IDs'}
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    {sel.map(v => (
+                      <span key={v.vlan_id} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.3)', color: '#a5b4fc' }}>
+                        {v.vlan_id}{v.name ? ` · ${v.name}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </Modal>
+      )}
+
+      {/* ── RADIUS add/edit form modal ── */}
+      {(radiusModal === 'new' || radiusModal === 'edit') && (
+        <Modal title="" onClose={() => { setRadiusModal(null); setRadiusError('') }}>
+          <div style={{ padding: '24px 28px', minWidth: 400 }}>
+            <h3 style={{ margin: '0 0 18px', fontSize: 15, fontWeight: 700 }}>
+              {radiusModal === 'new' ? '+ New RADIUS Server' : 'Edit RADIUS Server'}
+            </h3>
+            {radiusError && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', fontSize: 12 }}>{radiusError}</div>}
+            {[
+              { label: 'Name', key: 'name', type: 'text', placeholder: 'e.g. Main RADIUS' },
+              { label: 'Host / IP', key: 'host', type: 'text', placeholder: '192.168.1.10' },
+              { label: 'Auth Port', key: 'auth_port', type: 'number', placeholder: '1812' },
+              { label: 'Acct Port', key: 'acct_port', type: 'number', placeholder: '1813' },
+              { label: 'Shared Secret', key: 'secret', type: 'password', placeholder: '••••••••' },
+              { label: 'Timeout (s)', key: 'timeout', type: 'number', placeholder: '5' },
+              { label: 'Retries', key: 'retries', type: 'number', placeholder: '2' },
+            ].map(f => (
+              <div key={f.key} style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>{f.label}</label>
+                <input
+                  type={f.type} placeholder={f.placeholder}
+                  value={(radiusForm as any)[f.key]}
+                  onChange={e => setRadiusForm(prev => ({ ...prev, [f.key]: f.type === 'number' ? +e.target.value : e.target.value }))}
+                  style={{ width: '100%', padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13, boxSizing: 'border-box' }}
+                />
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+              <button onClick={() => { setRadiusModal(null); setRadiusError('') }} style={{ padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+              <button
+                disabled={radiusSaving}
+                onClick={async () => {
+                  if (!radiusForm.name || !radiusForm.host || !radiusForm.secret) { setRadiusError('Name, host, and secret are required'); return }
+                  setRadiusSaving(true); setRadiusError('')
+                  try {
+                    if (radiusModal === 'new') {
+                      const row = await api.post<{ id: string }>('/radius-servers', radiusForm)
+                      setRadiusServers(prev => [...prev, { ...radiusForm, id: row.id, description: null }])
+                    } else {
+                      await api.put(`/radius-servers/${editingRadius!.id}`, radiusForm)
+                      setRadiusServers(prev => prev.map(r => r.id === editingRadius!.id ? { ...r, ...radiusForm } : r))
+                    }
+                    setRadiusModal(null)
+                  } catch (e: any) { setRadiusError(e.message ?? 'Save failed') }
+                  setRadiusSaving(false)
+                }}
+                style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: radiusSaving ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: radiusSaving ? 0.65 : 1 }}>
+                {radiusSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── RADIUS push confirm modal ── */}
+      {radiusModal === 'push' && (
+        <Modal title="" onClose={() => { setRadiusModal(null); setRadiusError('') }}>
+          <div style={{ padding: '24px 28px', minWidth: 380 }}>
+            <h3 style={{ margin: '0 0 14px', fontSize: 15, fontWeight: 700 }}>🔐 Push RADIUS Config</h3>
+            <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--text-muted)' }}>
+              Push RADIUS + AAA + 802.1X global config to <strong style={{ color: 'var(--text)' }}>{selected?.name}</strong> via SSH.
+            </p>
+            <div style={{ marginBottom: 16 }}>
+              {radiusServers.filter(r => radiusSelected.has(r.id)).map(r => (
+                <div key={r.id} style={{ padding: '8px 12px', marginBottom: 6, borderRadius: 6, background: 'var(--bg-panel)', border: '1px solid var(--border)', fontSize: 13 }}>
+                  <strong>{r.name}</strong>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontFamily: 'monospace', fontSize: 12 }}>{r.host}:{r.auth_port}</span>
+                </div>
+              ))}
+            </div>
+            {radiusError && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', fontSize: 12 }}>{radiusError}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => { setRadiusModal(null); setRadiusError('') }} style={{ padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+              <button
+                disabled={radiusPushing}
+                onClick={async () => {
+                  if (!selectedId) return
+                  setRadiusPushing(true); setRadiusError('')
+                  try {
+                    await requestElevation('radius_config_push')
+                    await api.post(`/servers/${selectedId}/push-radius`, { radius_server_ids: [...radiusSelected] })
+                    setRadiusModal(null)
+                    setShowRadiusPanel(false)
+                  } catch (e: any) { setRadiusError(e.message ?? 'Push failed') }
+                  setRadiusPushing(false)
+                }}
+                style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: '#f97316', color: '#fff', cursor: radiusPushing ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: radiusPushing ? 0.65 : 1 }}>
+                {radiusPushing ? 'Pushing…' : 'Push Config'}
               </button>
             </div>
           </div>

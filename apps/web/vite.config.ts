@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   build: { sourcemap: true },
   server: {
-    port: 3000,
+    port: 4004,
     proxy: {
       '/api': { target: 'http://localhost:3001', rewrite: (path) => path.replace(/^\/api/, '') },
       '/auth': { target: 'http://localhost:3001' },

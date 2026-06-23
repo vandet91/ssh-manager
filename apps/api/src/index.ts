@@ -41,6 +41,7 @@ import networkPingRoutes from './modules/servers/network-ping.routes'
 import firmwareRepoRoutes from './modules/firmware-repo/firmware-repo.routes'
 import configBackupRoutes from './modules/config-backup/config-backup.routes'
 import networkScanRoutes from './modules/network-scan/network-scan.routes'
+import radiusRoutes from './modules/radius/radius.routes'
 import { startTelegramBot } from './modules/telegram/telegram.service'
 import { startRotationWorker, scheduleRotations } from './jobs/rotation.worker'
 import { FileMigrationProvider, Migrator } from 'kysely'
@@ -160,6 +161,7 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(networkProfileRoutes)
   await fastify.register(snmpProfileRoutes)
   await fastify.register(networkPingRoutes)
+  await fastify.register(radiusRoutes)
   await fastify.register(firmwareRepoRoutes)
   await fastify.register(configBackupRoutes)
   await fastify.register(networkScanRoutes)

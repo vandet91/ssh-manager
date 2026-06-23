@@ -43,7 +43,7 @@ interface DbConnection {
   created_at: string
 }
 
-interface Server { id: string; name: string; hostname: string }
+interface Server { id: string; name: string; hostname: string; os_type?: string | null }
 
 interface QueryResult {
   columns: string[]
@@ -220,7 +220,7 @@ export default function DbConnector() {
       .then(r => setConnections(r.connections))
       .catch(() => {})
       .finally(() => setConnectionsLoading(false))
-    api.get<Server[]>('/servers').then(setServers).catch(() => {})
+    api.get<Server[]>('/servers').then(all => setServers(all.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))).catch(() => {})
   }, [])
 
   useEffect(() => { load() }, [load])

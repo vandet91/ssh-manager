@@ -47,7 +47,7 @@ export default function Keys() {
     api.get<SshKey[]>('/keys').then(setKeys).catch(() => {})
     api.get<ArchivedKey[]>('/keys/archived').then(setArchivedKeys).catch(() => {})
     api.get<{ data: Assignment[] } | Assignment[]>('/assignments?limit=1000').then((r) => setAssignments(Array.isArray(r) ? r : (r as { data: Assignment[] }).data ?? [])).catch(() => {})
-    api.get<Server[]>('/servers').then(setServers).catch(() => {})
+    api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))).catch(() => {})
     api.get<OrphanRow[]>('/keys/orphaned-assignments').then(setOrphans).catch(() => {})
   }
   useEffect(() => {

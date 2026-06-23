@@ -83,7 +83,7 @@ export default function Terminal() {
   const searchInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   useEffect(() => {
-    api.get<Server[]>('/servers').then(setServers).catch(() => {})
+    api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))).catch(() => {})
     api.get<Assignment[]>('/assignments').then(setAssignments).catch(() => {})
   }, [])
 

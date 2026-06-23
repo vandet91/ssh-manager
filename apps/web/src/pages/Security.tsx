@@ -41,7 +41,7 @@ export default function Security() {
 
   const load = async () => {
     const svrs = await api.get<Server[]>('/servers').catch(() => [] as Server[])
-    setServers(svrs)
+    setServers(svrs.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))
     const scanMap: Record<string, SecurityScan> = {}
     await Promise.all(
       svrs.map(async (s) => {
