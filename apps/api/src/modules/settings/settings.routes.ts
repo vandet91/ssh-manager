@@ -379,7 +379,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     const { passphrase } = z.object({ passphrase: z.string().min(8) }).parse(req.query)
     const vaultKey = getVaultKey()
 
-    const servers = await (db as any).selectFrom('servers').select(['id', 'name', 'host']).orderBy('name').execute()
+    const servers = await (db as any).selectFrom('servers').select(['id', 'name', 'hostname']).orderBy('name').execute()
     const allCreds = await (db as any).selectFrom('server_credentials')
       .select(['id', 'server_id', 'category', 'label', 'linux_user', 'service_name', 'service_username', 'notes', 'password_enc', 'is_archived'])
       .execute()
@@ -388,7 +388,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
       exported_at: new Date().toISOString(),
       servers: (servers as any[]).map((s: any) => ({
         name: s.name,
-        host: s.host,
+        host: s.hostname,
         credentials: (allCreds as any[])
           .filter((c: any) => c.server_id === s.id && !c.is_archived)
           .map((c: any) => ({
@@ -433,13 +433,13 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     const vaultKey = getVaultKey()
-    const servers = await (db as any).selectFrom('servers').select(['id', 'name', 'host']).execute()
+    const servers = await (db as any).selectFrom('servers').select(['id', 'name', 'hostname']).execute()
 
     let imported = 0, skipped = 0
 
     for (const exportedServer of (payload.servers ?? [])) {
       const server = (servers as any[]).find((s: any) =>
-        s.host === exportedServer.host || s.name === exportedServer.name
+        s.hostname === exportedServer.host || s.name === exportedServer.name
       )
       if (!server) { skipped += (exportedServer.credentials?.length ?? 0); continue }
 
