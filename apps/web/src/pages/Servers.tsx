@@ -2303,10 +2303,22 @@ export default function Servers() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-gray-500">Passwords are encrypted with AES-256-GCM and stored in the vault. Reveal is audit-logged.</p>
-                    <button onClick={() => { setShowCredForm(true); setCredForm({ category: 'linux', linux_user: '', service_name: '', service_username: '', label: '', password: '', notes: '', apply_on_server: false }) }}
-                      className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors">
-                      + Add Credential
-                    </button>
+                    <div className="flex gap-2">
+                      <button onClick={() => {
+                        const a = document.createElement('a')
+                        a.href = '/api/vault/export/keepass'
+                        a.download = ''
+                        document.body.appendChild(a)
+                        a.click()
+                        document.body.removeChild(a)
+                      }} className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors" title="Export all vault entries as KeePass XML">
+                        ⬇ KeePass Export
+                      </button>
+                      <button onClick={() => { setShowCredForm(true); setCredForm({ category: 'linux', linux_user: '', service_name: '', service_username: '', label: '', password: '', notes: '', apply_on_server: false }) }}
+                        className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors">
+                        + Add Credential
+                      </button>
+                    </div>
                   </div>
 
                   {/* Add credential form */}

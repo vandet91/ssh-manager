@@ -311,6 +311,75 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return { ok: true }
   })
 
+  // GET /vault/export/keepass — export all active entries as KeePass XML
+  fastify.get('/vault/export/keepass', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+    const vaultKey = getVaultKey()
+    const anyDb = db as any
+
+    const entries = await anyDb
+      .selectFrom('vault_entries')
+      .where('vault_entries.is_archived', '=', false)
+      .selectAll('vault_entries')
+      .execute() as any[]
+
+    const esc = (s: string | null | undefined) =>
+      (s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
+
+    // Group by type
+    const groups: Record<string, any[]> = {}
+    for (const e of entries) {
+      const group = e.type ?? 'other'
+      if (!groups[group]) groups[group] = []
+      groups[group].push(e)
+    }
+
+    const xmlEntry = (e: any) => {
+      let password = ''
+      if (e.password_enc) {
+        try { password = decryptSecret(e.password_enc, vaultKey) } catch {}
+      }
+      const fields = [
+        ['Title', e.title],
+        ['UserName', e.username ?? ''],
+        ['Password', password],
+        ['URL', e.url ?? ''],
+        ['Notes', [e.notes, e.category ? `Category: ${e.category}` : '', e.ou ? `OU: ${e.ou}` : '', e.tags?.length ? `Tags: ${e.tags.join(', ')}` : ''].filter(Boolean).join('\n')],
+      ]
+      return `      <Entry>\n${fields.map(([k, v]) =>
+        `        <String><Key>${esc(k)}</Key><Value>${esc(v as string)}</Value></String>`
+      ).join('\n')}\n      </Entry>`
+    }
+
+    const groupXml = (name: string, items: any[]) =>
+      `    <Group>\n      <Name>${esc(name)}</Name>\n${items.map(xmlEntry).join('\n')}\n    </Group>`
+
+    const dateStr = new Date().toISOString().slice(0, 10)
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<KeePassFile>
+  <Meta>
+    <Generator>SSH Manager</Generator>
+    <DatabaseName>SSH Manager Vault</DatabaseName>
+    <DatabaseDescription>Exported ${dateStr}</DatabaseDescription>
+  </Meta>
+  <Root>
+    <Group>
+      <Name>SSH Manager</Name>
+${Object.entries(groups).map(([name, items]) => groupXml(name, items)).join('\n')}
+    </Group>
+  </Root>
+</KeePassFile>`
+
+    await writeAuditLog({
+      userId: req.session.user!.id, userEmail: req.session.user!.email,
+      action: 'vault.exported_keepass', resource: 'vault', resourceId: undefined,
+      details: { count: entries.length }, request: req,
+    })
+
+    reply.header('Content-Type', 'application/xml; charset=utf-8')
+    reply.header('Content-Disposition', `attachment; filename="ssh-manager-vault-${dateStr}.xml"`)
+    return reply.send(xml)
+  })
+
   // DELETE /vault/:id/purge — permanently delete
   fastify.delete('/vault/:id/purge', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
