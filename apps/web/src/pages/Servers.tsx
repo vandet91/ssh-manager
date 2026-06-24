@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, Server, ServerInfo, SshKey, ServerCredential, CredentialCategory, SoftwareItem, Recommendation, RecSeverity, HostType, BenchmarkResult, BenchmarkCheck, CheckStatus, CheckCategory, RdpCredential } from '../api/client'
 import Modal from '../components/Modal'
 import Badge from '../components/Badge'
+import { usePermissions } from '../context/PermissionContext'
 
 type SetupStep = 'credentials' | 'working' | 'done' | 'error'
 
@@ -80,6 +81,8 @@ const OS_OPTS = [
 ]
 
 export default function Servers() {
+  const { can } = usePermissions()
+  const canWrite = can('servers:write')
   const [servers, setServers] = useState<Server[]>([])
   const [allKeys, setAllKeys] = useState<SshKey[]>([])
   const [showAdd, setShowAdd] = useState(false)
@@ -842,9 +845,11 @@ export default function Servers() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Servers</h1>
-        <button onClick={() => setShowAdd(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors">
-          + Add Server
-        </button>
+        {canWrite && (
+          <button onClick={() => setShowAdd(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors">
+            + Add Server
+          </button>
+        )}
       </div>
 
       {/* Filters */}
@@ -933,7 +938,7 @@ export default function Servers() {
                 <td className="px-3 py-2 text-gray-400 text-xs" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>{s.last_connected_at ? new Date(s.last_connected_at).toLocaleDateString() : <span className="text-gray-600">—</span>}</td>
                 <td className="px-3 py-2">
                   <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', alignItems: 'center' }}>
-                    {s.os_type === 'windows' ? (
+                    {canWrite && (s.os_type === 'windows' ? (
                       <>
                         {!s.windows_rdp_ready && (
                           <button onClick={() => openSetup(s)}
@@ -993,8 +998,8 @@ export default function Servers() {
                           : 'Test'}
                       </button>
                       </>
-                    )}
-                    {s.os_type !== 'windows' && (
+                    ))}
+                    {canWrite && s.os_type !== 'windows' && (
                       <button onClick={() => verifyHostKey(s.id)} disabled={verifyResults[s.id] === 'verifying'}
                         className={`px-2 py-1 text-xs rounded transition-colors disabled:opacity-60 whitespace-nowrap ${
                           verifyResults[s.id] === 'ok' ? 'bg-green-700 text-white'
@@ -1004,10 +1009,12 @@ export default function Servers() {
                           : verifyResults[s.id] === 'mismatch' ? '✗ Mismatch' : verifyResults[s.id] === 'failed' ? '✗ Failed' : 'Verify'}
                       </button>
                     )}
-                    <button onClick={() => openEdit(s)}
-                      className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors whitespace-nowrap">
-                      Edit
-                    </button>
+                    {canWrite && (
+                      <button onClick={() => openEdit(s)}
+                        className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors whitespace-nowrap">
+                        Edit
+                      </button>
+                    )}
                     {(s.management_key_id || s.os_type === 'windows') && (
                       <button onClick={() => openInfo(s)}
                         className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors whitespace-nowrap">
@@ -1037,10 +1044,12 @@ export default function Servers() {
                         </button>
                       </>
                     )}
-                    <button onClick={() => deleteServer(s)}
-                      className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors whitespace-nowrap">
-                      Delete
-                    </button>
+                    {canWrite && (
+                      <button onClick={() => deleteServer(s)}
+                        className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors whitespace-nowrap">
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>

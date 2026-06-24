@@ -26,8 +26,8 @@ async function usersRoutes(fastify: FastifyInstance): Promise<void> {
     return user
   })
 
-  // GET /users
-  fastify.get('/users', { preHandler: requirePermission('admin') }, async (req) => {
+  // GET /users — admin sees full list; non-admin gets id+email only (for dropdowns)
+  fastify.get('/users', { preHandler: requirePermission('assignments:read') }, async (req) => {
     const query = z.object({ page: z.coerce.number().default(1), limit: z.coerce.number().default(50) }).parse(req.query)
     const offset = (query.page - 1) * query.limit
     const [users, countRow] = await Promise.all([

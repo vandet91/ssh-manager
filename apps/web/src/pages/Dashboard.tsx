@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, AuditLog, SshKey, Server, Assignment, User, VaultEntry } from '../api/client'
+import { usePermissions } from '../context/PermissionContext'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ function StatCard({ icon, label, value, sub, accent, onClick }: {
 
 export default function Dashboard() {
   const nav = useNavigate()
+  const { isAdmin } = usePermissions()
 
   const [servers, setServers] = useState<Server[]>([])
   const [keys, setKeys] = useState<SshKey[]>([])
@@ -83,7 +85,7 @@ export default function Dashboard() {
       api.get<Server[]>('/servers').catch(() => [] as Server[]),
       api.get<SshKey[]>('/keys').catch(() => [] as SshKey[]),
       api.get<Assignment[] | { data: Assignment[] }>('/assignments?limit=200').catch(() => [] as Assignment[]),
-      api.get<{ users: User[] }>('/users?limit=200').catch(() => ({ users: [] })),
+      (isAdmin ? api.get<{ users: User[] }>('/users?limit=200') : Promise.resolve({ users: [] })).catch(() => ({ users: [] })),
       api.get<VaultEntry[]>('/vault?limit=1000').catch(() => [] as VaultEntry[]),
       api.get<AuditLog[]>('/logs/audit?limit=20').catch(() => [] as AuditLog[]),
     ]).then(([srv, k, asgn, usrResp, vlt, lg]) => {
@@ -177,9 +179,9 @@ export default function Dashboard() {
         <StatCard icon="🔐" label="Vault" value={vault.length}
           sub="stored credentials"
           accent="#3fb950" onClick={() => nav('/vault')} />
-        <StatCard icon="👤" label="Users" value={users.filter(u => u.is_active).length}
+        {isAdmin && <StatCard icon="👤" label="Users" value={users.filter(u => u.is_active).length}
           sub={`${users.length} total`}
-          accent="#ec6547" onClick={() => nav('/users')} />
+          accent="#ec6547" onClick={() => nav('/users')} />}
         <StatCard icon="♻" label="Rotation Alerts" value={rotationAlerts}
           sub={alertSub}
           accent={rotationAlerts > 0 ? '#f85149' : '#3fb950'} onClick={() => nav('/keys')} />
