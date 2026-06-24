@@ -10,6 +10,147 @@ import '@xterm/xterm/css/xterm.css'
 
 const MIN_FONT = 10
 const MAX_FONT = 24
+
+function DistroLogo({ distro, osType }: { distro: string | null | undefined; osType: string | null | undefined }) {
+  const d = distro ?? ''
+  const isWin = osType === 'windows'
+
+  if (isWin || d.startsWith('windows')) {
+    // Windows logo tiles
+    return (
+      <svg width="72" height="72" viewBox="0 0 88 88" fill="none">
+        <rect x="2" y="2" width="40" height="40" rx="3" fill="#f25022"/>
+        <rect x="46" y="2" width="40" height="40" rx="3" fill="#7fba00"/>
+        <rect x="2" y="46" width="40" height="40" rx="3" fill="#00a4ef"/>
+        <rect x="46" y="46" width="40" height="40" rx="3" fill="#ffb900"/>
+      </svg>
+    )
+  }
+  if (d === 'ubuntu') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#E95420"/>
+        <circle cx="50" cy="50" r="20" fill="none" stroke="white" strokeWidth="10"/>
+        <circle cx="50" cy="18" r="9" fill="white"/>
+        <circle cx="78" cy="66" r="9" fill="white"/>
+        <circle cx="22" cy="66" r="9" fill="white"/>
+      </svg>
+    )
+  }
+  if (d === 'debian') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#A81D33"/>
+        <text x="50" y="68" textAnchor="middle" fontSize="60" fill="white" fontFamily="serif">D</text>
+      </svg>
+    )
+  }
+  if (d === 'centos') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <polygon points="50,2 98,50 50,98 2,50" fill="#932279"/>
+        <polygon points="50,2 50,50 2,50" fill="#EF9234"/>
+        <polygon points="98,50 50,50 50,98" fill="#EF9234"/>
+        <polygon points="50,2 98,50 50,50" fill="#fff" opacity="0.15"/>
+        <rect x="35" y="35" width="30" height="30" fill="white"/>
+      </svg>
+    )
+  }
+  if (d === 'rhel') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#CC0000"/>
+        <text x="50" y="62" textAnchor="middle" fontSize="32" fill="white" fontWeight="bold" fontFamily="sans-serif">RHEL</text>
+      </svg>
+    )
+  }
+  if (d === 'rocky') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#10B981"/>
+        <text x="50" y="65" textAnchor="middle" fontSize="38" fill="white" fontWeight="bold" fontFamily="sans-serif">R</text>
+      </svg>
+    )
+  }
+  if (d === 'almalinux') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#F4A522"/>
+        <text x="50" y="65" textAnchor="middle" fontSize="38" fill="white" fontWeight="bold" fontFamily="sans-serif">A</text>
+      </svg>
+    )
+  }
+  if (d === 'fedora') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#294172"/>
+        <text x="50" y="65" textAnchor="middle" fontSize="38" fill="#3C6EB4" fontWeight="bold" fontFamily="sans-serif">f</text>
+        <text x="50" y="65" textAnchor="middle" fontSize="38" fill="white" fontWeight="bold" fontFamily="sans-serif" opacity="0.9">f</text>
+      </svg>
+    )
+  }
+  if (d === 'opensuse') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#73BA25"/>
+        <text x="50" y="65" textAnchor="middle" fontSize="30" fill="white" fontWeight="bold" fontFamily="sans-serif">SUSE</text>
+      </svg>
+    )
+  }
+  if (d === 'arch') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#1793D1"/>
+        <polygon points="50,10 90,85 10,85" fill="none" stroke="white" strokeWidth="8"/>
+        <polygon points="50,32 75,78 25,78" fill="white"/>
+      </svg>
+    )
+  }
+  if (d === 'alpine') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#0D597F"/>
+        <polygon points="50,15 85,80 15,80" fill="white"/>
+        <polygon points="50,38 72,80 28,80" fill="#0D597F"/>
+      </svg>
+    )
+  }
+  if (d === 'kali') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#267BF0"/>
+        <text x="50" y="65" textAnchor="middle" fontSize="30" fill="white" fontWeight="bold" fontFamily="sans-serif">KALI</text>
+      </svg>
+    )
+  }
+  if (d === 'proxmox') {
+    return (
+      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
+        <circle cx="50" cy="50" r="48" fill="#E57000"/>
+        <text x="50" y="65" textAnchor="middle" fontSize="26" fill="white" fontWeight="bold" fontFamily="sans-serif">PVE</text>
+      </svg>
+    )
+  }
+
+  // Default: Tux
+  return (
+    <svg width="72" height="86" viewBox="0 0 80 96" fill="none">
+      <ellipse cx="40" cy="68" rx="28" ry="26" fill="#1a1a1a"/>
+      <ellipse cx="40" cy="72" rx="18" ry="18" fill="#f5f0e0"/>
+      <ellipse cx="40" cy="28" rx="22" ry="22" fill="#1a1a1a"/>
+      <ellipse cx="40" cy="30" rx="14" ry="14" fill="#f5f0e0"/>
+      <circle cx="34" cy="25" r="3.5" fill="white"/>
+      <circle cx="46" cy="25" r="3.5" fill="white"/>
+      <circle cx="34.8" cy="25" r="2" fill="#1a1a1a"/>
+      <circle cx="46.8" cy="25" r="2" fill="#1a1a1a"/>
+      <ellipse cx="40" cy="34" rx="6" ry="4" fill="#f4a020"/>
+      <ellipse cx="30" cy="92" rx="10" ry="5" fill="#f4a020"/>
+      <ellipse cx="50" cy="92" rx="10" ry="5" fill="#f4a020"/>
+      <ellipse cx="14" cy="68" rx="8" ry="18" fill="#1a1a1a" transform="rotate(-10 14 68)"/>
+      <ellipse cx="66" cy="68" rx="8" ry="18" fill="#1a1a1a" transform="rotate(10 66 68)"/>
+    </svg>
+  )
+}
 const DEFAULT_FONT = 14
 
 // ── Per-tab state ────────────────────────────────────────────────────────────
@@ -81,6 +222,19 @@ export default function Terminal() {
   const searchRefs  = useRef<Record<string, SearchAddon>>({})
   const timerRefs   = useRef<Record<string, ReturnType<typeof setInterval>>>({})
   const searchInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const canvasWrapperRef = useRef<HTMLDivElement | null>(null)
+
+
+  // ResizeObserver on the wrapper (not the xterm div) — avoids feedback loop
+  useEffect(() => {
+    const el = canvasWrapperRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(() => fitRefs.current[activeTabId]?.fit())
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [activeTabId])
 
   useEffect(() => {
     Promise.all([
@@ -110,13 +264,13 @@ export default function Terminal() {
     api.get<typeof linuxNotes>('/share/list').then(all => setLinuxNotes(all.filter((x: any) => x.type === 'text' && x.device_type === (activeServerOs === 'windows' ? 'windows' : 'linux')))).catch(() => {})
   }, [showCmdPanel, activeServerOs])
 
-  // Fit active terminal when switching tabs
+  // Fit + focus when switching tabs
   useEffect(() => {
     const id = activeTabId
     setTimeout(() => {
       fitRefs.current[id]?.fit()
       xtermRefs.current[id]?.focus()
-    }, 30)
+    }, 50)
   }, [activeTabId])
 
   // Global Ctrl+F for active tab search
@@ -449,7 +603,7 @@ export default function Terminal() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-gray-950">
+    <div className="flex flex-col bg-gray-950" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
 
       {/* ── Tab bar ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center bg-gray-900 border-b border-gray-800 overflow-x-auto shrink-0">
@@ -650,9 +804,10 @@ export default function Terminal() {
         </div>
       )}
 
-      {/* ── Terminal canvases (all rendered, only active visible) ─────────────── */}
-      <div className="flex-1 overflow-hidden flex">
-        <div className="flex-1 relative overflow-hidden">
+      {/* ── Terminal canvases + right panel ─────────────────────────────────── */}
+      <div className="flex-1 flex" style={{ overflow: 'hidden', minHeight: 0 }}>
+        {/* Terminal canvas — has its own xterm scrollbar */}
+        <div ref={canvasWrapperRef} className="flex-1 relative" style={{ overflow: 'hidden', minHeight: 0 }}>
         {tabs.map((tab) => (
           <div
             key={tab.id}
@@ -699,77 +854,149 @@ export default function Terminal() {
         ))}
 
         </div>
-        {/* ── Commands sidebar ── */}
-        {showCmdPanel && activeTab?.connected && (() => {
+
+        {/* ── Right panel (always 300px — terminal never resizes) ── */}
+        {(() => {
           const isWin = activeServerOs === 'windows'
-          const cmds = isWin ? winCmds : linuxCmds
-          const cats = ['All', ...Array.from(new Set(cmds.map(c => c.category))).sort()]
-          const filtered = cmds.filter(c =>
-            (cmdCat === 'All' || c.category === cmdCat) &&
-            (!cmdSearch || c.label.toLowerCase().includes(cmdSearch.toLowerCase()) || c.command.toLowerCase().includes(cmdSearch.toLowerCase()))
-          )
-          const sendCmd = (cmd: string) => {
-            const ws = wsRefs.current[activeTabId]
-            if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: cmd + '\n' }))
-          }
-          return (
-            <div style={{ width: 300, background: '#111827', borderLeft: '1px solid #1f2937', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
-              <div style={{ padding: '8px 10px', borderBottom: '1px solid #1f2937', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <input value={cmdSearch} onChange={e => setCmdSearch(e.target.value)} placeholder="Search…"
-                  style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: '1px solid #374151', background: '#1f2937', color: '#e5e7eb', fontSize: 11, boxSizing: 'border-box' as const }} />
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' as const }}>
-                  {cats.map(cat => (
-                    <button key={cat} onClick={() => setCmdCat(cat)} style={{
-                      padding: '2px 7px', borderRadius: 999, border: '1px solid', fontSize: 10, cursor: 'pointer',
-                      borderColor: cmdCat === cat ? '#6366f1' : '#374151',
-                      background: cmdCat === cat ? '#6366f122' : 'transparent',
-                      color: cmdCat === cat ? '#a5b4fc' : '#9ca3af',
-                    }}>{cat}</button>
+          const isConnected = activeTab?.connected
+
+          // Commands list view
+          if (showCmdPanel && isConnected) {
+            const cmds = isWin ? winCmds : linuxCmds
+            const cats = ['All', ...Array.from(new Set(cmds.map(c => c.category))).sort()]
+            const filtered = cmds.filter(c =>
+              (cmdCat === 'All' || c.category === cmdCat) &&
+              (!cmdSearch || c.label.toLowerCase().includes(cmdSearch.toLowerCase()) || c.command.toLowerCase().includes(cmdSearch.toLowerCase()))
+            )
+            const sendCmd = (cmd: string) => {
+              const ws = wsRefs.current[activeTabId]
+              if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: cmd + '\n' }))
+            }
+            return (
+              <div style={{ width: 300, flexShrink: 0, height: '100%', background: '#111827', borderLeft: '1px solid #1f2937', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div style={{ padding: '8px 10px', borderBottom: '1px solid #1f2937', display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                  <input value={cmdSearch} onChange={e => setCmdSearch(e.target.value)} placeholder="Search…"
+                    style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: '1px solid #374151', background: '#1f2937', color: '#e5e7eb', fontSize: 11, boxSizing: 'border-box' as const }} />
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' as const }}>
+                    {cats.map(cat => (
+                      <button key={cat} onClick={() => setCmdCat(cat)} style={{
+                        padding: '2px 7px', borderRadius: 999, border: '1px solid', fontSize: 10, cursor: 'pointer',
+                        borderColor: cmdCat === cat ? '#6366f1' : '#374151',
+                        background: cmdCat === cat ? '#6366f122' : 'transparent',
+                        color: cmdCat === cat ? '#a5b4fc' : '#9ca3af',
+                      }}>{cat}</button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {linuxNotes.length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: isWin ? '#0078d4' : '#e95420', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        {isWin ? '🪟 Windows Notes' : '🐧 Linux Notes'} ({linuxNotes.length})
+                      </div>
+                      {linuxNotes.map(note => (
+                        <div key={note.id} style={{ background: '#fff9e6', border: `2px solid ${isWin ? '#0078d4' : '#e95420'}`, borderRadius: 6, padding: 8, marginBottom: 5 }}>
+                          {note.name && note.name !== 'Note' && (
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#c04400', marginBottom: 3 }}>{note.name}</div>
+                          )}
+                          <code style={{ display: 'block', fontSize: 10, color: '#333', fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 5 }}>{note.content}</code>
+                          <button onClick={() => sendCmd(note.content || '')} style={{
+                            width: '100%', padding: '4px', borderRadius: 4, border: 'none',
+                            background: '#4f46e5', color: '#fff', fontSize: 10, fontWeight: 600, cursor: 'pointer',
+                          }}>▶ Run</button>
+                        </div>
+                      ))}
+                      <div style={{ height: 1, background: '#1f2937', margin: '8px 0' }} />
+                    </div>
+                  )}
+                  {filtered.map(c => (
+                    <div key={c.id} style={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6, padding: '7px 9px' }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: '#e5e7eb', marginBottom: 2 }}>{c.label}</div>
+                      <code style={{ display: 'block', fontSize: 10, color: '#93c5fd', fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 5 }}>{c.command}</code>
+                      {c.description && <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 5 }}>{c.description}</div>}
+                      <button onClick={() => sendCmd(c.command)} style={{
+                        width: '100%', padding: '4px', borderRadius: 4, border: 'none',
+                        background: '#4f46e5', color: '#fff', fontSize: 10, fontWeight: 600, cursor: 'pointer',
+                      }}>▶ Run</button>
+                    </div>
                   ))}
                 </div>
               </div>
-              <div style={{ flex: 1, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {/* Linux sticky notes */}
-                {linuxNotes.length > 0 && (
-                  <div style={{ marginBottom: 6 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: isWin ? '#0078d4' : '#e95420', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      {isWin ? '🪟 Windows Notes' : '🐧 Linux Notes'} ({linuxNotes.length})
+            )
+          }
+
+          // Mascot / info panel (always visible when not showing commands)
+          const connectedServer = servers.find(s => s.id === activeTab?.selectedServer)
+          return (
+            <div style={{ width: 300, flexShrink: 0, minHeight: 0, background: '#0d1117', borderLeft: '1px solid #1f2937', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0, overflow: 'hidden', padding: '24px 20px' }}>
+              {isConnected && connectedServer ? (
+                <>
+                  {/* OS Logo */}
+                  <div style={{ marginBottom: 20 }}>
+                    <DistroLogo distro={connectedServer.distro} osType={connectedServer.os_type} />
+                  </div>
+
+                  {/* Server info */}
+                  <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {/* Server name */}
+                    <div style={{ textAlign: 'center', marginBottom: 4 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: '#e5e7eb', marginBottom: 2 }}>{connectedServer.name}</div>
+                      <div style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace' }}>{connectedServer.hostname}</div>
                     </div>
-                    {linuxNotes.map(note => (
-                      <div key={note.id} style={{ background: '#fff9e6', border: `2px solid ${isWin ? '#0078d4' : '#e95420'}`, borderRadius: 6, padding: 8, marginBottom: 5 }}>
-                        {note.name && note.name !== 'Note' && (
-                          <div style={{ fontSize: 10, fontWeight: 700, color: '#c04400', marginBottom: 3 }}>{note.name}</div>
-                        )}
-                        <code style={{ display: 'block', fontSize: 10, color: '#333', fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 5 }}>{note.content}</code>
-                        <button onClick={() => sendCmd(note.content || '')} style={{
-                          width: '100%', padding: '4px', borderRadius: 4, border: 'none',
-                          background: activeTab?.connected ? '#4f46e5' : '#374151',
-                          color: activeTab?.connected ? '#fff' : '#6b7280',
-                          fontSize: 10, fontWeight: 600, cursor: activeTab?.connected ? 'pointer' : 'not-allowed',
-                        }}>
-                          {activeTab?.connected ? '▶ Run' : 'Connect first'}
-                        </button>
+
+                    <div style={{ height: 1, background: '#1f2937', margin: '2px 0' }} />
+
+                    {/* OS */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 11, color: '#6b7280' }}>OS</span>
+                      <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 500 }}>
+                        {connectedServer.distro
+                          ? connectedServer.distro.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                          : isWin ? 'Windows' : 'Linux'}
+                      </span>
+                    </div>
+
+                    {/* User */}
+                    {activeTab?.selectedUser && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: '#6b7280' }}>User</span>
+                        <span style={{ fontSize: 11, color: '#9ca3af', fontFamily: 'monospace' }}>{activeTab.selectedUser}</span>
                       </div>
-                    ))}
-                    <div style={{ height: 1, background: '#1f2937', margin: '8px 0' }} />
+                    )}
+
+                    {/* SSH Key */}
+                    {activeTab?.usedKey && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: '#6b7280' }}>Key</span>
+                        <span style={{ fontSize: 11, color: activeTab.usedKey.startsWith('⚠') ? '#fbbf24' : '#4ade80', fontFamily: 'monospace', maxWidth: 160, textAlign: 'right', wordBreak: 'break-all' }}>{activeTab.usedKey}</span>
+                      </div>
+                    )}
+
+                    {/* Session time */}
+                    {activeTab && activeTab.sessionSeconds > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: '#6b7280' }}>Session</span>
+                        <span style={{ fontSize: 11, color: '#9ca3af', fontFamily: 'monospace' }}>{formatDuration(activeTab.sessionSeconds)}</span>
+                      </div>
+                    )}
+
+                    <div style={{ height: 1, background: '#1f2937', margin: '2px 0' }} />
+
+                    {/* Hint */}
+                    <div style={{ textAlign: 'center', marginTop: 4 }}>
+                      <span style={{ fontSize: 10, color: '#374151' }}>Click </span>
+                      <span style={{ fontSize: 10, color: '#6366f1' }}>📚 Commands</span>
+                      <span style={{ fontSize: 10, color: '#374151' }}> for the command library</span>
+                    </div>
                   </div>
-                )}
-                {filtered.map(c => (
-                  <div key={c.id} style={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6, padding: '7px 9px' }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#e5e7eb', marginBottom: 2 }}>{c.label}</div>
-                    <code style={{ display: 'block', fontSize: 10, color: '#93c5fd', fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 5 }}>{c.command}</code>
-                    {c.description && <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 5 }}>{c.description}</div>}
-                    <button onClick={() => sendCmd(c.command)} style={{
-                      width: '100%', padding: '4px', borderRadius: 4, border: 'none',
-                      background: activeTab?.connected ? '#4f46e5' : '#374151',
-                      color: activeTab?.connected ? '#fff' : '#6b7280',
-                      fontSize: 10, fontWeight: 600, cursor: activeTab?.connected ? 'pointer' : 'not-allowed',
-                    }}>
-                      {activeTab?.connected ? '▶ Run' : 'Connect first'}
-                    </button>
-                  </div>
-                ))}
-              </div>
+                </>
+              ) : (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>⌨️</div>
+                  <div style={{ fontSize: 12, color: '#374151' }}>Connect to a server</div>
+                  <div style={{ fontSize: 12, color: '#374151' }}>to get started</div>
+                </div>
+              )}
             </div>
           )
         })()}

@@ -175,16 +175,16 @@ export default function Layout({ user, onLogout, theme, setTheme }: Props) {
 
       {/* ── Main ─────────────────────────────────────────────────────────── */}
       <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-body)', minWidth: 0, display: 'flex', flexDirection: 'column', scrollbarGutter: 'stable' }}>
-        {/* Persistent pages: always mounted, hidden when not active so sessions survive navigation */}
-        <div style={{ display: location.pathname === '/terminal' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
-          <Terminal />
-        </div>
-        <div style={{ display: location.pathname === '/remote-desktop' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
-          <RemoteDesktopPage />
-        </div>
-        {/* All other routed pages */}
         {!isPersistent && <Outlet />}
       </main>
+
+      {/* Persistent pages — fixed overlay, outside layout flow, no impact on global scroll */}
+      <div style={{ position: 'fixed', top: 0, left: 220, right: 0, bottom: 0, display: location.pathname === '/terminal' ? 'flex' : 'none', flexDirection: 'column', zIndex: 10 }}>
+        <Terminal />
+      </div>
+      <div style={{ position: 'fixed', top: 0, left: 220, right: 0, bottom: 0, display: location.pathname === '/remote-desktop' ? 'flex' : 'none', flexDirection: 'column', zIndex: 10 }}>
+        <RemoteDesktopPage />
+      </div>
     </div>
   )
 }

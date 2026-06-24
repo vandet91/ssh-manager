@@ -87,11 +87,11 @@ export default function Servers() {
   const [allKeys, setAllKeys] = useState<SshKey[]>([])
   const [showAdd, setShowAdd] = useState(false)
   type OsType = 'linux' | 'windows'
-  const [addForm, setAddForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '' })
+  const [addForm, setAddForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '', distro: '' })
   const [addError, setAddError] = useState('')
 
   const [editServer, setEditServer] = useState<Server | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '', management_linux_user: '' })
+  const [editForm, setEditForm] = useState({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '', management_linux_user: '', distro: '' })
   const [editError, setEditError] = useState('')
 
   const [setupServerId, setSetupServerId] = useState<string | null>(null)
@@ -278,14 +278,14 @@ export default function Servers() {
       const payload = { ...rest, tags: domain_name ? { domain_name } : {} }
       await api.post('/servers', payload)
       setShowAdd(false)
-      setAddForm({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '' })
+      setAddForm({ name: '', hostname: '', ssh_port: 22, environment: 'production', os_type: 'linux' as OsType, is_domain_controller: false, domain_name: '', distro: '' })
       load()
     } catch (err: unknown) { setAddError((err as Error).message) }
   }
 
   const openEdit = (s: Server) => {
     setEditServer(s)
-    setEditForm({ name: s.name, hostname: s.hostname, ssh_port: s.ssh_port, environment: s.environment, os_type: (s.os_type ?? 'linux') as OsType, is_domain_controller: s.is_domain_controller ?? false, domain_name: s.tags?.domain_name ?? '', management_linux_user: s.management_linux_user ?? '' })
+    setEditForm({ name: s.name, hostname: s.hostname, ssh_port: s.ssh_port, environment: s.environment, os_type: (s.os_type ?? 'linux') as OsType, is_domain_controller: s.is_domain_controller ?? false, domain_name: s.tags?.domain_name ?? '', management_linux_user: s.management_linux_user ?? '', distro: s.distro ?? '' })
     setEditError('')
   }
 
@@ -1099,6 +1099,40 @@ export default function Servers() {
                   <option value="windows">🪟 Windows Server</option>
                 </select>
               </label>
+              <label className="block">
+                <span className="text-sm text-gray-400">Distribution / OS Version</span>
+                <select value={addForm.distro} onChange={(e) => setAddForm((f) => ({ ...f, distro: e.target.value }))}
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  {addForm.os_type === 'linux' ? (
+                    <>
+                      <option value="">— Select distro —</option>
+                      <option value="debian">Debian</option>
+                      <option value="ubuntu">Ubuntu</option>
+                      <option value="centos">CentOS</option>
+                      <option value="rhel">Red Hat Enterprise Linux</option>
+                      <option value="rocky">Rocky Linux</option>
+                      <option value="almalinux">AlmaLinux</option>
+                      <option value="fedora">Fedora</option>
+                      <option value="opensuse">openSUSE</option>
+                      <option value="arch">Arch Linux</option>
+                      <option value="alpine">Alpine Linux</option>
+                      <option value="kali">Kali Linux</option>
+                      <option value="proxmox">Proxmox VE</option>
+                      <option value="other-linux">Other Linux</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="">— Select version —</option>
+                      <option value="windows-server-2022">Windows Server 2022</option>
+                      <option value="windows-server-2019">Windows Server 2019</option>
+                      <option value="windows-server-2016">Windows Server 2016</option>
+                      <option value="windows-server-2012">Windows Server 2012 R2</option>
+                      <option value="windows-11">Windows 11</option>
+                      <option value="windows-10">Windows 10</option>
+                    </>
+                  )}
+                </select>
+              </label>
             </div>
             {addForm.os_type === 'windows' && (
               <div className="space-y-2">
@@ -1157,6 +1191,40 @@ export default function Servers() {
                   className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
                   <option value="linux">🐧 Linux Server</option>
                   <option value="windows">🪟 Windows Server</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-sm text-gray-400">Distribution / OS Version</span>
+                <select value={editForm.distro} onChange={(e) => setEditForm((f) => ({ ...f, distro: e.target.value }))}
+                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  {editForm.os_type === 'linux' ? (
+                    <>
+                      <option value="">— Select distro —</option>
+                      <option value="debian">Debian</option>
+                      <option value="ubuntu">Ubuntu</option>
+                      <option value="centos">CentOS</option>
+                      <option value="rhel">Red Hat Enterprise Linux</option>
+                      <option value="rocky">Rocky Linux</option>
+                      <option value="almalinux">AlmaLinux</option>
+                      <option value="fedora">Fedora</option>
+                      <option value="opensuse">openSUSE</option>
+                      <option value="arch">Arch Linux</option>
+                      <option value="alpine">Alpine Linux</option>
+                      <option value="kali">Kali Linux</option>
+                      <option value="proxmox">Proxmox VE</option>
+                      <option value="other-linux">Other Linux</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="">— Select version —</option>
+                      <option value="windows-server-2022">Windows Server 2022</option>
+                      <option value="windows-server-2019">Windows Server 2019</option>
+                      <option value="windows-server-2016">Windows Server 2016</option>
+                      <option value="windows-server-2012">Windows Server 2012 R2</option>
+                      <option value="windows-11">Windows 11</option>
+                      <option value="windows-10">Windows 10</option>
+                    </>
+                  )}
                 </select>
               </label>
             </div>

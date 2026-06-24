@@ -32,6 +32,7 @@ const ServerBody = z.object({
   ]).optional(),
   device_category: z.enum(['server', 'network']).optional(),
   is_domain_controller: z.boolean().optional(),
+  distro: z.string().optional(),
 })
 
 async function serversRoutes(fastify: FastifyInstance): Promise<void> {

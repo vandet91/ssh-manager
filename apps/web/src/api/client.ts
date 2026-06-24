@@ -65,6 +65,7 @@ export type Server = {
   host_type_detail: string | null
   windows_rdp_ready: boolean
   is_domain_controller: boolean
+  distro: string | null
   // Network device access
   access_ssh_enabled: boolean
   access_ssh_auth_type: 'key' | 'password' | null

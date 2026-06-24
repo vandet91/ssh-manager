@@ -99,6 +99,7 @@ export default function Keys() {
   const toggleShare = async (k: SshKey) => {
     const updated = await api.patch<{ is_shared: boolean }>(`/keys/${k.id}/share`, { shared: !k.is_shared })
     setKeys(prev => prev.map(x => x.id === k.id ? { ...x, is_shared: updated.is_shared } : x))
+    return updated
   }
 
   const rotateKey = async (id: string) => {
@@ -573,12 +574,6 @@ export default function Keys() {
                         style={{ whiteSpace: 'nowrap' }}>
                         Edit
                       </button>
-                      <button onClick={() => toggleShare(k)}
-                        className={`px-2 py-1 text-xs rounded transition-colors ${k.is_shared ? 'bg-green-700 hover:bg-green-600' : 'bg-gray-600 hover:bg-gray-500'} text-white`}
-                        style={{ whiteSpace: 'nowrap' }}
-                        title={k.is_shared ? 'Click to make private' : 'Click to share with team'}>
-                        {k.is_shared ? '🔓 Shared' : '🔒 Private'}
-                      </button>
                       <button onClick={() => { setDeleteError(''); setDeleteTarget(k) }}
                         className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors"
                         style={{ whiteSpace: 'nowrap' }}>
@@ -690,6 +685,17 @@ export default function Keys() {
 ].map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
+            <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-800 border border-gray-700">
+              <span className="text-sm text-gray-400">Share with team</span>
+              <button type="button" onClick={async () => {
+                if (!editKey) return
+                await toggleShare(editKey)
+                setEditKey(prev => prev ? { ...prev, is_shared: !prev.is_shared } : prev)
+              }}
+                className={`px-3 py-1 text-xs rounded transition-colors ${editKey?.is_shared ? 'bg-green-700 hover:bg-green-600 text-white' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}>
+                {editKey?.is_shared ? '🔓 Shared' : '🔒 Private'}
+              </button>
+            </div>
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setEditKey(null)} className="flex-1 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white text-sm transition-colors">Cancel</button>
               <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Save Changes</button>

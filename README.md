@@ -6,11 +6,11 @@ A self-hosted web platform for centralizing SSH key management, server credentia
 
 ## Features
 
-- **SSH Key Vault** — AES-256-GCM encrypted keys, Ed25519/RSA-4096 generation, PuTTY PPK import/export, key rotation with automatic scheduler
-- **Server Inventory** — Linux & Windows support, OS/host-platform auto-detection (VMware, Hyper-V, Proxmox, AWS, Azure, GCP…), per-server filters; servers sorted alphabetically
+- **SSH Key Vault** — AES-256-GCM encrypted keys, Ed25519/RSA-4096 generation, PuTTY PPK import/export, key rotation with automatic scheduler; per-key owner + team sharing toggle
+- **Server Inventory** — Linux & Windows support, OS/host-platform auto-detection (VMware, Hyper-V, Proxmox, AWS, Azure, GCP…), per-server filters; servers sorted alphabetically; distro field (Debian, Ubuntu, CentOS, RHEL, Rocky, AlmaLinux, Fedora, openSUSE, Arch, Alpine, Kali, Proxmox, Windows variants)
 - **Credential Vault** — per-server password vault for RDP, SSH users, databases, web services; reveal/copy/archive with audit log
 - **Global Vault** — standalone credential store (server OS, service accounts, API keys, network devices, domain AD, email, printers, DVRs); OU grouping, tagging, archiving
-- **Browser Terminal** — xterm.js multi-tab SSH, drag-and-drop SFTP upload, session recording & playback
+- **Browser Terminal** — xterm.js multi-tab SSH, drag-and-drop SFTP upload, session recording & playback; full-screen overlay with independent xterm scrollback + Commands panel scrollbar; distro mascot panel (Tux, Ubuntu, Debian, Windows, etc.) when idle
 - **Remote Desktop** — browser-based RDP via Guacamole; command panel, file sharing
 - **Remote Exec** — run commands on Windows machines via PsExec, WMIExec, or WinRM; Shell is a first-class tab with live xterm.js terminal; stored-credential picker; command history; quick-command library; redesigned two-pane layout
 - **DB Connector** — connect to PostgreSQL, MySQL, MariaDB, MSSQL, Oracle databases via direct or SSH-tunnel connections; query editor, schema browser, data export, per-connection SSH tunnel override; data analysis rules (row count, null rate, uniqueness, range, custom SQL, referential integrity) with cross-connection comparison
@@ -26,7 +26,9 @@ A self-hosted web platform for centralizing SSH key management, server credentia
 - **AI Analyst** — multi-provider (Claude, GPT, Gemini, DeepSeek) server health analysis
 - **Alerts** — Slack webhook, SMTP email, Telegram channel; per-event toggles
 - **Telegram Bot** — query servers, control services (TOTP-gated)
-- **Auth** — local email/password + MFA (TOTP), Microsoft 365 SSO, Google Workspace SSO; RBAC (admin/operator/developer/viewer)
+- **Auth** — local email/password + MFA (TOTP), Microsoft 365 SSO, Google Workspace SSO; RBAC (admin/operator/developer/viewer); per-user MFA exemption; TOTP-gated sensitive actions
+- **RADIUS** — RADIUS server management with SNMP VLAN discovery per network device
+- **Operator Access Control** — admin explicitly grants which servers each operator can see; DB connections are owner-scoped with optional sharing
 - **Audit Log** — append-only, CSV export, time-based clearing
 
 ---
@@ -844,7 +846,7 @@ docker compose build web api && docker compose up -d web api
 
 ## Database Migrations
 
-Migrations run automatically on startup. Current schema version: **031**.
+Migrations run automatically on startup. Current schema version: **041**.
 
 | Migration | What it adds |
 |-----------|-------------|
@@ -879,3 +881,13 @@ Migrations run automatically on startup. Current schema version: **031**.
 | `029` | SNMP profiles, ping settings, firmware columns on network devices |
 | `030` | Firmware repository: `firmware_files` table |
 | `031` | Share pins: PIN-protected file share links |
+| `032` | TOTP action rules: per-action TOTP elevation enforcement |
+| `033` | RADIUS servers table |
+| `034` | SNMP VLANs, RADIUS discovery columns on network devices |
+| `035` | Role permissions: per-role granular permission table |
+| `036` | SSH key ownership + team sharing (`owner_id`, `is_shared`) |
+| `037` | Operator server access: admin-controlled per-server visibility for operators |
+| `038` | DB connection ownership + sharing |
+| `039` | MFA exemption per user (`mfa_exempt` flag) |
+| `040` | Domain credential columns on key assignments |
+| `041` | Server distro field (Debian, Ubuntu, CentOS, RHEL, etc.) |
