@@ -1,7 +1,7 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 import { requireTotpElevation } from '../../utils/totp-guard'
@@ -173,9 +173,9 @@ function buildDot1xPortScript(
 export default async function radiusRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
-  // ── RADIUS server CRUD ────────────────────────────────────────────────────
+  // â”€â”€ RADIUS server CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  fastify.get('/radius-servers', { preHandler: requirePermission('servers:read') }, async () => {
+  fastify.get('/radius-servers', { preHandler: requireAuth }, async () => {
     const vaultKey = getVaultKey()
     const rows = await db.selectFrom('radius_servers' as any).selectAll().orderBy('name', 'asc').execute()
     return (rows as any[]).map(r => ({
@@ -193,7 +193,7 @@ export default async function radiusRoutes(fastify: FastifyInstance): Promise<vo
     }))
   })
 
-  fastify.post('/radius-servers', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/radius-servers', { preHandler: requireAdmin }, async (req, reply) => {
     const body = RadiusBody.parse(req.body)
     const vaultKey = getVaultKey()
     const userId = (req.session.user as any)?.id ?? null
@@ -214,7 +214,7 @@ export default async function radiusRoutes(fastify: FastifyInstance): Promise<vo
     reply.code(201).send({ id: row.id })
   })
 
-  fastify.put('/radius-servers/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.put('/radius-servers/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = RadiusBody.parse(req.body)
     const vaultKey = getVaultKey()
@@ -238,17 +238,17 @@ export default async function radiusRoutes(fastify: FastifyInstance): Promise<vo
     reply.code(204).send()
   })
 
-  fastify.delete('/radius-servers/:id', { preHandler: requirePermission('servers:admin') }, async (req, reply) => {
+  fastify.delete('/radius-servers/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     await db.deleteFrom('radius_servers' as any).where('id', '=', id).execute()
     await writeAuditLog({ userId: (req.session.user as any)?.id, userEmail: (req.session.user as any)?.email, action: 'radius_server.deleted', resource: 'radius_server', resourceId: id, request: req })
     reply.code(204).send()
   })
 
-  // ── Push RADIUS config to a network device ────────────────────────────────
+  // â”€â”€ Push RADIUS config to a network device â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   fastify.post('/servers/:id/push-radius', {
-    preHandler: [requirePermission('servers:write'), requireTotpElevation('radius_config_push')],
+    preHandler: [requireAdmin, requireTotpElevation('radius_config_push')],
   }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { radius_server_ids } = z.object({ radius_server_ids: z.array(z.string().uuid()).min(1) }).parse(req.body)
@@ -317,10 +317,10 @@ export default async function radiusRoutes(fastify: FastifyInstance): Promise<vo
     }
   })
 
-  // ── Push 802.1X port auth to selected ports ───────────────────────────────
+  // â”€â”€ Push 802.1X port auth to selected ports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   fastify.post('/servers/:id/push-dot1x-ports', {
-    preHandler: [requirePermission('servers:write'), requireTotpElevation('network_config_push')],
+    preHandler: [requireAdmin, requireTotpElevation('network_config_push')],
   }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { if_names, enabled } = z.object({
@@ -373,10 +373,10 @@ export default async function radiusRoutes(fastify: FastifyInstance): Promise<vo
     }
   })
 
-  // ── SNMP: fetch authenticated hosts for a port ────────────────────────────
+  // â”€â”€ SNMP: fetch authenticated hosts for a port â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Returns MAC table from dot1xAuthSuppOperTable per ifIndex
 
-  fastify.get('/servers/:id/dot1x-hosts/:ifIndex', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/dot1x-hosts/:ifIndex', { preHandler: requireAuth }, async (req, reply) => {
     const { id, ifIndex } = z.object({ id: z.string().uuid(), ifIndex: z.string() }).parse(req.params)
     const ifIdx = parseInt(ifIndex, 10)
     if (isNaN(ifIdx)) return reply.code(400).send({ error: 'Invalid ifIndex' })
@@ -397,7 +397,7 @@ export default async function radiusRoutes(fastify: FastifyInstance): Promise<vo
         version: version === 'v1' ? snmp.Version1 : snmp.Version2c,
       })
 
-      // dot1xAuthSuppOperTable indexed by ifIndex.macIndex — get all entries under this ifIndex
+      // dot1xAuthSuppOperTable indexed by ifIndex.macIndex â€” get all entries under this ifIndex
       const baseOid = `1.0.8802.1.1.1.1.2.2.1.1.${ifIdx}`
 
       const hosts = await new Promise<Array<{ mac: string; status: string }>>((resolve) => {
@@ -430,3 +430,4 @@ export default async function radiusRoutes(fastify: FastifyInstance): Promise<vo
     }
   })
 }
+

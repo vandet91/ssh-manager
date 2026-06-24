@@ -1,14 +1,14 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 import { type AiProvider } from '../../utils/ai-analyst'
 import { requireTotpElevation } from '../../utils/totp-guard'
 import { Client } from 'ssh2'
 
-// ── Zod schemas ───────────────────────────────────────────────────────────────
+// â”€â”€ Zod schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const ProfileBody = z.object({
   // SNMP profile link
@@ -42,7 +42,7 @@ const ProfileBody = z.object({
   snmp_v3_priv_key: z.string().optional(),
 })
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function maybeEncrypt(value: string | undefined | null, key: Buffer): string | null | undefined {
   if (value === undefined) return undefined
@@ -50,13 +50,13 @@ function maybeEncrypt(value: string | undefined | null, key: Buffer): string | n
   return encryptSecret(value, key)
 }
 
-// ── Routes ────────────────────────────────────────────────────────────────────
+// â”€â”€ Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default async function networkProfileRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
   // GET /servers/:id/network-profile
-  fastify.get('/servers/:id/network-profile', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/network-profile', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
@@ -119,7 +119,7 @@ export default async function networkProfileRoutes(fastify: FastifyInstance): Pr
   })
 
   // PUT /servers/:id/network-profile
-  fastify.put('/servers/:id/network-profile', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.put('/servers/:id/network-profile', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = ProfileBody.parse(req.body)
 
@@ -151,7 +151,7 @@ export default async function networkProfileRoutes(fastify: FastifyInstance): Pr
           server_id: id,
           category: 'linux',
           linux_user: body.ssh_username,
-          label: `SSH – ${body.ssh_username}`,
+          label: `SSH â€“ ${body.ssh_username}`,
           password_enc: enc,
           created_by: (req.session.user as any)?.id ?? null,
         }).execute()
@@ -189,8 +189,8 @@ export default async function networkProfileRoutes(fastify: FastifyInstance): Pr
     reply.code(204).send()
   })
 
-  // POST /servers/:id/snmp-fetch  — enhanced: profile fallback + Entity MIB enrichment
-  fastify.post('/servers/:id/snmp-fetch', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // POST /servers/:id/snmp-fetch  â€” enhanced: profile fallback + Entity MIB enrichment
+  fastify.post('/servers/:id/snmp-fetch', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
@@ -299,7 +299,7 @@ export default async function networkProfileRoutes(fastify: FastifyInstance): Pr
         snmpGet(sess1, Object.values(ENTITY_OIDS)).catch(() => ({} as Record<string, any>)),
       ])
 
-      // Fetch MAC separately (often times out on some devices — best effort)
+      // Fetch MAC separately (often times out on some devices â€” best effort)
       let macRaw: Buffer | null = null
       try {
         const macData = await snmpGet(sess1, [MAC_OID])
@@ -313,7 +313,7 @@ export default async function networkProfileRoutes(fastify: FastifyInstance): Pr
       const sysResult: Record<string, string | null> = {}
       sysKeys.forEach((k, i) => { sysResult[k] = sysData[Object.values(SYS_OIDS)[i]] })
 
-      // Convert sysUpTime ticks → human-readable
+      // Convert sysUpTime ticks â†’ human-readable
       if (sysResult.sysUpTime) {
         const ticks = parseInt(sysResult.sysUpTime, 10)
         if (!isNaN(ticks)) {
@@ -367,8 +367,8 @@ export default async function networkProfileRoutes(fastify: FastifyInstance): Pr
     }
   })
 
-  // POST /servers/:id/firmware-check — AI-powered firmware analysis
-  fastify.post('/servers/:id/firmware-check', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // POST /servers/:id/firmware-check â€” AI-powered firmware analysis
+  fastify.post('/servers/:id/firmware-check', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
     const server = await db.selectFrom('servers')
@@ -400,7 +400,7 @@ export default async function networkProfileRoutes(fastify: FastifyInstance): Pr
     const keyMap: Record<string, string> = { claude: sm.ai_key_claude, openai: sm.ai_key_openai, gemini: sm.ai_key_gemini, deepseek: sm.ai_key_deepseek }
     const apiKey = keyMap[provider] ?? ''
 
-    if (!apiKey) return reply.code(400).send({ error: `No API key configured for ${provider}. Add it in Settings → AI Providers.` })
+    if (!apiKey) return reply.code(400).send({ error: `No API key configured for ${provider}. Add it in Settings â†’ AI Providers.` })
 
     // Build prompt
     const deviceInfo = [
@@ -485,8 +485,8 @@ ${deviceInfo}`
     }
   })
 
-  // POST /servers/:id/snmp-ports — walk IF-MIB + Q-BRIDGE-MIB, store in snmp_interfaces
-  fastify.post('/servers/:id/snmp-ports', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // POST /servers/:id/snmp-ports â€” walk IF-MIB + Q-BRIDGE-MIB, store in snmp_interfaces
+  fastify.post('/servers/:id/snmp-ports', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
@@ -550,7 +550,7 @@ ${deviceInfo}`
           }, sessionOpts)
         : snmp.createSession(server.hostname, community, sessionOpts)
 
-      // Walk a subtree — last OID component is the key (usually ifIndex or bridge port)
+      // Walk a subtree â€” last OID component is the key (usually ifIndex or bridge port)
       const walkTable = (baseOid: string, isMac = false): Promise<Map<number, string>> =>
         new Promise((resolve) => {
           const result = new Map<number, string>()
@@ -578,7 +578,7 @@ ${deviceInfo}`
           }, () => resolve(result))
         })
 
-      // Walk bitmask table — key is VLAN id, value is port bitmask Buffer
+      // Walk bitmask table â€” key is VLAN id, value is port bitmask Buffer
       const walkBitmask = (baseOid: string): Promise<Map<number, Buffer>> =>
         new Promise((resolve) => {
           const result = new Map<number, Buffer>()
@@ -592,8 +592,8 @@ ${deviceInfo}`
           }, () => resolve(result))
         })
 
-      // Walk LLDP neighbors — OID ends in <localPortNum>.<remoteIndex>
-      // Returns map of localPortNum → { chassis, portId, sysName, sysDesc }
+      // Walk LLDP neighbors â€” OID ends in <localPortNum>.<remoteIndex>
+      // Returns map of localPortNum â†’ { chassis, portId, sysName, sysDesc }
       const walkLldp = (): Promise<Map<number, { chassis: string; portId: string; sysName: string; sysDesc: string }>> =>
         new Promise((resolve) => {
           const chassis = new Map<number, string>()
@@ -607,7 +607,7 @@ ${deviceInfo}`
                 for (const vb of vbs) {
                   if (snmp.isVarbindError(vb)) continue
                   const parts = vb.oid.split('.')
-                  // OID: ....<localPort>.<remoteIndex> — take second-to-last
+                  // OID: ....<localPort>.<remoteIndex> â€” take second-to-last
                   const localPort = parseInt(parts[parts.length - 2], 10)
                   if (isNaN(localPort)) continue
                   const raw = vb.value
@@ -643,7 +643,7 @@ ${deviceInfo}`
           })
         })
 
-      // Walk CDP neighbors (Cisco IOS only) — key is ifIndex (first sub-index component)
+      // Walk CDP neighbors (Cisco IOS only) â€” key is ifIndex (first sub-index component)
       const walkCdp = (): Promise<Map<number, { deviceId: string; ipAddr: string; portId: string; platform: string }>> =>
         new Promise((resolve) => {
           const deviceId = new Map<number, string>()
@@ -693,12 +693,12 @@ ${deviceInfo}`
           })
         })
 
-      // ── Phase 1: IF-MIB (standard, all devices) ─────────────────────────────
+      // â”€â”€ Phase 1: IF-MIB (standard, all devices) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const [ifDescr, ifSpeed, ifPhysAddr, ifAdminStatus, ifOperStatus, ifName, ifHighSpeed, ifAlias] =
         await Promise.all([
           walkTable('1.3.6.1.2.1.2.2.1.2'),        // ifDescr
           walkTable('1.3.6.1.2.1.2.2.1.5'),        // ifSpeed (bps)
-          walkTable('1.3.6.1.2.1.2.2.1.6', true),  // ifPhysAddress — 6-byte MAC
+          walkTable('1.3.6.1.2.1.2.2.1.6', true),  // ifPhysAddress â€” 6-byte MAC
           walkTable('1.3.6.1.2.1.2.2.1.7'),        // ifAdminStatus (1=up,2=down)
           walkTable('1.3.6.1.2.1.2.2.1.8'),        // ifOperStatus (1=up,2=down)
           walkTable('1.3.6.1.2.1.31.1.1.1.1'),     // ifName (IF-MIB extension)
@@ -706,34 +706,34 @@ ${deviceInfo}`
           walkTable('1.3.6.1.2.1.31.1.1.1.18'),    // ifAlias / description
         ])
 
-      // ── Phase 2: Bridge MIB — bridge port → ifIndex mapping ─────────────────
+      // â”€â”€ Phase 2: Bridge MIB â€” bridge port â†’ ifIndex mapping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // CRITICAL: Q-BRIDGE bitmasks use bridge port numbers, not ifIndex.
-      // dot1dBasePortIfIndex maps bridge port n → ifIndex.
+      // dot1dBasePortIfIndex maps bridge port n â†’ ifIndex.
       // Without this, VLAN membership is matched to the wrong interface on most switches.
       const bridgePortToIfIndex = await walkTable('1.3.6.1.2.1.17.1.4.1.2')
         .catch(() => new Map<number, string>())
-      // Build reverse map: ifIndex → bridge port number
+      // Build reverse map: ifIndex â†’ bridge port number
       const ifIndexToBridgePort = new Map<number, number>()
       for (const [bp, ifIdxStr] of bridgePortToIfIndex) {
         const ifIdx = parseInt(ifIdxStr, 10)
         if (!isNaN(ifIdx)) ifIndexToBridgePort.set(ifIdx, bp)
       }
 
-      // ── Phase 3: Q-BRIDGE-MIB (VLAN membership + names) ─────────────────────
-      // dot1qPvid: bridge port → native/access VLAN
+      // â”€â”€ Phase 3: Q-BRIDGE-MIB (VLAN membership + names) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // dot1qPvid: bridge port â†’ native/access VLAN
       const [dot1qPvid, dot1qVlanStaticName] = await Promise.all([
         walkTable('1.3.6.1.2.1.17.7.1.4.5.1.1').catch(() => new Map<number, string>()),
-        // dot1qVlanStaticName: vlanId → name configured on the switch
+        // dot1qVlanStaticName: vlanId â†’ name configured on the switch
         walkTable('1.3.6.1.2.1.17.7.1.4.3.1.1').catch(() => new Map<number, string>()),
       ])
-      // Build ifIndex → PVID using the bridge port mapping
+      // Build ifIndex â†’ PVID using the bridge port mapping
       const ifIndexToPvid = new Map<number, number>()
       for (const [bp, pvid] of dot1qPvid) {
         const ifIdx = parseInt(bridgePortToIfIndex.get(bp) ?? '', 10)
         if (!isNaN(ifIdx)) ifIndexToPvid.set(ifIdx, parseInt(pvid, 10) || 1)
       }
 
-      // dot1qVlanStaticEgressPorts bitmask — bridge port is the bit position
+      // dot1qVlanStaticEgressPorts bitmask â€” bridge port is the bit position
       const egressByVlan = await walkBitmask('1.3.6.1.2.1.17.7.1.4.3.1.2')
         .catch(() => new Map<number, Buffer>())
       // Count how many VLANs each bridge port appears in (>1 = trunk)
@@ -749,21 +749,21 @@ ${deviceInfo}`
         }
       }
 
-      // ── Phase 4: Model-aware port mode ───────────────────────────────────────
+      // â”€â”€ Phase 4: Model-aware port mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // Cisco IOS: CISCO-VLAN-MEMBERSHIP-MIB vlanTrunkPortDynamicStatus
       // Cisco SMB: proprietary rlPortSwVlanMode
       // Standard fallback: derive from VLAN count
       let ifIndexToMode = new Map<number, 'access' | 'trunk' | 'unknown'>()
 
       if (isCiscoIos) {
-        // vlanTrunkPortDynamicStatus: 1=trunking, 2=notTrunking — keyed by ifIndex
+        // vlanTrunkPortDynamicStatus: 1=trunking, 2=notTrunking â€” keyed by ifIndex
         const trunkStatus = await walkTable('1.3.6.1.4.1.9.9.46.1.6.1.1.14')
           .catch(() => new Map<number, string>())
         for (const [idx, val] of trunkStatus) {
           ifIndexToMode.set(idx, val === '1' ? 'trunk' : 'access')
         }
       } else if (isCiscoSmb) {
-        // rlPortSwVlanMode: 1=general, 2=access, 3=trunk, 4=customer — keyed by ifIndex
+        // rlPortSwVlanMode: 1=general, 2=access, 3=trunk, 4=customer â€” keyed by ifIndex
         const smbMode = await walkTable('1.3.6.1.4.1.9.6.1.101.48.22.1.1')
           .catch(() => new Map<number, string>())
         for (const [idx, val] of smbMode) {
@@ -779,9 +779,9 @@ ${deviceInfo}`
         }
       }
 
-      // ── Phase 5: STP state ───────────────────────────────────────────────────
+      // â”€â”€ Phase 5: STP state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // dot1dStpPortState: 1=disabled,2=blocking,3=listening,4=learning,5=forwarding,6=broken
-      // Keyed by bridge port — map back to ifIndex
+      // Keyed by bridge port â€” map back to ifIndex
       const stpStateByBp = await walkTable('1.3.6.1.2.1.17.2.15.1.3')
         .catch(() => new Map<number, string>())
       const STP_STATES: Record<string, string> = { '1':'disabled','2':'blocking','3':'listening','4':'learning','5':'forwarding','6':'broken' }
@@ -791,9 +791,9 @@ ${deviceInfo}`
         if (!isNaN(ifIdx)) ifIndexToStp.set(ifIdx, STP_STATES[val] ?? 'unknown')
       }
 
-      // ── Phase 6: PortFast / Edge ─────────────────────────────────────────────
-      // Cisco IOS: stpxFastStartPortEnable (1=enable,2=disable) — keyed by ifIndex
-      // Standard:  dot1dStpPortFastEnabled  (1=enable,2=disable) — keyed by bridge port
+      // â”€â”€ Phase 6: PortFast / Edge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // Cisco IOS: stpxFastStartPortEnable (1=enable,2=disable) â€” keyed by ifIndex
+      // Standard:  dot1dStpPortFastEnabled  (1=enable,2=disable) â€” keyed by bridge port
       const ifIndexToEdge = new Map<number, boolean>()
       if (isCiscoIos) {
         const pf = await walkTable('1.3.6.1.4.1.9.9.82.1.9.3.1.3').catch(() => new Map<number, string>())
@@ -806,8 +806,8 @@ ${deviceInfo}`
         }
       }
 
-      // ── Phase 7: 802.1X port control ─────────────────────────────────────────
-      // dot1xPaePortAdminControl (1=forceUnauth, 2=auto, 3=forceAuth) — keyed by ifIndex
+      // â”€â”€ Phase 7: 802.1X port control â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // dot1xPaePortAdminControl (1=forceUnauth, 2=auto, 3=forceAuth) â€” keyed by ifIndex
       const dot1xControl = await walkTable('1.0.8802.1.1.1.1.2.1.1.6')
         .catch(() => new Map<number, string>())
       const DOT1X_MODES: Record<string, string> = { '1':'force-unauthorized','2':'auto','3':'force-authorized' }
@@ -816,32 +816,32 @@ ${deviceInfo}`
         ifIndexTo8021x.set(idx, DOT1X_MODES[val] ?? 'unknown')
       }
 
-      // ── Phase 8: LLDP neighbors ──────────────────────────────────────────────
-      // LLDP local port → ifIndex: lldpLocPortIfIndex (1.0.8802.1.1.2.1.3.7.1.3)
+      // â”€â”€ Phase 8: LLDP neighbors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // LLDP local port â†’ ifIndex: lldpLocPortIfIndex (1.0.8802.1.1.2.1.3.7.1.3)
       const lldpLocalPortIfIndex = await walkTable('1.0.8802.1.1.2.1.3.7.1.3')
         .catch(() => new Map<number, string>())
-      // Map lldpLocalPort → ifIndex
+      // Map lldpLocalPort â†’ ifIndex
       const lldpPortToIfIndex = new Map<number, number>()
       for (const [lp, ifIdxStr] of lldpLocalPortIfIndex) {
         const ifIdx = parseInt(ifIdxStr, 10)
         if (!isNaN(ifIdx)) lldpPortToIfIndex.set(lp, ifIdx)
       }
       const lldpNeighborsByLocalPort = await walkLldp().catch(() => new Map())
-      // Remap: lldpLocalPort → ifIndex → neighbor
+      // Remap: lldpLocalPort â†’ ifIndex â†’ neighbor
       const ifIndexToLldp = new Map<number, { chassis: string; portId: string; sysName: string; sysDesc: string }>()
       for (const [lp, neighbor] of lldpNeighborsByLocalPort) {
         const ifIdx = lldpPortToIfIndex.get(lp)
         if (ifIdx !== undefined) ifIndexToLldp.set(ifIdx, neighbor)
       }
 
-      // ── Phase 9: CDP neighbors (Cisco IOS only) ───────────────────────────────
+      // â”€â”€ Phase 9: CDP neighbors (Cisco IOS only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const ifIndexToCdp = new Map<number, { deviceId: string; ipAddr: string; portId: string; platform: string }>()
       if (isCiscoIos) {
         const cdpNeighbors = await walkCdp().catch(() => new Map())
         for (const [ifIdx, n] of cdpNeighbors) ifIndexToCdp.set(ifIdx, n)
       }
 
-      // ── Phase 10: RADIUS-AUTH-CLIENT-MIB (RFC 2618) ─────────────────────────
+      // â”€â”€ Phase 10: RADIUS-AUTH-CLIENT-MIB (RFC 2618) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // radiusAuthServerAddress   .2, radiusAuthServerUDPPort .3
       // radiusAuthClientAccessRequests .5, Accepts .11, Rejects .12
       const [radiusAddr, radiusPort, radiusReqs, radiusAccepts, radiusRejects] = await Promise.all([
@@ -860,7 +860,7 @@ ${deviceInfo}`
         access_rejects:  parseInt(radiusRejects.get(idx) ?? '0', 10) || 0,
       })).filter(r => r.address && r.address !== '0.0.0.0')
 
-      // ── Assemble port records ────────────────────────────────────────────────
+      // â”€â”€ Assemble port records â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const allIndexes = new Set<number>([
         ...ifDescr.keys(), ...ifName.keys(), ...ifOperStatus.keys(),
       ])
@@ -953,16 +953,16 @@ ${deviceInfo}`
     }
   })
 
-  // GET /servers/:id/snmp-vlans — return VLANs discovered for this device
-  fastify.get('/servers/:id/snmp-vlans', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/snmp-vlans â€” return VLANs discovered for this device
+  fastify.get('/servers/:id/snmp-vlans', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const vlans = await (db as any).selectFrom('snmp_vlans').selectAll()
       .where('server_id', '=', id).orderBy('vlan_id', 'asc').execute()
     return vlans
   })
 
-  // POST /servers/:id/snmp-vlans — manually add a VLAN
-  fastify.post('/servers/:id/snmp-vlans', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:id/snmp-vlans â€” manually add a VLAN
+  fastify.post('/servers/:id/snmp-vlans', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { vlan_id, name, description } = z.object({
       vlan_id: z.number().int().min(1).max(4094),
@@ -977,8 +977,8 @@ ${deviceInfo}`
     return row
   })
 
-  // PATCH /servers/:id/snmp-vlans/:vlanId — update name and/or description
-  fastify.patch('/servers/:id/snmp-vlans/:vlanId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // PATCH /servers/:id/snmp-vlans/:vlanId â€” update name and/or description
+  fastify.patch('/servers/:id/snmp-vlans/:vlanId', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, vlanId } = z.object({ id: z.string().uuid(), vlanId: z.string() }).parse(req.params)
     const body = z.object({ name: z.string().optional(), description: z.string().optional() }).parse(req.body)
     await (db as any).updateTable('snmp_vlans')
@@ -989,8 +989,8 @@ ${deviceInfo}`
     return { ok: true }
   })
 
-  // DELETE /servers/:id/snmp-vlans/:vlanId — remove a manually added VLAN
-  fastify.delete('/servers/:id/snmp-vlans/:vlanId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // DELETE /servers/:id/snmp-vlans/:vlanId â€” remove a manually added VLAN
+  fastify.delete('/servers/:id/snmp-vlans/:vlanId', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, vlanId } = z.object({ id: z.string().uuid(), vlanId: z.string() }).parse(req.params)
     await (db as any).deleteFrom('snmp_vlans')
       .where('server_id', '=', id)
@@ -999,17 +999,17 @@ ${deviceInfo}`
     return { ok: true }
   })
 
-  // GET /servers/:id/snmp-discovered-radius — return RADIUS servers discovered via SNMP
-  fastify.get('/servers/:id/snmp-discovered-radius', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/snmp-discovered-radius â€” return RADIUS servers discovered via SNMP
+  fastify.get('/servers/:id/snmp-discovered-radius', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const rows = await (db as any).selectFrom('snmp_discovered_radius').selectAll()
       .where('server_id', '=', id).orderBy('radius_index', 'asc').execute()
     return rows
   })
 
-  // POST /servers/:id/snmp-port-admin — enable/disable a port via SNMP SET ifAdminStatus
+  // POST /servers/:id/snmp-port-admin â€” enable/disable a port via SNMP SET ifAdminStatus
   fastify.post('/servers/:id/snmp-port-admin', {
-    preHandler: [requirePermission('servers:write'), requireTotpElevation('network_port_shutdown')],
+    preHandler: [requireAdmin, requireTotpElevation('network_port_shutdown')],
   }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { ifIndex, adminUp } = z.object({ ifIndex: z.number().int().min(1), adminUp: z.boolean() }).parse(req.body)
@@ -1092,7 +1092,7 @@ ${deviceInfo}`
     }
   })
 
-  // ── Shared SSH helpers ────────────────────────────────────────────────────────
+  // â”€â”€ Shared SSH helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async function connectSsh(server: any, id: string, vaultKey: Buffer): Promise<Client> {
     return new Promise(async (resolve, reject) => {
@@ -1130,7 +1130,7 @@ ${deviceInfo}`
     })
   }
 
-  // ── Vendor detection helpers ────────────────────────────────────────────────
+  // â”€â”€ Vendor detection helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   function detectCiscoVariant(vendor: string, model: string, sysDescr: string): 'nxos' | 'xr' | 'sb' | 'ios' {
     const m = model.toLowerCase()
@@ -1151,32 +1151,32 @@ ${deviceInfo}`
     const m = model.toLowerCase()
     const p = ifName.toLowerCase()
 
-    // Already a full interface name — pass through unchanged
+    // Already a full interface name â€” pass through unchanged
     // e.g. "GigabitEthernet1/0/1", "TenGigabitEthernet1/0/25", "Ethernet1/1"
     if (/^(gigabit|tengigabit|fastethernet|ethernet|vlan)/i.test(ifName)) return ifName
 
-    // SG350X-24: 10G uplinks come back as "te*" or "xg*" — use as-is;
-    // copper ports come back as bare numbers → prefix "gi1/0/"
+    // SG350X-24: 10G uplinks come back as "te*" or "xg*" â€” use as-is;
+    // copper ports come back as bare numbers â†’ prefix "gi1/0/"
     if (/^sg350x/.test(m)) {
       if (/^te|^xg/i.test(p)) return ifName
       return `gi1/0/${ifName}`
     }
 
-    // SF350X-24: gigabit ports already prefixed "gi*"/"ge*" — use as-is;
-    // fast ethernet ports come as bare numbers → prefix "fa"
+    // SF350X-24: gigabit ports already prefixed "gi*"/"ge*" â€” use as-is;
+    // fast ethernet ports come as bare numbers â†’ prefix "fa"
     if (/^sf350x/.test(m)) {
       if (/^gi|^ge/i.test(p)) return ifName
       return `fa${ifName}`
     }
 
-    // SG500-28, SG500-52, SG300-52: ports exposed as bare numbers → "gi1/<n>"
+    // SG500-28, SG500-52, SG300-52: ports exposed as bare numbers â†’ "gi1/<n>"
     if (/^sg5\d\d_?(28|52)|^sg3\d\d_?(52)/.test(m) || /^sg500|^sg300/.test(m)) {
       if (/^\d+$/.test(ifName)) return `gi1/${ifName}`
       return ifName
     }
 
     // CBS350, CBS250, SG350, SG250, SG220 and all other Cisco SMB:
-    // bare number → "gi<n>"; already prefixed → pass through
+    // bare number â†’ "gi<n>"; already prefixed â†’ pass through
     if (/^\d+$/.test(ifName)) return `gi${ifName}`
 
     return ifName
@@ -1192,7 +1192,7 @@ ${deviceInfo}`
     const md = model.toLowerCase()
     const sd = sysDescr.toLowerCase()
 
-    // ── Vendor detection ────────────────────────────────────────────────────
+    // â”€â”€ Vendor detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const isMikro    = v.includes('mikrotik') || v.includes('routeros') || sd.includes('routeros')
     const isJuniper  = v.includes('juniper') || sd.includes('junos')
     const isFortinet = v.includes('fortinet') || v.includes('fortigate') || sd.includes('fortigate')
@@ -1210,7 +1210,7 @@ ${deviceInfo}`
     const toAccess      = action === 'mode' && params.mode === 'access'
     const portIsTrunk   = params.currentMode === 'trunk'
 
-    // ── MikroTik RouterOS ───────────────────────────────────────────────────
+    // â”€â”€ MikroTik RouterOS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (isMikro) {
       return ports.map(p => {
         const iface = p.ifName
@@ -1243,7 +1243,7 @@ ${deviceInfo}`
       }).join('\n')
     }
 
-    // ── Juniper JunOS ───────────────────────────────────────────────────────
+    // â”€â”€ Juniper JunOS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (isJuniper) {
       const lines: string[] = ['configure']
       for (const p of ports) {
@@ -1287,7 +1287,7 @@ ${deviceInfo}`
       return lines.join('\n')
     }
 
-    // ── Fortinet FortiOS ────────────────────────────────────────────────────
+    // â”€â”€ Fortinet FortiOS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (isFortinet) {
       return ports.map(p => {
         const lines: string[] = []
@@ -1314,7 +1314,7 @@ ${deviceInfo}`
       }).join('\n')
     }
 
-    // ── HP / Aruba ProCurve / ArubaOS-Switch ────────────────────────────────
+    // â”€â”€ HP / Aruba ProCurve / ArubaOS-Switch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (isHP) {
       const lines: string[] = []
       for (const p of ports) {
@@ -1356,7 +1356,7 @@ ${deviceInfo}`
       return lines.join('\n')
     }
 
-    // ── Cisco IOS-XR ────────────────────────────────────────────────────────
+    // â”€â”€ Cisco IOS-XR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (ciscoVariant === 'xr') {
       const lines: string[] = []
       for (const p of ports) {
@@ -1377,7 +1377,7 @@ ${deviceInfo}`
       return lines.join('\n')
     }
 
-    // ── Cisco NX-OS ─────────────────────────────────────────────────────────
+    // â”€â”€ Cisco NX-OS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (ciscoVariant === 'nxos') {
       const lines: string[] = ['configure terminal']
       for (const p of ports) {
@@ -1414,7 +1414,7 @@ ${deviceInfo}`
       return lines.join('\n')
     }
 
-    // ── Cisco Small Business (SG/CBS) ────────────────────────────────────────
+    // â”€â”€ Cisco Small Business (SG/CBS) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (ciscoVariant === 'sb') {
       const lines: string[] = []
       for (const p of ports) {
@@ -1443,7 +1443,7 @@ ${deviceInfo}`
       return lines.join('\n')
     }
 
-    // ── Cisco IOS / IOS-XE (default) ────────────────────────────────────────
+    // â”€â”€ Cisco IOS / IOS-XE (default) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const lines: string[] = ['conf t']
     for (const p of ports) {
       const iface = normalizeCiscoIface(p.ifName, model)
@@ -1452,7 +1452,7 @@ ${deviceInfo}`
       if (action === 'admin')       lines.push(params.enabled ? ` no shutdown` : ` shutdown`)
       if (action === 'mode') {
         if (toAccess) {
-          // Trunk → Access: remove tagged VLANs first (required by some IOS versions)
+          // Trunk â†’ Access: remove tagged VLANs first (required by some IOS versions)
           lines.push(` switchport trunk allowed vlan none`)
           lines.push(` no switchport trunk native vlan`)
           lines.push(` no switchport port-security`)
@@ -1462,7 +1462,7 @@ ${deviceInfo}`
           lines.push(` switchport access vlan ${accessVlan}`)
           lines.push(` spanning-tree portfast`)
         } else {
-          // Access → Trunk: remove port-security + portfast, then set trunk
+          // Access â†’ Trunk: remove port-security + portfast, then set trunk
           lines.push(` no switchport port-security`)
           lines.push(` no switchport port-security maximum`)
           lines.push(` no switchport port-security violation`)
@@ -1487,9 +1487,9 @@ ${deviceInfo}`
     return lines.join('\n')
   }
 
-  // POST /servers/:id/port-cli — vendor-aware SSH CLI port configuration
+  // POST /servers/:id/port-cli â€” vendor-aware SSH CLI port configuration
   fastify.post('/servers/:id/port-cli', {
-    preHandler: [requirePermission('servers:write'), requireTotpElevation('network_port_config')],
+    preHandler: [requireAdmin, requireTotpElevation('network_port_config')],
   }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { ports, action, params } = z.object({
@@ -1530,9 +1530,9 @@ ${deviceInfo}`
     }
   })
 
-  // POST /servers/:id/reboot — send reboot command via SSH
+  // POST /servers/:id/reboot â€” send reboot command via SSH
   fastify.post('/servers/:id/reboot', {
-    preHandler: [requirePermission('servers:write'), requireTotpElevation('network_device_reboot')],
+    preHandler: [requireAdmin, requireTotpElevation('network_device_reboot')],
   }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
@@ -1581,4 +1581,5 @@ ${deviceInfo}`
     }
   })
 }
+
 

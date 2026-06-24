@@ -81,7 +81,7 @@ const OS_OPTS = [
 ]
 
 export default function Servers() {
-  const { can } = usePermissions()
+  const { can, isAdmin } = usePermissions()
   const canWrite = can('servers:write')
   const [servers, setServers] = useState<Server[]>([])
   const [allKeys, setAllKeys] = useState<SshKey[]>([])
@@ -257,15 +257,19 @@ export default function Servers() {
   }
   useEffect(() => {
     load()
-    api.get<{ default_provider: string; default_model: string }>('/settings/ai-keys').then(s => {
-      if (s.default_provider) {
-        const providerDef = AI_PROVIDERS.find(p => p.id === s.default_provider)
-        const model = s.default_model || providerDef?.models[0] || ''
-        setAiForm(f => ({ ...f, provider: s.default_provider, model }))
-      }
+    if (isAdmin) {
+      api.get<{ default_provider: string; default_model: string }>('/settings/ai-keys').then(s => {
+        if (s.default_provider) {
+          const providerDef = AI_PROVIDERS.find(p => p.id === s.default_provider)
+          const model = s.default_model || providerDef?.models[0] || ''
+          setAiForm(f => ({ ...f, provider: s.default_provider, model }))
+        }
+        setAiDefaultsLoaded(true)
+      }).catch(() => setAiDefaultsLoaded(true))
+    } else {
       setAiDefaultsLoaded(true)
-    }).catch(() => setAiDefaultsLoaded(true))
-  }, [])
+    }
+  }, [isAdmin])
 
   const addServer = async (e: React.FormEvent) => {
     e.preventDefault(); setAddError('')
@@ -1496,6 +1500,9 @@ export default function Servers() {
                       <div>
                         <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Connected via</p>
                         <p className={`font-medium ${serverInfo.active_key_is_fallback ? 'text-yellow-300' : 'text-white'}`}>{serverInfo.active_key_name}</p>
+                        {infoServer?.management_linux_user && (
+                          <p className="text-gray-400 text-xs mt-0.5 font-mono">Login: <span className="text-gray-200">{infoServer.management_linux_user}</span></p>
+                        )}
                         {serverInfo.active_key_is_fallback && (
                           <p className="text-yellow-400 text-xs mt-0.5">Management key failed — fallback key used. Promote the current key to fix this.</p>
                         )}

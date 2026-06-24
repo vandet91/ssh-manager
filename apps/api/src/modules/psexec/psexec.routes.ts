@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 
@@ -113,7 +113,7 @@ async function checkOnline(host: string): Promise<boolean> {
 export default async function psexecRoutes(fastify: FastifyInstance): Promise<void> {
 
   // GET /psexec/credentials — list all windows/RDP credentials for picker
-  fastify.get('/psexec/credentials', { preHandler: [requireAuth, requirePermission('servers:read')] }, async () => {
+  fastify.get('/psexec/credentials', { preHandler: [requireAuth, requireAdmin] }, async () => {
     const rows = await (db as any)
       .selectFrom('server_credentials as c')
       .leftJoin('servers as s', 's.id', 'c.server_id')
@@ -126,9 +126,10 @@ export default async function psexecRoutes(fastify: FastifyInstance): Promise<vo
   })
 
   // POST /psexec/exec — run a command on a remote Windows machine
-  fastify.post('/psexec/exec', { preHandler: [requireAuth, requirePermission('servers:write')] }, async (req, reply) => {
+  fastify.post('/psexec/exec', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const body = z.object({
       target:      z.string().min(1),
+      server_id:   z.string().uuid().optional(),
       cred_id:     z.string().uuid().optional(),
       username:    z.string().min(1).optional(),
       password:    z.string().min(1).optional(),
@@ -150,7 +151,6 @@ export default async function psexecRoutes(fastify: FastifyInstance): Promise<vo
       if (!cred) return reply.code(404).send({ error: 'Credential not found' })
       password  = decryptSecret(cred.password_enc, vaultKey)
       username  = cred.service_username ?? cred.linux_user ?? ''
-      // parse domain from notes "Domain: pvd.local" or from linux_user "pvd.local\admin"
       if (!domain) {
         const noteDomain = cred.notes?.match(/^Domain:\s*(.+)$/im)?.[1]?.trim()
         if (noteDomain) domain = noteDomain
@@ -184,7 +184,7 @@ export default async function psexecRoutes(fastify: FastifyInstance): Promise<vo
   })
 
   // POST /psexec/ping — check if a host is reachable
-  fastify.post('/psexec/ping', { preHandler: [requireAuth, requirePermission('servers:read')] }, async (req, reply) => {
+  fastify.post('/psexec/ping', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const { host } = z.object({ host: z.string().min(1) }).parse(req.body)
     const online = await checkOnline(host)
     return { online }
@@ -295,7 +295,7 @@ export default async function psexecRoutes(fastify: FastifyInstance): Promise<vo
   })
 
   // POST /psexec/ping-many — check multiple hosts at once
-  fastify.post('/psexec/ping-many', { preHandler: [requireAuth, requirePermission('servers:read')] }, async (req, reply) => {
+  fastify.post('/psexec/ping-many', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const { hosts } = z.object({ hosts: z.array(z.string()).max(200) }).parse(req.body)
     const results = await Promise.all(
       hosts.map(async host => ({ host, online: await checkOnline(host) }))

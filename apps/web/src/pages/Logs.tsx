@@ -232,7 +232,7 @@ export default function Logs() {
     } catch (err: unknown) { alert((err as Error).message) }
   }
 
-  const isAdmin = currentUser?.role === 'admin'
+  const isAdmin = !!currentUser
 
   // Derive available categories from loaded data
   const availableCategories = Array.from(new Set(auditLogs.map(l => getCategory(l.action)))) as Category[]

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, AuditLog, SshKey, Server, Assignment, User, VaultEntry } from '../api/client'
+import { api, AuditLog, SshKey, Server, VaultEntry, User } from '../api/client'
 import { usePermissions } from '../context/PermissionContext'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -31,11 +31,9 @@ function actionIcon(action: string): string {
   if (action.includes('logout')) return '🔒'
   if (action.includes('key')) return '🔑'
   if (action.includes('server')) return '🖥'
-  if (action.includes('assignment')) return '🔗'
   if (action.includes('vault')) return '🔐'
   if (action.includes('user')) return '👤'
   if (action.includes('rotat')) return '♻'
-  if (action.includes('creden')) return '🗂'
   return '•'
 }
 
@@ -70,48 +68,61 @@ function StatCard({ icon, label, value, sub, accent, onClick }: {
 
 export default function Dashboard() {
   const nav = useNavigate()
-  const { isAdmin } = usePermissions()
+  const { isAdmin, loaded: permLoaded } = usePermissions()
 
-  const [servers, setServers] = useState<Server[]>([])
-  const [keys, setKeys] = useState<SshKey[]>([])
-  const [assignments, setAssignments] = useState<Assignment[]>([])
-  const [users, setUsers] = useState<User[]>([])
-  const [vault, setVault] = useState<VaultEntry[]>([])
-  const [logs, setLogs] = useState<AuditLog[]>([])
-  const [loading, setLoading] = useState(true)
+  const [servers, setServers]   = useState<Server[]>([])
+  const [keys, setKeys]         = useState<SshKey[]>([])
+  const [users, setUsers]       = useState<User[]>([])
+  const [vault, setVault]       = useState<VaultEntry[]>([])
+  const [logs, setLogs]         = useState<AuditLog[]>([])
+  const [loading, setLoading]   = useState(true)
 
   useEffect(() => {
-    Promise.all([
+    if (!permLoaded) return
+    const all: Promise<unknown>[] = [
       api.get<Server[]>('/servers').catch(() => [] as Server[]),
       api.get<SshKey[]>('/keys').catch(() => [] as SshKey[]),
-      api.get<Assignment[] | { data: Assignment[] }>('/assignments?limit=200').catch(() => [] as Assignment[]),
-      (isAdmin ? api.get<{ users: User[] }>('/users?limit=200') : Promise.resolve({ users: [] })).catch(() => ({ users: [] })),
       api.get<VaultEntry[]>('/vault?limit=1000').catch(() => [] as VaultEntry[]),
-      api.get<AuditLog[]>('/logs/audit?limit=20').catch(() => [] as AuditLog[]),
-    ]).then(([srv, k, asgn, usrResp, vlt, lg]) => {
+    ]
+
+    if (isAdmin) {
+      all.push(
+        api.get<{ users: User[] }>('/users?limit=200').then(r => r.users).catch(() => [] as User[]),
+        api.get<AuditLog[]>('/logs/audit?limit=20').catch(() => [] as AuditLog[]),
+      )
+    } else {
+      all.push(
+        Promise.resolve([] as User[]),
+        api.get<AuditLog[]>('/logs/my-activity?limit=20').catch(() => [] as AuditLog[]),
+      )
+    }
+
+    Promise.all(all).then(([srv, k, vlt, usr, lg]) => {
       setServers(srv as Server[])
       setKeys(k as SshKey[])
-      const aArr = Array.isArray(asgn) ? asgn : ((asgn as { data: Assignment[] }).data ?? [])
-      setAssignments(aArr)
-      setUsers((usrResp as { users: User[] }).users ?? [])
       setVault(vlt as VaultEntry[])
+      setUsers(usr as User[])
       setLogs(lg as AuditLog[])
       setLoading(false)
     })
-  }, [])
+  }, [isAdmin, permLoaded])
 
-  // ── Derived stats ───────────────────────────────────────────────────────────
+  // ── Derived stats ─────────────────────────────────────────────────────────
   const activeServers = servers.filter(s => s.is_active)
   const now = new Date()
-  const in7d = new Date(now.getTime() + 7 * 86400000)
+  const in7d  = new Date(now.getTime() + 7 * 86400000)
   const in30d = new Date(now.getTime() + 30 * 86400000)
 
-  const overdueKeys = keys.filter(k => k.is_active && k.next_rotation_at && new Date(k.next_rotation_at) < now)
-  const soonKeys    = keys.filter(k => k.is_active && k.next_rotation_at && new Date(k.next_rotation_at) >= now && new Date(k.next_rotation_at) <= in7d)
+  const overdueKeys  = keys.filter(k => k.is_active && k.next_rotation_at && new Date(k.next_rotation_at) < now)
+  const soonKeys     = keys.filter(k => k.is_active && k.next_rotation_at && new Date(k.next_rotation_at) >= now && new Date(k.next_rotation_at) <= in7d)
   const upcomingKeys = keys.filter(k => k.is_active && k.next_rotation_at && new Date(k.next_rotation_at) > in7d && new Date(k.next_rotation_at) <= in30d)
 
-  const activeAssignments = assignments.filter(a => a.is_active)
-  const expiringAssignments = activeAssignments.filter(a => a.expires_at && new Date(a.expires_at) <= in7d)
+  const rotationAlerts = overdueKeys.length + soonKeys.length
+  const alertSub = overdueKeys.length > 0
+    ? `${overdueKeys.length} overdue, ${soonKeys.length} this week`
+    : soonKeys.length > 0 ? `${soonKeys.length} due this week` : 'All up to date'
+
+  const staleServers = activeServers.filter(s => !s.last_connected_at || Date.now() - new Date(s.last_connected_at).getTime() > 7 * 86400000)
 
   const envCounts = activeServers.reduce<Record<string, number>>((acc, s) => {
     acc[s.environment] = (acc[s.environment] ?? 0) + 1; return acc
@@ -120,16 +131,6 @@ export default function Dashboard() {
   const osCounts = activeServers.reduce<Record<string, number>>((acc, s) => {
     const k = s.os_type ?? 'unknown'; acc[k] = (acc[k] ?? 0) + 1; return acc
   }, {})
-
-  const staleServers = activeServers.filter(s => {
-    if (!s.last_connected_at) return true
-    return Date.now() - new Date(s.last_connected_at).getTime() > 7 * 86400000
-  })
-
-  const rotationAlerts = overdueKeys.length + soonKeys.length
-  const alertSub = overdueKeys.length > 0
-    ? `${overdueKeys.length} overdue, ${soonKeys.length} this week`
-    : soonKeys.length > 0 ? `${soonKeys.length} due this week` : 'All up to date'
 
   if (loading) {
     return (
@@ -148,43 +149,33 @@ export default function Dashboard() {
           <h1 className="text-3xl font-bold text-white tracking-tight">Dashboard</h1>
           <p className="text-sm text-gray-500 mt-0.5">{new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
         </div>
-        {/* Quick Actions */}
+        {/* Quick actions — admin: full set; operator: only vault */}
         <div className="flex gap-2 flex-wrap">
-          {[
-            { label: '+ Server',     path: '/servers',   color: '#388bfd' },
-            { label: '+ SSH Key',    path: '/keys',      color: '#a371f7' },
-            { label: '+ Vault Entry',path: '/vault',     color: '#3fb950' },
-            { label: '+ Assignment', path: '/assignments',color: '#d29922' },
-          ].map(({ label, path, color }) => (
-            <button key={label} onClick={() => nav(path)}
-              className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-90 active:scale-95"
-              style={{ background: color + '22', color, border: `1px solid ${color}44` }}>
-              {label}
-            </button>
-          ))}
+          {isAdmin ? (
+            <>
+              <button onClick={() => nav('/servers')} className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-90" style={{ background: '#388bfd22', color: '#388bfd', border: '1px solid #388bfd44' }}>+ Server</button>
+              <button onClick={() => nav('/keys')}    className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-90" style={{ background: '#a371f722', color: '#a371f7', border: '1px solid #a371f744' }}>+ SSH Key</button>
+              <button onClick={() => nav('/vault')}   className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-90" style={{ background: '#3fb95022', color: '#3fb950', border: '1px solid #3fb95044' }}>+ Vault Entry</button>
+              <button onClick={() => nav('/users')}   className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-90" style={{ background: '#ec654722', color: '#ec6547', border: '1px solid #ec654744' }}>+ User</button>
+            </>
+          ) : (
+            <button onClick={() => nav('/vault')} className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-90" style={{ background: '#3fb95022', color: '#3fb950', border: '1px solid #3fb95044' }}>+ Vault Entry</button>
+          )}
         </div>
       </div>
 
       {/* ── Stat cards ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard icon="🖥" label="Servers" value={activeServers.length}
-          sub={`${servers.length - activeServers.length} inactive`}
-          accent="#58a6ff" onClick={() => nav('/servers')} />
-        <StatCard icon="⚷" label="SSH Keys" value={keys.filter(k => k.is_active).length}
-          sub={`${keys.filter(k => !k.is_active).length} archived`}
-          accent="#a371f7" onClick={() => nav('/keys')} />
-        <StatCard icon="⊞" label="Assignments" value={activeAssignments.length}
-          sub={expiringAssignments.length > 0 ? `${expiringAssignments.length} expiring soon` : 'None expiring'}
-          accent="#d29922" onClick={() => nav('/assignments')} />
-        <StatCard icon="🔐" label="Vault" value={vault.length}
-          sub="stored credentials"
-          accent="#3fb950" onClick={() => nav('/vault')} />
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <StatCard icon="🖥"  label="Servers"    value={activeServers.length}
+          sub={`${servers.length - activeServers.length} inactive`} accent="#58a6ff" onClick={() => nav('/servers')} />
+        <StatCard icon="⚷"  label="SSH Keys"   value={keys.filter(k => k.is_active).length}
+          sub={`${keys.filter(k => !k.is_active).length} archived`} accent="#a371f7" onClick={() => nav('/keys')} />
+        <StatCard icon="🔐" label="Vault"       value={vault.length}
+          sub={isAdmin ? 'stored credentials' : 'your entries'} accent="#3fb950" onClick={() => nav('/vault')} />
         {isAdmin && <StatCard icon="👤" label="Users" value={users.filter(u => u.is_active).length}
-          sub={`${users.length} total`}
-          accent="#ec6547" onClick={() => nav('/users')} />}
-        <StatCard icon="♻" label="Rotation Alerts" value={rotationAlerts}
-          sub={alertSub}
-          accent={rotationAlerts > 0 ? '#f85149' : '#3fb950'} onClick={() => nav('/keys')} />
+          sub={`${users.length} total`} accent="#ec6547" onClick={() => nav('/users')} />}
+        <StatCard icon="♻"  label="Key Alerts"  value={rotationAlerts}
+          sub={alertSub} accent={rotationAlerts > 0 ? '#f85149' : '#3fb950'} onClick={() => nav('/keys')} />
       </div>
 
       {/* ── Middle row ── */}
@@ -197,7 +188,6 @@ export default function Dashboard() {
             <span className="ml-auto text-xs text-gray-500 font-normal">{activeServers.length} active</span>
           </h2>
 
-          {/* By environment */}
           <div>
             <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">By Environment</p>
             <div className="space-y-1.5">
@@ -211,13 +201,12 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
-              {activeServers.length === 0 && <p className="text-xs text-gray-600">No active servers.</p>}
+              {activeServers.length === 0 && <p className="text-xs text-gray-600">No servers yet.</p>}
             </div>
           </div>
 
-          {/* By OS */}
           <div>
-            <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">By OS</p>
+            <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">By OS / Type</p>
             <div className="flex flex-wrap gap-2">
               {Object.entries(osCounts).map(([os, cnt]) => (
                 <span key={os} className="px-2 py-1 rounded-lg text-xs font-medium bg-gray-800 text-gray-300">
@@ -227,13 +216,12 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Stale servers */}
           {staleServers.length > 0 && (
             <div>
               <p className="text-xs text-yellow-600 mb-2 uppercase tracking-wide">⚠ Not seen in 7+ days</p>
               <div className="space-y-1 max-h-24 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
                 {staleServers.map(s => (
-                  <div key={s.id} className="flex items-center justify-between text-xs" style={{ paddingRight: 20 }}>
+                  <div key={s.id} className="flex items-center justify-between text-xs" style={{ paddingRight: 6 }}>
                     <span className="text-gray-400 truncate">{s.name}</span>
                     <span className="text-yellow-700 shrink-0 ml-2">{timeAgo(s.last_connected_at)}</span>
                   </div>
@@ -302,23 +290,9 @@ export default function Dashboard() {
               <p className="text-sm">All keys are up to date</p>
             </div>
           )}
-
-          {expiringAssignments.length > 0 && (
-            <div>
-              <p className="text-xs text-orange-500 mb-1.5 uppercase tracking-wide font-medium">⏳ Assignments expiring soon</p>
-              <div className="space-y-1.5">
-                {expiringAssignments.slice(0, 4).map(a => (
-                  <div key={a.id} className="flex items-center justify-between text-xs bg-orange-900/10 border border-orange-900/30 rounded-lg px-3 py-1.5">
-                    <span className="text-gray-300 font-mono truncate">{a.linux_user}</span>
-                    <span className="text-orange-400 shrink-0 ml-2">{a.expires_at ? new Date(a.expires_at).toLocaleDateString() : '—'}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* Recent servers */}
+        {/* Recently Connected servers */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3">
           <h2 className="text-sm font-semibold text-white flex items-center gap-2">
             🕐 Recently Connected
@@ -339,14 +313,12 @@ export default function Dashboard() {
                     </div>
                     <div className="text-right shrink-0">
                       <p className="text-xs text-gray-500">{timeAgo(s.last_connected_at)}</p>
-                      <span className="text-xs px-1.5 py-0.5 rounded text-xs capitalize" style={{ color: ENV_COLOR[s.environment] ?? '#8b949e', background: (ENV_COLOR[s.environment] ?? '#8b949e') + '18' }}>
-                        {s.environment}
-                      </span>
+                      <span className="text-xs capitalize" style={{ color: ENV_COLOR[s.environment] ?? '#8b949e' }}>{s.environment}</span>
                     </div>
                   </div>
                 )
               })}
-            {activeServers.length === 0 && <p className="text-xs text-gray-600 py-4 text-center">No servers added yet.</p>}
+            {activeServers.length === 0 && <p className="text-xs text-gray-600 py-4 text-center">No servers available.</p>}
           </div>
         </div>
       </div>
@@ -354,8 +326,10 @@ export default function Dashboard() {
       {/* ── Activity feed ── */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
         <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          📋 Recent Activity
-          <button onClick={() => nav('/logs')} className="ml-auto text-xs text-indigo-400 hover:text-indigo-300 transition-colors font-normal">Full log →</button>
+          📋 {isAdmin ? 'Recent Activity' : 'My Recent Activity'}
+          <button onClick={() => nav(isAdmin ? '/logs' : '/activity')} className="ml-auto text-xs text-indigo-400 hover:text-indigo-300 transition-colors font-normal">
+            {isAdmin ? 'Full log →' : 'Full history →'}
+          </button>
         </h2>
         {logs.length === 0
           ? <p className="text-gray-600 text-sm text-center py-6">No activity yet.</p>
@@ -364,10 +338,8 @@ export default function Dashboard() {
               {logs.map((log, i) => (
                 <div key={log.id} className={`flex items-start gap-3 px-3 py-2.5 rounded-xl text-xs transition-colors hover:bg-gray-800/50 ${i % 2 === 0 ? '' : 'bg-gray-800/20'}`}>
                   <span className="text-base shrink-0 mt-0.5">{actionIcon(log.action)}</span>
-                  <span className="font-mono shrink-0 mt-0.5 font-semibold" style={{ color: actionColor(log.action) }}>
-                    {log.action}
-                  </span>
-                  <span className="text-gray-400 truncate flex-1">{log.user_email ?? 'system'}</span>
+                  <span className="font-mono shrink-0 mt-0.5 font-semibold" style={{ color: actionColor(log.action) }}>{log.action}</span>
+                  {isAdmin && <span className="text-gray-400 truncate flex-1">{log.user_email ?? 'system'}</span>}
                   {log.resource_id && <span className="text-gray-600 font-mono shrink-0 hidden sm:block">{log.resource_id.slice(0, 8)}</span>}
                   <span className="text-gray-600 shrink-0">{timeAgo(log.created_at)}</span>
                 </div>

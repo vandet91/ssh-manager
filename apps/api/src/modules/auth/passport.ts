@@ -110,7 +110,7 @@ async function upsertUser(data: {
   }
 
   // Check bootstrap admin
-  const bootstrapRole = data.email === config.BOOTSTRAP_ADMIN_EMAIL.toLowerCase() ? 'admin' : 'viewer'
+  const bootstrapRole = data.email === config.BOOTSTRAP_ADMIN_EMAIL.toLowerCase() ? 'admin' : 'operator'
 
   const [inserted] = await db
     .insertInto('users')

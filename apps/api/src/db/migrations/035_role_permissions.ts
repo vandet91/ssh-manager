@@ -18,8 +18,6 @@ const DEFAULT_PERMISSIONS: Record<string, string[]> = {
   ],
   viewer: [
     'servers:read',
-    'keys:read',
-    'logs:read',
   ],
 }
 

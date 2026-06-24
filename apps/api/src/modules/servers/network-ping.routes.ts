@@ -1,9 +1,9 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 
 const execAsync = promisify(exec)
 
@@ -28,7 +28,7 @@ async function pingHost(hostname: string): Promise<{ status: 'online' | 'offline
     const latency_ms = match ? Math.round(parseFloat(match[1])) : null
     return { status: 'online', latency_ms }
   } catch {
-    // Ping failed — try TCP port 80 as fallback
+    // Ping failed â€” try TCP port 80 as fallback
     try {
       const start = Date.now()
       await execAsync(`nc -z -w 2 ${hostname} 80`, { timeout: 3000 })
@@ -43,7 +43,7 @@ export default async function networkPingRoutes(fastify: FastifyInstance): Promi
   fastify.addHook('preHandler', requireAuth)
 
   // POST /network-devices/ping
-  fastify.post('/network-devices/ping', { preHandler: requirePermission('servers:read') }, async (req) => {
+  fastify.post('/network-devices/ping', { preHandler: requireAdmin }, async (req) => {
     const body = z.object({
       device_ids:  z.array(z.string().uuid()).optional(),
       os_type:     z.string().optional(),
@@ -109,8 +109,8 @@ export default async function networkPingRoutes(fastify: FastifyInstance): Promi
     return { results, summary: { total: results.length, online, offline, skipped } }
   })
 
-  // GET /network-devices/ping-status — last saved ping results for all network devices
-  fastify.get('/network-devices/ping-status', { preHandler: requirePermission('servers:read') }, async () => {
+  // GET /network-devices/ping-status â€” last saved ping results for all network devices
+  fastify.get('/network-devices/ping-status', { preHandler: requireAuth }, async () => {
     const rows = await db.selectFrom('servers')
       .select(['id', 'name', 'hostname', 'os_type', 'environment', 'ping_enabled', 'in_stock', 'ping_last_at', 'ping_last_status', 'ping_last_latency_ms'])
       .where('device_category', '=', 'network')
@@ -121,8 +121,8 @@ export default async function networkPingRoutes(fastify: FastifyInstance): Promi
     return rows
   })
 
-  // PATCH /servers/:id/ping-settings — update ping_enabled / in_stock flags
-  fastify.patch('/servers/:id/ping-settings', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // PATCH /servers/:id/ping-settings â€” update ping_enabled / in_stock flags
+  fastify.patch('/servers/:id/ping-settings', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       ping_enabled: z.boolean().optional(),
@@ -137,3 +137,4 @@ export default async function networkPingRoutes(fastify: FastifyInstance): Promi
     reply.code(204).send()
   })
 }
+

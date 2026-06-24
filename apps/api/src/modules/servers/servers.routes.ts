@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { writeAuditLog } from '../../utils/audit'
 import { getRemoteHostFingerprint, withSsh, connectSsh, connectWithFallback } from '../../utils/ssh'
 import { withServerSsh } from '../../utils/server-ssh'
@@ -38,7 +38,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
   // GET /servers
-  fastify.get('/servers', { preHandler: requirePermission('servers:read') }, async (req) => {
+  fastify.get('/servers', async (req) => {
     const query = z.object({
       environment: z.string().optional(),
       device_category: z.enum(['server', 'network']).optional(),
@@ -46,12 +46,13 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       limit: z.coerce.number().default(200),
     }).parse(req.query)
 
-    let qb = db.selectFrom('servers').selectAll().where('is_active', '=', true).orderBy('name', 'asc')
-    if (query.environment) qb = qb.where('environment', '=', query.environment as 'production')
+    let qb = (db as any).selectFrom('servers').selectAll('servers').where('servers.is_active', '=', true).orderBy('servers.name', 'asc')
+
+    if (query.environment) qb = qb.where('servers.environment', '=', query.environment)
     if (query.device_category === 'server') {
-      qb = qb.where('os_type', 'in', ['linux', 'windows'])
+      qb = qb.where('servers.os_type', 'in', ['linux', 'windows'])
     } else if (query.device_category === 'network') {
-      qb = qb.where('os_type', 'in', [
+      qb = qb.where('servers.os_type', 'in', [
         'router', 'switch', 'switch-l3', 'access-point', 'wireless-controller',
         'firewall', 'utm', 'ids-ips', 'waf',
         'load-balancer', 'proxy', 'wan-optimizer',
@@ -67,7 +68,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers
-  fastify.post('/servers', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers', { preHandler: requireAdmin }, async (req, reply) => {
     const body = ServerBody.parse(req.body)
 
     let server
@@ -91,7 +92,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /servers/:id
-  fastify.get('/servers/:id', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -104,7 +105,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // PATCH /servers/:id
-  fastify.patch('/servers/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.patch('/servers/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = ServerBody.partial().parse(req.body)
 
@@ -119,7 +120,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /servers/:id
-  fastify.delete('/servers/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.delete('/servers/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     await db.updateTable('servers').set({ is_active: false, updated_at: new Date() }).where('id', '=', id).execute()
     // Deactivate all key assignments for this server so keys are not blocked from deletion
@@ -129,7 +130,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/verify-host-key
-  fastify.post('/servers/:id/verify-host-key', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/verify-host-key', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -159,7 +160,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/reset-host-key — force re-learn host key (use when key changed legitimately)
-  fastify.post('/servers/:id/reset-host-key', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/reset-host-key', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -184,7 +185,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/test-connection
-  fastify.post('/servers/:id/test-connection', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/servers/:id/test-connection', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -201,7 +202,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/setup — connect via password, auto-generate & deploy management key
-  fastify.post('/servers/:id/setup', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/setup', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       linux_user: z.string().min(1),
@@ -332,13 +333,13 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /servers/:id/assignments
-  fastify.get('/servers/:id/assignments', { preHandler: requirePermission('servers:read') }, async (req) => {
+  fastify.get('/servers/:id/assignments', { preHandler: requireAuth }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     return db.selectFrom('key_assignments').selectAll().where('server_id', '=', id).where('is_active', '=', true).execute()
   })
 
   // GET /servers/:id/info — SSH in and collect live system info
-  fastify.get('/servers/:id/info', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/info', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -491,7 +492,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /servers/:id/authorized-keys — remove a specific key from the server's authorized_keys
-  fastify.delete('/servers/:id/authorized-keys', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.delete('/servers/:id/authorized-keys', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       linux_user: z.string().min(1),
@@ -558,7 +559,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   // ── Server User Management ────────────────────────────────────────────────
 
   // POST /servers/:id/users — create a linux user
-  fastify.post('/servers/:id/users', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/users', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       username: z.string().min(1).max(32).regex(/^[a-z_][a-z0-9_-]*$/, 'Invalid linux username'),
@@ -625,7 +626,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /servers/:id/users/:username — delete a linux user
-  fastify.delete('/servers/:id/users/:username', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.delete('/servers/:id/users/:username', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, username } = z.object({ id: z.string().uuid(), username: z.string().min(1) }).parse(req.params)
     const body = z.object({ remove_home: z.boolean().default(false) }).optional().parse(req.body)
 
@@ -672,7 +673,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // PATCH /servers/:id/users/:username — edit shell, comment, or password
-  fastify.patch('/servers/:id/users/:username', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.patch('/servers/:id/users/:username', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, username } = z.object({ id: z.string().uuid(), username: z.string().min(1) }).parse(req.params)
     const body = z.object({
       shell: z.string().optional(),
@@ -747,7 +748,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/users/:username/keys — push an SSH key to a linux user
-  fastify.post('/servers/:id/users/:username/keys', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/users/:username/keys', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, username } = z.object({ id: z.string().uuid(), username: z.string().min(1) }).parse(req.params)
     const body = z.object({ key_id: z.string().uuid() }).parse(req.body)
 
@@ -854,7 +855,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // PATCH /servers/:id/management-key — promote an active SSH key to be the management key
-  fastify.patch('/servers/:id/management-key', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.patch('/servers/:id/management-key', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({ key_id: z.string().uuid(), linux_user: z.string().optional() }).parse(req.body)
 
@@ -882,7 +883,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     return { ok: true, key_name: key.name }
   })
   // GET /servers/:id/recommendations — best-practice config recommendations based on installed software + hardware
-  fastify.get('/servers/:id/recommendations', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/recommendations', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     try {
       const { generateRecommendations } = await import('../../utils/recommendations')
@@ -940,7 +941,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /servers/:id/benchmark — run OS security benchmark checks via SSH
-  fastify.get('/servers/:id/benchmark', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/benchmark', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -964,7 +965,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /servers/:id/browse?path=/var/www — list directory contents via SSH
-  fastify.get('/servers/:id/browse', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/browse', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: browsePath = '/' } = z.object({ path: z.string().optional() }).parse(req.query)
 
@@ -1021,7 +1022,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   // ── AI Log Analyst ───────────────────────────────────────────────────────────
 
   // POST /servers/:id/ai-analyse
-  fastify.post('/servers/:id/ai-analyse', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/servers/:id/ai-analyse', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       log_source:      z.string().min(1),   // shell command to fetch logs
@@ -1092,7 +1093,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   // Connects via management SSH key as normal user, elevates to root using the stored vault
   // credential (linux_user='root'), pushes the management key to /root/.ssh/authorized_keys,
   // and ensures PermitRootLogin allows key-based login.
-  fastify.post('/servers/:id/enable-root-ssh', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/enable-root-ssh', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     try {
       const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
@@ -1249,7 +1250,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /servers/:id/sshd-status — read PermitRootLogin + root lock status via management SSH
-  fastify.get('/servers/:id/sshd-status', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/sshd-status', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     try {
       const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
@@ -1285,7 +1286,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /servers/:id/ndb-status — query MySQL NDB Cluster topology via ndb_mgm
-  fastify.get('/servers/:id/ndb-status', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/ndb-status', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     try {
       const server = await db.selectFrom('servers').selectAll().where('id', '=', id).executeTakeFirst()
@@ -1347,7 +1348,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/root/activate — Ubuntu: unlock root by setting a password via sudo passwd root
-  fastify.post('/servers/:id/root/activate', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/root/activate', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { root_password } = z.object({ root_password: z.string().min(6) }).parse(req.body)
     try {
@@ -1406,7 +1407,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/root/permit-login — set PermitRootLogin value via root elevation
-  fastify.post('/servers/:id/root/permit-login', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/root/permit-login', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { value } = z.object({ value: z.enum(['yes', 'prohibit-password', 'no']) }).parse(req.body)
     try {

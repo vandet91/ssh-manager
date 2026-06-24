@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { withServerSsh } from '../../utils/server-ssh'
 import { runDiscovery, compareSnapshots, DiscoverySnapshot } from '../../utils/discovery'
 import { writeAuditLog } from '../../utils/audit'
@@ -11,7 +11,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
   // POST /migration/snapshots — run discovery on a server and save snapshot
-  fastify.post('/migration/snapshots', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/migration/snapshots', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       server_id: z.string().uuid(),
       label: z.string().max(120).optional().default(''),
@@ -48,7 +48,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /migration/snapshots — list all snapshots (newest first)
-  fastify.get('/migration/snapshots', { preHandler: requirePermission('servers:read') }, async (req) => {
+  fastify.get('/migration/snapshots', { preHandler: requireAdmin }, async (req) => {
     const query = z.object({
       server_id: z.string().uuid().optional(),
       page: z.coerce.number().default(1),
@@ -65,7 +65,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /migration/snapshots/:id — get full snapshot detail
-  fastify.get('/migration/snapshots/:id', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/migration/snapshots/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const row = await db.selectFrom('migration_snapshots').selectAll().where('id', '=', id).executeTakeFirst()
     if (!row) return reply.code(404).send({ error: 'Snapshot not found' })
@@ -73,7 +73,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // PATCH /migration/snapshots/:id — update label
-  fastify.patch('/migration/snapshots/:id', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.patch('/migration/snapshots/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({ label: z.string().max(120) }).parse(req.body)
     const row = await db.updateTable('migration_snapshots')
@@ -85,7 +85,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /migration/snapshots/:id
-  fastify.delete('/migration/snapshots/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.delete('/migration/snapshots/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     await db.deleteFrom('migration_snapshots').where('id', '=', id).execute()
     await writeAuditLog({
@@ -96,7 +96,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /migration/compare — diff two snapshots
-  fastify.post('/migration/compare', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/migration/compare', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       source_id: z.string().uuid(),
       target_id: z.string().uuid(),
@@ -129,7 +129,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /migration/dump — dump a database to a file on the source server (phase 1 only)
-  fastify.post('/migration/dump', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/migration/dump', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       server_id: z.string().uuid(),
       type: z.enum(['mysql', 'postgresql', 'mongodb']),
@@ -151,7 +151,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /migration/restore-check — check if target server is ready to restore
-  fastify.post('/migration/restore-check', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/migration/restore-check', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       server_id: z.string().uuid(),
       type: z.enum(['mysql', 'postgresql', 'mongodb']),
@@ -173,7 +173,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /migration/restore — restore a database from a dump file on the target server
-  fastify.post('/migration/restore', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/migration/restore', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       server_id: z.string().uuid(),
       type: z.enum(['mysql', 'postgresql', 'mongodb']),
@@ -199,7 +199,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /migration/transfer — start a transfer job between two servers
-  fastify.post('/migration/transfer', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/migration/transfer', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       source_id: z.string().uuid(),
       target_id: z.string().uuid(),
@@ -248,7 +248,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /migration/transfer/:jobId — poll job status
-  fastify.get('/migration/transfer/:jobId', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/migration/transfer/:jobId', { preHandler: requireAdmin }, async (req, reply) => {
     const { jobId } = z.object({ jobId: z.string().uuid() }).parse(req.params)
     const job = transferJobs.get(jobId)
     if (!job) return reply.code(404).send({ error: 'Job not found' })
@@ -256,7 +256,7 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /migration/transfer/:jobId/verify — verify data integrity after transfer
-  fastify.post('/migration/transfer/:jobId/verify', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/migration/transfer/:jobId/verify', { preHandler: requireAdmin }, async (req, reply) => {
     const { jobId } = z.object({ jobId: z.string().uuid() }).parse(req.params)
     const job = transferJobs.get(jobId)
     if (!job) return reply.code(404).send({ error: 'Job not found' })
@@ -281,13 +281,13 @@ async function migrationRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /migration/transfer — list recent jobs (last 50)
-  fastify.get('/migration/transfer', { preHandler: requirePermission('servers:read') }, async (_req, _reply) => {
+  fastify.get('/migration/transfer', { preHandler: requireAdmin }, async (_req, _reply) => {
     const jobs = [...transferJobs.values()].sort((a, b) => b.started_at.localeCompare(a.started_at)).slice(0, 50)
     return jobs
   })
 
   // GET /migration/snapshots/:id/export — download snapshot as JSON
-  fastify.get('/migration/snapshots/:id/export', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/migration/snapshots/:id/export', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const row = await db.selectFrom('migration_snapshots').selectAll().where('id', '=', id).executeTakeFirst()
     if (!row) return reply.code(404).send({ error: 'Snapshot not found' })

@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { generateKeyPairSync } from 'crypto'
 import sshpk from 'sshpk'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 import { parsePpk, isPpkFile } from '../../utils/ppk'
@@ -25,19 +25,19 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
   // GET /keys
-  fastify.get('/keys', { preHandler: requirePermission('keys:read') }, async () => {
+  fastify.get('/keys', async () => {
     return db.selectFrom('ssh_keys')
-      .select(['id', 'name', 'description', 'key_type', 'public_key', 'fingerprint', 'rotation_policy', 'last_rotated_at', 'next_rotation_at', 'is_active', 'created_by', 'created_at', 'updated_at'])
-      .where('is_active', '=', true)
-      .execute()
+      .select(['id', 'name', 'description', 'key_type', 'public_key', 'fingerprint', 'rotation_policy',
+        'last_rotated_at', 'next_rotation_at', 'is_active', 'created_by', 'owner_id', 'is_shared', 'created_at', 'updated_at'])
+      .where('is_active', '=', true).execute()
   })
 
   // GET /keys/archived
-  fastify.get('/keys/archived', { preHandler: requirePermission('keys:read') }, async () => {
+  fastify.get('/keys/archived', { preHandler: requireAdmin }, async () => {
     return db.selectFrom('ssh_keys')
       .select(['id', 'name', 'description', 'key_type', 'fingerprint', 'rotation_policy',
         'archived_at', 'archive_reason', 'purge_after', 'successor_key_id', 'predecessor_key_id',
-        'last_rotated_at', 'created_at', 'updated_at'])
+        'last_rotated_at', 'owner_id', 'is_shared', 'created_at', 'updated_at'])
       .where('is_active', '=', false)
       .where('archived_at', 'is not', null)
       .orderBy('archived_at', 'desc')
@@ -45,7 +45,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /keys/generate
-  fastify.post('/keys/generate', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
+  fastify.post('/keys/generate', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       name: z.string().min(1).max(100),
       description: z.string().optional(),
@@ -93,6 +93,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       rotation_policy: body.rotation_policy,
       next_rotation_at: computeNextRotation(body.rotation_policy),
       created_by: req.session.user!.id,
+      owner_id: req.session.user!.id,
     }).returningAll().executeTakeFirst()
 
     await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'key.generated', resource: 'ssh_key', resourceId: key!.id, request: req })
@@ -100,7 +101,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /keys/import — supports OpenSSH PEM and PuTTY .ppk
-  fastify.post('/keys/import', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
+  fastify.post('/keys/import', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       name: z.string().min(1).max(100),
       description: z.string().optional(),
@@ -159,6 +160,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       rotation_policy: body.rotation_policy,
       next_rotation_at: computeNextRotation(body.rotation_policy),
       created_by: req.session.user!.id,
+      owner_id: req.session.user!.id,
     }).returningAll().executeTakeFirst()
 
     await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'key.imported', resource: 'ssh_key', resourceId: key!.id, request: req })
@@ -166,10 +168,11 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /keys/:id
-  fastify.get('/keys/:id', { preHandler: requirePermission('keys:read') }, async (req, reply) => {
+  fastify.get('/keys/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const key = await db.selectFrom('ssh_keys')
-      .select(['id', 'name', 'description', 'key_type', 'public_key', 'fingerprint', 'rotation_policy', 'last_rotated_at', 'next_rotation_at', 'is_active', 'created_by', 'created_at', 'updated_at'])
+      .select(['id', 'name', 'description', 'key_type', 'public_key', 'fingerprint', 'rotation_policy',
+        'last_rotated_at', 'next_rotation_at', 'is_active', 'created_by', 'owner_id', 'is_shared', 'created_at', 'updated_at'])
       .where('id', '=', id)
       .executeTakeFirst()
     if (!key) return reply.code(404).send({ error: 'Key not found' })
@@ -182,8 +185,22 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
     return { ...key, rotation_history: rotations }
   })
 
+  // PATCH /keys/:id/share — toggle shared flag (admin or owner only)
+  fastify.patch('/keys/:id/share', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { shared } = z.object({ shared: z.boolean() }).parse(req.body)
+    const { id: userId } = req.session.user!
+
+    const key = await db.selectFrom('ssh_keys').select(['id', 'owner_id']).where('id', '=', id).executeTakeFirst()
+    if (!key) return reply.code(404).send({ error: 'Key not found' })
+
+    await db.updateTable('ssh_keys').set({ is_shared: shared, updated_at: new Date() }).where('id', '=', id).execute()
+    await writeAuditLog({ userId, userEmail: req.session.user!.email, action: shared ? 'key.shared' : 'key.unshared', resource: 'ssh_key', resourceId: id, request: req })
+    return { id, is_shared: shared }
+  })
+
   // PATCH /keys/:id
-  fastify.patch('/keys/:id', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
+  fastify.patch('/keys/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       name: z.string().optional(),
@@ -200,7 +217,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /keys/orphaned-assignments — keys that have active assignments pointing to deleted servers
-  fastify.get('/keys/orphaned-assignments', { preHandler: requirePermission('keys:read') }, async (_req, reply) => {
+  fastify.get('/keys/orphaned-assignments', { preHandler: requireAdmin }, async (_req, reply) => {
     const rows = await db.selectFrom('key_assignments')
       .innerJoin('ssh_keys', 'ssh_keys.id', 'key_assignments.key_id')
       .leftJoin('servers', 'servers.id', 'key_assignments.server_id')
@@ -222,7 +239,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /keys/cleanup-orphans — deactivate all assignments pointing to deleted servers
-  fastify.post('/keys/cleanup-orphans', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
+  fastify.post('/keys/cleanup-orphans', { preHandler: requireAdmin }, async (req, reply) => {
     const result = await db.updateTable('key_assignments')
       .set({ is_active: false })
       .where('is_active', '=', true)
@@ -236,7 +253,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /keys/:id — moves to archive (soft delete)
-  fastify.delete('/keys/:id', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
+  fastify.delete('/keys/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
     // Auto-clean orphaned assignments (server was deleted but assignments weren't deactivated)
@@ -284,7 +301,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /keys/:id/revert — revert a rotation, push old key back to servers
-  fastify.post('/keys/:id/revert', { preHandler: requirePermission('keys:rotate') }, async (req, reply) => {
+  fastify.post('/keys/:id/revert', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const key = await db.selectFrom('ssh_keys').selectAll().where('id', '=', id).executeTakeFirst()
     if (!key) return reply.code(404).send({ error: 'Key not found' })
@@ -301,7 +318,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /keys/archived/:id — permanently delete an archived key immediately
-  fastify.delete('/keys/archived/:id', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
+  fastify.delete('/keys/archived/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const key = await db.selectFrom('ssh_keys').select(['id', 'is_active', 'archived_at']).where('id', '=', id).executeTakeFirst()
     if (!key) return reply.code(404).send({ error: 'Key not found' })
@@ -334,13 +351,13 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /keys/purge-expired — trigger manual purge of expired archived keys
-  fastify.post('/keys/purge-expired', { preHandler: requirePermission('keys:write') }, async () => {
+  fastify.post('/keys/purge-expired', { preHandler: requireAdmin }, async () => {
     const count = await purgeExpiredArchivedKeys()
     return { purged: count }
   })
 
   // GET /keys/:id/public
-  fastify.get('/keys/:id/public', { preHandler: requirePermission('keys:read') }, async (req, reply) => {
+  fastify.get('/keys/:id/public', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const key = await db.selectFrom('ssh_keys').select(['name', 'public_key']).where('id', '=', id).executeTakeFirst()
     if (!key) return reply.code(404).send({ error: 'Key not found' })
@@ -350,7 +367,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /keys/:id/private?format=openssh|ppk — download decrypted private key (admin/operator only)
-  fastify.get('/keys/:id/private', { preHandler: requirePermission('keys:write') }, async (req, reply) => {
+  fastify.get('/keys/:id/private', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { format } = z.object({ format: z.enum(['openssh', 'ppk']).default('openssh') }).parse(req.query)
 

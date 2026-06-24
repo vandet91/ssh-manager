@@ -83,8 +83,13 @@ export default function Terminal() {
   const searchInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   useEffect(() => {
-    api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))).catch(() => {})
-    api.get<Assignment[]>('/assignments').then(setAssignments).catch(() => {})
+    Promise.all([
+      api.get<Server[]>('/servers').catch(() => [] as Server[]),
+      api.get<Assignment[]>('/assignments').catch(() => [] as Assignment[]),
+    ]).then(([allServers, assigns]) => {
+      setAssignments(assigns)
+      setServers(allServers.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))
+    })
   }, [])
 
   useEffect(() => {
@@ -183,8 +188,6 @@ export default function Terminal() {
       return true
     })
 
-    // Always ensure the management user appears, even when other assignments exist
-    // (handles servers set up before the key_assignment was auto-created)
     if (tab.selectedServer) {
       const srv = servers.find((s) => s.id === tab.selectedServer)
       if (srv?.management_linux_user && srv.management_key_id) {

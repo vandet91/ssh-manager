@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { withServerSsh } from '../../utils/server-ssh'
 import { writeAuditLog } from '../../utils/audit'
 
@@ -180,7 +180,7 @@ export default async function softwareRoutes(fastify: FastifyInstance): Promise<
   fastify.addHook('preHandler', requireAuth)
 
   // GET /servers/:id/software — detect installed software via SSH
-  fastify.get('/servers/:id/software', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/software', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
     const server = await db.selectFrom('servers').select(['id', 'management_key_id']).where('id', '=', id).executeTakeFirst()
@@ -205,7 +205,7 @@ export default async function softwareRoutes(fastify: FastifyInstance): Promise<
   })
 
   // POST /servers/:id/services/:service/control — start / stop / restart / reload a service
-  fastify.post('/servers/:id/services/:service/control', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/services/:service/control', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, service } = z.object({
       id: z.string().uuid(),
       service: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_@.:-]+$/, 'Invalid service name'),

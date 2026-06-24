@@ -1,7 +1,7 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 
@@ -28,7 +28,7 @@ export default async function snmpProfileRoutes(fastify: FastifyInstance): Promi
   fastify.addHook('preHandler', requireAuth)
 
   // GET /snmp-profiles
-  fastify.get('/snmp-profiles', { preHandler: requirePermission('servers:read') }, async () => {
+  fastify.get('/snmp-profiles', { preHandler: requireAuth }, async () => {
     const rows = await db.selectFrom('snmp_profiles')
       .selectAll()
       .orderBy('name', 'asc')
@@ -53,7 +53,7 @@ export default async function snmpProfileRoutes(fastify: FastifyInstance): Promi
   })
 
   // POST /snmp-profiles
-  fastify.post('/snmp-profiles', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/snmp-profiles', { preHandler: requireAdmin }, async (req, reply) => {
     const body = ProfileBody.parse(req.body)
     const vaultKey = getVaultKey()
     const userId = (req.session.user as any)?.id ?? null
@@ -78,7 +78,7 @@ export default async function snmpProfileRoutes(fastify: FastifyInstance): Promi
   })
 
   // PUT /snmp-profiles/:id
-  fastify.put('/snmp-profiles/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.put('/snmp-profiles/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = ProfileBody.parse(req.body)
     const vaultKey = getVaultKey()
@@ -106,7 +106,7 @@ export default async function snmpProfileRoutes(fastify: FastifyInstance): Promi
   })
 
   // DELETE /snmp-profiles/:id
-  fastify.delete('/snmp-profiles/:id', { preHandler: requirePermission('servers:admin') }, async (req, reply) => {
+  fastify.delete('/snmp-profiles/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
 
     // Unlink any servers using this profile first
@@ -118,3 +118,4 @@ export default async function snmpProfileRoutes(fastify: FastifyInstance): Promi
     reply.code(204).send()
   })
 }
+

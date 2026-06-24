@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { runSecurityScan } from './security.service'
 import { startSecurityWorker } from '../../jobs/security.worker'
 
@@ -12,7 +12,7 @@ async function securityRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
   // POST /security/scan/:serverId
-  fastify.post('/security/scan/:serverId', { preHandler: requirePermission('security:scan') }, async (req, reply) => {
+  fastify.post('/security/scan/:serverId', { preHandler: requireAdmin }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     await runSecurityScan(serverId)
     const scan = await db.selectFrom('security_scans').selectAll()
@@ -22,7 +22,7 @@ async function securityRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /security/scan/all
-  fastify.post('/security/scan/all', { preHandler: requirePermission('security:scan') }, async () => {
+  fastify.post('/security/scan/all', { preHandler: requireAdmin }, async () => {
     const servers = await db.selectFrom('servers').select(['id'])
       .where('is_active', '=', true)
       .where((eb) => eb.or([eb('os_type', '!=', 'windows'), eb('os_type', 'is', null)]))
@@ -41,7 +41,7 @@ async function securityRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /security/findings
-  fastify.get('/security/findings', { preHandler: requirePermission('security:read') }, async (req) => {
+  fastify.get('/security/findings', { preHandler: requireAdmin }, async (req) => {
     const query = z.object({
       severity: z.string().optional(),
       page: z.coerce.number().default(1),
@@ -54,7 +54,7 @@ async function securityRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /security/findings/:serverId
-  fastify.get('/security/findings/:serverId', { preHandler: requirePermission('security:read') }, async (req) => {
+  fastify.get('/security/findings/:serverId', { preHandler: requireAdmin }, async (req) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     return db.selectFrom('security_scans').selectAll()
       .where('server_id', '=', serverId)

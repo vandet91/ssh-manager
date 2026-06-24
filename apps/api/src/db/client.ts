@@ -12,10 +12,11 @@ export interface UserTable {
   provider_id: string | null
   password_hash: string | null
   provider_groups: Opt<unknown>
-  role: Opt<'admin' | 'operator' | 'developer' | 'viewer'>
+  role: Opt<'admin' | 'operator'>
   mfa_secret: string | null
   mfa_enabled: Opt<boolean>
   mfa_backup_codes: Opt<unknown>
+  mfa_exempt: Opt<boolean>
   is_active: Opt<boolean>
   last_login_at: Date | null
   failed_login_attempts: Opt<number>
@@ -158,6 +159,8 @@ export interface SshKeyTable {
   successor_key_id: string | null
   predecessor_key_id: string | null
   created_by: string | null
+  owner_id: string | null
+  is_shared: Opt<boolean>
   created_at: ColumnType<Date, never, never>
   updated_at: Opt<Date>
 }
@@ -172,6 +175,8 @@ export interface KeyAssignmentTable {
   is_active: Opt<boolean>
   expires_at: Date | null
   granted_by: string | null
+  domain_user: string | null
+  domain_password_enc: string | null
   created_at: ColumnType<Date, never, never>
 }
 
@@ -285,6 +290,8 @@ export interface VaultEntryTable {
   is_archived: Opt<boolean>
   archived_at: Date | null
   created_by: string | null
+  owner_id: string | null
+  is_shared: Opt<boolean>
   created_at: ColumnType<Date, never, never>
   updated_at: Opt<Date>
 }

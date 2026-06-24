@@ -61,8 +61,7 @@ async function handleSsoCallback(req: FastifyRequest, reply: FastifyReply, user:
   req.session.user = {
     id: dbUser.id,
     email: dbUser.email,
-    role: dbUser.role,
-    mfaEnabled: dbUser.mfa_enabled,
+    mfaEnabled: !!dbUser.mfa_enabled,
     mfaPending: false,
   }
 

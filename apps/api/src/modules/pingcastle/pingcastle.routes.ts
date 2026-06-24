@@ -1,13 +1,13 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requirePermission } from '../../middleware/auth'
+import { requireAdmin } from '../../middleware/auth'
 import { XMLParser } from 'fast-xml-parser'
 
 export default async function pingcastleRoutes(fastify: FastifyInstance) {
 
   // GET /servers/:id/pingcastle — latest report
-  fastify.get('/servers/:id/pingcastle', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/pingcastle', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const report = await db
       .selectFrom('pingcastle_reports')
@@ -21,7 +21,7 @@ export default async function pingcastleRoutes(fastify: FastifyInstance) {
   })
 
   // POST /servers/:id/pingcastle — upload XML report
-  fastify.post('/servers/:id/pingcastle', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/pingcastle', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const server = await db.selectFrom('servers').select(['id']).where('id', '=', id).executeTakeFirst()
     if (!server) return reply.code(404).send({ error: 'Server not found' })
@@ -95,7 +95,7 @@ export default async function pingcastleRoutes(fastify: FastifyInstance) {
   })
 
   // DELETE /servers/:id/pingcastle — remove all reports for this server
-  fastify.delete('/servers/:id/pingcastle', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.delete('/servers/:id/pingcastle', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     await db.deleteFrom('pingcastle_reports').where('server_id', '=', id).execute()
     return { ok: true }

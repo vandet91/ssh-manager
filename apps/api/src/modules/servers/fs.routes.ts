@@ -1,8 +1,8 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { Client, SFTPWrapper } from 'ssh2'
 import { z } from 'zod'
 import * as path from 'path'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth } from '../../middleware/auth'
 import { withServerSsh } from '../../utils/server-ssh'
 import { writeAuditLog } from '../../utils/audit'
 
@@ -96,8 +96,8 @@ function exec(client: Client, cmd: string): Promise<{ stdout: string; code: numb
 async function fsRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
-  // GET /servers/:id/fs/ls?path= — list directory
-  fastify.get('/servers/:id/fs/ls', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/fs/ls?path= â€” list directory
+  fastify.get('/servers/:id/fs/ls', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: dirPath } = z.object({ path: z.string().default('/') }).parse(req.query)
 
@@ -147,8 +147,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // GET /servers/:id/fs/read?path= — read file content
-  fastify.get('/servers/:id/fs/read', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/fs/read?path= â€” read file content
+  fastify.get('/servers/:id/fs/read', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: filePath } = z.object({ path: z.string() }).parse(req.query)
 
@@ -181,8 +181,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // POST /servers/:id/fs/write — create or overwrite a file (optionally archive first)
-  fastify.post('/servers/:id/fs/write', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:id/fs/write â€” create or overwrite a file (optionally archive first)
+  fastify.post('/servers/:id/fs/write', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       path: z.string(),
@@ -196,7 +196,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
         const safe = shellEscape(body.path)
         const sftp = await getSftp(client)
 
-        // Archive existing file before overwriting — check existence via stdout, not exit code
+        // Archive existing file before overwriting â€” check existence via stdout, not exit code
         if (body.archive) {
           const { stdout: existOut } = await exec(client, `[ -f '${safe}' ] && echo yes || echo no`)
           if (existOut.trim() === 'yes') {
@@ -216,7 +216,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
           }
         }
 
-        // Write via SFTP — avoids shell arg-length limits and is reliable for any file size
+        // Write via SFTP â€” avoids shell arg-length limits and is reliable for any file size
         await sftpWrite(sftp, body.path, Buffer.from(body.content, 'utf8'))
 
         // For new files (first save), archive AFTER writing so we capture the initial version
@@ -249,8 +249,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // GET /servers/:id/fs/versions?path= — list archived versions of a file
-  fastify.get('/servers/:id/fs/versions', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/fs/versions?path= â€” list archived versions of a file
+  fastify.get('/servers/:id/fs/versions', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: filePath } = z.object({ path: z.string() }).parse(req.query)
 
@@ -280,8 +280,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // POST /servers/:id/fs/restore-version — restore an archived version
-  fastify.post('/servers/:id/fs/restore-version', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:id/fs/restore-version â€” restore an archived version
+  fastify.post('/servers/:id/fs/restore-version', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       version_path: z.string(),
@@ -325,8 +325,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // POST /servers/:id/fs/mkdir — create directory
-  fastify.post('/servers/:id/fs/mkdir', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:id/fs/mkdir â€” create directory
+  fastify.post('/servers/:id/fs/mkdir', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: dirPath } = z.object({ path: z.string() }).parse(req.body)
 
@@ -342,8 +342,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // POST /servers/:id/fs/rename — rename or move
-  fastify.post('/servers/:id/fs/rename', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:id/fs/rename â€” rename or move
+  fastify.post('/servers/:id/fs/rename', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { from: fromPath, to: toPath } = z.object({ from: z.string(), to: z.string() }).parse(req.body)
 
@@ -366,8 +366,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // DELETE /servers/:id/fs/delete?path= — delete file or directory
-  fastify.delete('/servers/:id/fs/delete', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // DELETE /servers/:id/fs/delete?path= â€” delete file or directory
+  fastify.delete('/servers/:id/fs/delete', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: targetPath } = z.object({ path: z.string() }).parse(req.query)
 
@@ -395,8 +395,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // GET /servers/:id/fs/search?path=&q=&mode=name|content — live search
-  fastify.get('/servers/:id/fs/search', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/fs/search?path=&q=&mode=name|content â€” live search
+  fastify.get('/servers/:id/fs/search', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: basePath, q, mode } = z.object({
       path: z.string().default('/'),
@@ -436,8 +436,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // POST /servers/:id/fs/lint?path= — syntax check
-  fastify.post('/servers/:id/fs/lint', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // POST /servers/:id/fs/lint?path= â€” syntax check
+  fastify.post('/servers/:id/fs/lint', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: filePath } = z.object({ path: z.string() }).parse(req.body)
 
@@ -466,10 +466,10 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // POST /servers/:id/fs/upload?path= — upload files via SFTP (multipart)
+  // POST /servers/:id/fs/upload?path= â€” upload files via SFTP (multipart)
   // Each part: field "file", filename = relative path within upload (e.g. "subdir/file.txt")
   fastify.post('/servers/:id/fs/upload', {
-    preHandler: requirePermission('servers:write'),
+    preHandler: requireAuth,
     config: { rateLimit: false },
   }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
@@ -518,8 +518,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // GET /servers/:id/fs/exists?path= — check if a path exists and its type
-  fastify.get('/servers/:id/fs/exists', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/fs/exists?path= â€” check if a path exists and its type
+  fastify.get('/servers/:id/fs/exists', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: checkPath } = z.object({ path: z.string() }).parse(req.query)
     try {
@@ -537,8 +537,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // POST /servers/:destId/fs/copy-from — copy file or directory from another server (or same)
-  fastify.post('/servers/:destId/fs/copy-from', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:destId/fs/copy-from â€” copy file or directory from another server (or same)
+  fastify.post('/servers/:destId/fs/copy-from', { preHandler: requireAuth }, async (req, reply) => {
     const { destId } = z.object({ destId: z.string().uuid() }).parse(req.params)
     const body = z.object({
       source_server_id: z.string().uuid(),
@@ -618,9 +618,9 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  // GET /servers/:id/fs/download?path= — stream file or folder to browser
-  // Files → raw download; folders → tar.gz archive
-  fastify.get('/servers/:id/fs/download', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/fs/download?path= â€” stream file or folder to browser
+  // Files â†’ raw download; folders â†’ tar.gz archive
+  fastify.get('/servers/:id/fs/download', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { path: targetPath } = z.object({ path: z.string().min(1) }).parse(req.query)
     try {
@@ -673,3 +673,5 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
 }
 
 export default fsRoutes
+
+

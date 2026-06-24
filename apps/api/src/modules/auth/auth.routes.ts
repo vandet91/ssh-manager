@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { randomBytes } from 'crypto'
 
 import speakeasy from 'speakeasy'
@@ -8,13 +8,13 @@ import { z } from 'zod'
 import { db } from '../../db/client'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
-import { requireAuth, requirePermission, getPermissions } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { elevateSession } from '../../utils/totp-guard'
 import { config } from '../../config'
 import { getPasswordPolicy, validatePassword } from '../settings/settings.routes'
 
 async function authRoutes(fastify: FastifyInstance): Promise<void> {
-  // POST /auth/login — local username/password login
+  // POST /auth/login â€” local username/password login
   fastify.post('/auth/login', async (req, reply) => {
     const body = z.object({
       email: z.string().email(),
@@ -92,18 +92,17 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
       return { mfaRequired: true }
     }
 
-    req.session.user = { id: user.id, email: user.email, role: user.role!, mfaEnabled: !!user.mfa_enabled, mfaPending: false }
+    req.session.user = { id: user.id, email: user.email, mfaEnabled: !!user.mfa_enabled, mfaPending: false }
     await writeAuditLog({ userId: user.id, userEmail: user.email, action: 'auth.login.success', request: req })
-    return { ok: true, user: req.session.user }
+    return { ok: true, user: { id: user.id, email: user.email, mfa_enabled: !!user.mfa_enabled, is_active: !!user.is_active, display_name: user.display_name ?? null, last_login_at: user.last_login_at?.toISOString() ?? null, created_at: user.created_at?.toISOString() ?? new Date().toISOString() } }
   })
 
-  // POST /auth/register — admin creates a local user
-  fastify.post('/auth/register', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  // POST /auth/register â€” admin creates a local user
+  fastify.post('/auth/register', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const body = z.object({
       email: z.string().email(),
       displayName: z.string().optional(),
       password: z.string().min(1),
-      role: z.enum(['admin', 'operator', 'developer', 'viewer']).default('viewer'),
     }).parse(req.body)
 
     const policy = await getPasswordPolicy()
@@ -123,7 +122,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
       provider: 'local',
       provider_id: null,
       password_hash: passwordHash,
-      role: body.role,
+      role: 'admin',
     }).returningAll().execute()
 
     await writeAuditLog({
@@ -135,7 +134,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     return { id: user.id, email: user.email, displayName: user.display_name, role: user.role }
   })
 
-  // POST /auth/change-password — logged-in user changes own password
+  // POST /auth/change-password â€” logged-in user changes own password
   fastify.post('/auth/change-password', { preHandler: requireAuth }, async (req, reply) => {
     const body = z.object({
       currentPassword: z.string().min(1),
@@ -161,8 +160,8 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     return { ok: true }
   })
 
-  // POST /auth/admin/set-password — admin resets any local user password
-  fastify.post('/auth/admin/set-password', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  // POST /auth/admin/set-password â€” admin resets any local user password
+  fastify.post('/auth/admin/set-password', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const body = z.object({
       user_id: z.string().uuid(),
       new_password: z.string().min(1),
@@ -191,16 +190,22 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /auth/me
   fastify.get('/auth/me', async (req, reply) => {
     if (!req.session.user) return reply.code(401).send({ error: 'Unauthorized' })
-    return req.session.user
+    const u = req.session.user
+    return {
+      id: u.id,
+      email: u.email,
+      mfa_enabled: u.mfaEnabled,
+      is_active: true,
+      display_name: null,
+      last_login_at: null,
+      created_at: new Date().toISOString(),
+    }
   })
 
-  // GET /auth/me/permissions — returns the current user's permission set
+  // GET /auth/me/permissions
   fastify.get('/auth/me/permissions', async (req, reply) => {
     if (!req.session.user) return reply.code(401).send({ error: 'Unauthorized' })
-    const role = req.session.user.role
-    if (role === 'admin') return { role, permissions: ['*'] }
-    const perms = await getPermissions(role)
-    return { role, permissions: Array.from(perms) }
+    return { isAdmin: true }
   })
 
   // POST /auth/logout
@@ -209,14 +214,14 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.send({ ok: true })
   })
 
-  // POST /auth/mfa/setup — generate TOTP secret
+  // POST /auth/mfa/setup â€” generate TOTP secret
   fastify.post('/auth/mfa/setup', async (req, reply) => {
     if (!req.session.user) return reply.code(401).send({ error: 'Unauthorized' })
     const secret = speakeasy.generateSecret({ name: `${config.MFA_ISSUER} (${req.session.user.email})`, length: 32 })
     const otpauthUrl = secret.otpauth_url!
     const qrDataUrl = await QRCode.toDataURL(otpauthUrl)
 
-    // Store secret encrypted temporarily (not enabled yet — enabled after verify)
+    // Store secret encrypted temporarily (not enabled yet â€” enabled after verify)
     const vaultKey = getVaultKey()
     const encSecret = encryptSecret(secret.base32, vaultKey)
 
@@ -228,7 +233,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     return { qrDataUrl, secret: secret.base32 }
   })
 
-  // POST /auth/mfa/verify — verify and enable MFA
+  // POST /auth/mfa/verify â€” verify and enable MFA
   fastify.post('/auth/mfa/verify', async (req, reply) => {
     if (!req.session.user) return reply.code(401).send({ error: 'Unauthorized' })
 
@@ -255,11 +260,12 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     req.session.user.mfaEnabled = true
     req.session.user.mfaPending = false
+    await req.session.save()
 
     return { backupCodes }
   })
 
-  // POST /auth/mfa/validate — second factor during login
+  // POST /auth/mfa/validate â€” second factor during login
   fastify.post('/auth/mfa/validate', async (req, reply) => {
     if (!req.session.mfaPending || !req.session.mfaUserId) {
       return reply.code(400).send({ error: 'No MFA session pending' })
@@ -303,18 +309,17 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     req.session.user = {
       id: user.id,
       email: user.email,
-      role: user.role,
-      mfaEnabled: user.mfa_enabled,
+      mfaEnabled: !!user.mfa_enabled,
       mfaPending: false,
     }
     req.session.mfaPending = false
     req.session.mfaUserId = undefined
 
     await writeAuditLog({ userId: user.id, userEmail: user.email, action: 'mfa.validate.success', request: req })
-    return { ok: true, user: req.session.user }
+    return { ok: true, user: { id: user.id, email: user.email, role: user.role, mfa_enabled: !!user.mfa_enabled, mfa_exempt: !!user.mfa_exempt, is_active: !!user.is_active, display_name: user.display_name ?? null, last_login_at: user.last_login_at?.toISOString() ?? null, created_at: user.created_at?.toISOString() ?? new Date().toISOString() } }
   })
 
-  // POST /auth/totp/elevate — verify TOTP code and elevate session for critical actions
+  // POST /auth/totp/elevate â€” verify TOTP code and elevate session for critical actions
   fastify.post('/auth/totp/elevate', { preHandler: [requireAuth] }, async (req, reply) => {
     const { token } = req.body as { token: string }
     if (!token) return reply.code(400).send({ error: 'token required' })
@@ -331,7 +336,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     const vaultKey = getVaultKey()
     const plainSecret = decryptSecret(user.mfa_secret, vaultKey)
 
-    // Prevent replay — reject code if it was the last accepted one
+    // Prevent replay â€” reject code if it was the last accepted one
     const codeHash = require('crypto').createHash('sha256').update(token).digest('hex')
     if (req.session.totpLastCode === codeHash) {
       return reply.code(400).send({ error: 'TOTP code already used' })
@@ -349,7 +354,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
     return { ok: true, elevatedUntil: req.session.totpElevatedUntil }
   })
 
-  // GET /auth/totp/elevation-status — check if session is currently elevated
+  // GET /auth/totp/elevation-status â€” check if session is currently elevated
   fastify.get('/auth/totp/elevation-status', { preHandler: [requireAuth] }, async (req) => {
     const until = req.session.totpElevatedUntil
     const elevated = typeof until === 'number' && until > Date.now()
@@ -368,3 +373,4 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
 }
 
 export default authRoutes
+

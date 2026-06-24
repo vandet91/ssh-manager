@@ -11,21 +11,20 @@ export default function RemoteDesktopPage() {
   const [rdpTabs, setRdpTabs] = useState<RdpTab[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
 
-  // Load Windows servers
+  // Load Windows servers — operators only see their assigned ones
   useEffect(() => {
-    api.get<Server[]>('/servers?device_category=server')
-      .then(list => {
-        const winServers = list.filter(s => s.os_type === 'windows' && s.windows_rdp_ready)
-        setServers(winServers)
+    api.get<Server[]>('/servers?device_category=server').catch(() => [] as Server[])
+    .then(list => {
+      const winServers = list.filter(s => s.os_type === 'windows' && s.windows_rdp_ready)
+      setServers(winServers)
 
-        // Restore from URL ?rdp=<serverId>
-        const rdpId = searchParams.get('rdp')
-        if (rdpId) {
-          const s = list.find(x => x.id === rdpId)
-          if (s) openTab(s, true)
-        }
-      })
-      .catch(() => {})
+      // Restore from URL ?rdp=<serverId>
+      const rdpId = searchParams.get('rdp')
+      if (rdpId) {
+        const s = winServers.find(x => x.id === rdpId)
+        if (s) openTab(s, true)
+      }
+    })
   }, [])
 
   const openTab = useCallback((s: Server, skipUrlUpdate = false) => {

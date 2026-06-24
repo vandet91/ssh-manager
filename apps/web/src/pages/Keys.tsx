@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, SshKey, ArchivedKey, Assignment, Server, User } from '../api/client'
+import { api, SshKey, ArchivedKey, Assignment, Server } from '../api/client'
 import Modal from '../components/Modal'
 import Badge from '../components/Badge'
 
 export default function Keys() {
   const [tab, setTab] = useState<'active' | 'archived'>('active')
-  const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [downloadDropOpen, setDownloadDropOpen] = useState<string | null>(null) // key id
   const [keys, setKeys] = useState<SshKey[]>([])
   const [archivedKeys, setArchivedKeys] = useState<ArchivedKey[]>([])
@@ -45,14 +44,13 @@ export default function Keys() {
 
   const load = () => {
     api.get<SshKey[]>('/keys').then(setKeys).catch(() => {})
-    api.get<ArchivedKey[]>('/keys/archived').then(setArchivedKeys).catch(() => {})
     api.get<{ data: Assignment[] } | Assignment[]>('/assignments?limit=1000').then((r) => setAssignments(Array.isArray(r) ? r : (r as { data: Assignment[] }).data ?? [])).catch(() => {})
     api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))).catch(() => {})
+    api.get<ArchivedKey[]>('/keys/archived').then(setArchivedKeys).catch(() => {})
     api.get<OrphanRow[]>('/keys/orphaned-assignments').then(setOrphans).catch(() => {})
   }
   useEffect(() => {
     load()
-    api.get<User>('/auth/me').then(setCurrentUser).catch(() => {})
   }, [])
 
   const cleanupOrphans = async () => {
@@ -96,6 +94,11 @@ export default function Keys() {
       setImportForm((f) => ({ ...f, name: f.name || name, private_key: ev.target?.result as string }))
     }
     reader.readAsText(file)
+  }
+
+  const toggleShare = async (k: SshKey) => {
+    const updated = await api.patch<{ is_shared: boolean }>(`/keys/${k.id}/share`, { shared: !k.is_shared })
+    setKeys(prev => prev.map(x => x.id === k.id ? { ...x, is_shared: updated.is_shared } : x))
   }
 
   const rotateKey = async (id: string) => {
@@ -494,7 +497,10 @@ export default function Keys() {
                     <input type="checkbox" checked={selectedActive.has(k.id)} onChange={() => toggleActive(k.id)} className="accent-indigo-500 cursor-pointer" />
                   </td>
                   <td className="px-3 py-2 text-white font-medium">
-                    {k.name}
+                    <div className="flex items-center gap-2">
+                      {k.name}
+                      {k.is_shared && <span className="text-xs px-1.5 py-0.5 rounded bg-green-900/50 text-green-400 border border-green-700">shared</span>}
+                    </div>
                     {k.description && <p className="text-xs text-gray-500 font-normal">{k.description}</p>}
                   </td>
                   <td className="px-3 py-2"><Badge label={k.key_type} /></td>
@@ -545,22 +551,20 @@ export default function Keys() {
                               className="flex items-center gap-2 px-3 py-2 text-xs text-gray-200 hover:bg-gray-700 transition-colors">
                               📄 Public Key (.pub)
                             </a>
-                            {(currentUser?.role === 'admin' || currentUser?.role === 'operator') && (
-                              <>
-                                <div className="border-t border-gray-700 my-1" />
-                                <div className="px-3 py-1 text-xs text-gray-500 font-semibold uppercase tracking-wide">Private Key</div>
-                                <a href={`/api/keys/${k.id}/private?format=openssh`} download
-                                  onClick={() => setDownloadDropOpen(null)}
-                                  className="flex items-center gap-2 px-3 py-2 text-xs text-yellow-300 hover:bg-gray-700 transition-colors">
-                                  🔑 OpenSSH format
-                                </a>
-                                <a href={`/api/keys/${k.id}/private?format=ppk`} download
-                                  onClick={() => setDownloadDropOpen(null)}
-                                  className="flex items-center gap-2 px-3 py-2 text-xs text-yellow-300 hover:bg-gray-700 transition-colors">
-                                  🐢 PuTTY PPK format
-                                </a>
-                              </>
-                            )}
+                            <>
+                              <div className="border-t border-gray-700 my-1" />
+                              <div className="px-3 py-1 text-xs text-gray-500 font-semibold uppercase tracking-wide">Private Key</div>
+                              <a href={`/api/keys/${k.id}/private?format=openssh`} download
+                                onClick={() => setDownloadDropOpen(null)}
+                                className="flex items-center gap-2 px-3 py-2 text-xs text-yellow-300 hover:bg-gray-700 transition-colors">
+                                🔑 OpenSSH format
+                              </a>
+                              <a href={`/api/keys/${k.id}/private?format=ppk`} download
+                                onClick={() => setDownloadDropOpen(null)}
+                                className="flex items-center gap-2 px-3 py-2 text-xs text-yellow-300 hover:bg-gray-700 transition-colors">
+                                🐢 PuTTY PPK format
+                              </a>
+                            </>
                           </div>
                         )}
                       </div>
@@ -568,6 +572,12 @@ export default function Keys() {
                         className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors"
                         style={{ whiteSpace: 'nowrap' }}>
                         Edit
+                      </button>
+                      <button onClick={() => toggleShare(k)}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${k.is_shared ? 'bg-green-700 hover:bg-green-600' : 'bg-gray-600 hover:bg-gray-500'} text-white`}
+                        style={{ whiteSpace: 'nowrap' }}
+                        title={k.is_shared ? 'Click to make private' : 'Click to share with team'}>
+                        {k.is_shared ? '🔓 Shared' : '🔒 Private'}
                       </button>
                       <button onClick={() => { setDeleteError(''); setDeleteTarget(k) }}
                         className="px-2 py-1 text-xs rounded bg-red-700 hover:bg-red-600 text-white transition-colors"

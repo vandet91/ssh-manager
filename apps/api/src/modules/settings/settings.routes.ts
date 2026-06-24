@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import * as crypto from 'crypto'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { writeAuditLog } from '../../utils/audit'
 import { decryptSecret, encryptSecret, getVaultKey } from '../../utils/vault'
 
@@ -95,12 +95,12 @@ export function validatePassword(password: string, policy: PasswordPolicy): stri
 
 async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /settings/password-policy
-  fastify.get('/settings/password-policy', { preHandler: [requireAuth, requirePermission('admin')] }, async () => {
+  fastify.get('/settings/password-policy', { preHandler: [requireAuth, requireAdmin] }, async () => {
     return getPasswordPolicy()
   })
 
   // PUT /settings/password-policy
-  fastify.put('/settings/password-policy', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  fastify.put('/settings/password-policy', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const body = passwordPolicySchema.parse(req.body)
 
     await (db as any)
@@ -154,7 +154,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /settings/telegram
-  fastify.get('/settings/telegram', { preHandler: [requireAuth, requirePermission('admin')] }, async () => {
+  fastify.get('/settings/telegram', { preHandler: [requireAuth, requireAdmin] }, async () => {
     const rows = (await (db as any).selectFrom('settings').selectAll()
       .where('key', 'in', ['telegram_enabled','telegram_bot_token','telegram_allowed_chats','telegram_totp_secret','telegram_commands'])
       .execute()) as Array<{ key: string; value: unknown }>
@@ -169,7 +169,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // PUT /settings/telegram
-  fastify.put('/settings/telegram', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  fastify.put('/settings/telegram', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const body = telegramSchema.parse(req.body)
     const upsert = async (key: string, value: unknown) => {
       await (db as any)
@@ -194,7 +194,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /settings/telegram/generate-totp — generate a new TOTP secret for the bot
-  fastify.post('/settings/telegram/generate-totp', { preHandler: [requireAuth, requirePermission('admin')] }, async () => {
+  fastify.post('/settings/telegram/generate-totp', { preHandler: [requireAuth, requireAdmin] }, async () => {
     const speakeasy = await import('speakeasy')
     const secret = speakeasy.generateSecret({ name: 'SSH Manager Bot', length: 20 })
     return {
@@ -235,7 +235,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /settings/alerts
-  fastify.get('/settings/alerts', { preHandler: [requireAuth, requirePermission('admin')] }, async () => {
+  fastify.get('/settings/alerts', { preHandler: [requireAuth, requireAdmin] }, async () => {
     const keys = [
       'alert_webhook_enabled', 'alert_webhook_url',
       'alert_email_enabled', 'alert_smtp_host', 'alert_smtp_port', 'alert_smtp_secure',
@@ -262,7 +262,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // PUT /settings/alerts
-  fastify.put('/settings/alerts', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  fastify.put('/settings/alerts', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const body = alertSettingsSchema.parse(req.body)
     const upsert = async (key: string, value: unknown) => {
       await (db as any).insertInto('settings')
@@ -294,7 +294,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /settings/alerts/test-webhook — send a test webhook
-  fastify.post('/settings/alerts/test-webhook', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  fastify.post('/settings/alerts/test-webhook', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const { url } = z.object({ url: z.string().url() }).parse(req.body)
     try {
       const res = await fetch(url, {
@@ -312,7 +312,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ── AI Provider Keys ────────────────────────────────────────────────────────
 
-  fastify.get('/settings/ai-keys', { preHandler: [requireAuth, requirePermission('admin')] }, async () => {
+  fastify.get('/settings/ai-keys', { preHandler: [requireAuth, requireAdmin] }, async () => {
     const keys = ['ai_key_claude', 'ai_key_openai', 'ai_key_gemini', 'ai_key_deepseek', 'ai_default_provider', 'ai_default_model']
     const rows = (await (db as any).selectFrom('settings').selectAll().where('key', 'in', keys).execute()) as Array<{ key: string; value: unknown }>
     const m = Object.fromEntries(rows.map((r) => [r.key, r.value]))
@@ -326,7 +326,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
     }
   })
 
-  fastify.put('/settings/ai-keys', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  fastify.put('/settings/ai-keys', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const body = z.object({
       claude:           z.string().optional(),
       openai:           z.string().optional(),
@@ -358,7 +358,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /settings/alerts/test-email — send a test email
-  fastify.post('/settings/alerts/test-email', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  fastify.post('/settings/alerts/test-email', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const { sendAlert } = await import('../../utils/alerts')
     try {
       await sendAlert({
@@ -375,7 +375,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /settings/vault/export — export all credentials encrypted with passphrase
-  fastify.get('/settings/vault/export', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  fastify.get('/settings/vault/export', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const { passphrase } = z.object({ passphrase: z.string().min(8) }).parse(req.query)
     const vaultKey = getVaultKey()
 
@@ -417,7 +417,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /settings/vault/import — import credentials from encrypted export file
-  fastify.post('/settings/vault/import', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
+  fastify.post('/settings/vault/import', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const body = z.object({
       passphrase: z.string().min(1),
       data: z.string().min(1),         // raw file content (sent as base64 string from frontend)
@@ -499,7 +499,7 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // PUT /settings/totp-actions
-  fastify.put('/settings/totp-actions', { preHandler: [requirePermission('admin')] }, async (req, reply) => {
+  fastify.put('/settings/totp-actions', { preHandler: [requireAdmin] }, async (req, reply) => {
     const { actions, elevationMinutes } = req.body as {
       actions: { action: string; enabled: boolean }[]
       elevationMinutes?: number

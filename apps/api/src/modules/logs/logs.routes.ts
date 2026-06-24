@@ -2,14 +2,25 @@ import { FastifyInstance } from 'fastify'
 import * as fs from 'fs'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { writeAuditLog } from '../../utils/audit'
 
 async function logsRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
+  // GET /logs/my-activity — operator sees only their own audit trail
+  fastify.get('/logs/my-activity', async (req) => {
+    const { id: userId } = req.session.user!
+    const query = z.object({ page: z.coerce.number().default(1), limit: z.coerce.number().default(50) }).parse(req.query)
+    return db.selectFrom('audit_logs').selectAll()
+      .where('user_id', '=', userId)
+      .orderBy('created_at', 'desc')
+      .limit(query.limit).offset((query.page - 1) * query.limit)
+      .execute()
+  })
+
   // GET /logs/audit
-  fastify.get('/logs/audit', { preHandler: requirePermission('logs:read') }, async (req) => {
+  fastify.get('/logs/audit', { preHandler: requireAdmin }, async (req) => {
     const query = z.object({
       user_id: z.string().uuid().optional(),
       action: z.string().optional(),
@@ -29,7 +40,7 @@ async function logsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /logs/export — CSV download of audit logs
-  fastify.get('/logs/export', { preHandler: requirePermission('logs:read') }, async (req, reply) => {
+  fastify.get('/logs/export', { preHandler: requireAdmin }, async (req, reply) => {
     const logs = await db.selectFrom('audit_logs').selectAll().orderBy('created_at', 'desc').execute()
 
     const header = 'id,user_email,action,resource,resource_id,server_id,ip_address,created_at\n'
@@ -43,7 +54,7 @@ async function logsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /logs/audit?older_than=30|60|90|all — admin only
-  fastify.delete('/logs/audit', { preHandler: requirePermission('admin') }, async (req, reply) => {
+  fastify.delete('/logs/audit', { preHandler: requireAdmin }, async (req, reply) => {
     const { older_than } = z.object({
       older_than: z.enum(['30', '60', '90', 'all']).default('all'),
     }).parse(req.query)
@@ -64,7 +75,7 @@ async function logsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /logs/sessions — list session recordings
-  fastify.get('/logs/sessions', { preHandler: requirePermission('logs:read') }, async (req) => {
+  fastify.get('/logs/sessions', { preHandler: requireAdmin }, async (req) => {
     const query = z.object({
       user_id: z.string().uuid().optional(),
       server_id: z.string().uuid().optional(),
@@ -80,7 +91,7 @@ async function logsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /logs/sessions/:id/play — stream cast file for asciinema player
-  fastify.get('/logs/sessions/:id/play', { preHandler: requirePermission('logs:read') }, async (req, reply) => {
+  fastify.get('/logs/sessions/:id/play', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const recording = await db.selectFrom('session_recordings').selectAll()
       .where('id', '=', id).executeTakeFirst()
@@ -95,7 +106,7 @@ async function logsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /logs/sessions/:id/download — download cast file
-  fastify.get('/logs/sessions/:id/download', { preHandler: requirePermission('logs:read') }, async (req, reply) => {
+  fastify.get('/logs/sessions/:id/download', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const recording = await db.selectFrom('session_recordings').selectAll()
       .where('id', '=', id).executeTakeFirst()
@@ -111,7 +122,7 @@ async function logsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /logs/sessions/:id — admin only
-  fastify.delete('/logs/sessions/:id', { preHandler: requirePermission('admin') }, async (req, reply) => {
+  fastify.delete('/logs/sessions/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const recording = await db.selectFrom('session_recordings').selectAll()
       .where('id', '=', id).executeTakeFirst()
@@ -131,7 +142,7 @@ async function logsRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /logs/sessions?older_than=30|60|90|all — bulk delete, admin only
-  fastify.delete('/logs/sessions', { preHandler: requirePermission('admin') }, async (req, reply) => {
+  fastify.delete('/logs/sessions', { preHandler: requireAdmin }, async (req, reply) => {
     const { older_than } = z.object({
       older_than: z.enum(['30', '60', '90', 'all']).default('all'),
     }).parse(req.query)

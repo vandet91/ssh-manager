@@ -1,8 +1,11 @@
 const BASE = '/api'
 
 type ForbiddenHandler = (message: string) => void
+type MfaRequiredHandler = () => void
 let onForbidden: ForbiddenHandler | null = null
+let onMfaRequired: MfaRequiredHandler | null = null
 export function setForbiddenHandler(fn: ForbiddenHandler) { onForbidden = fn }
+export function setMfaRequiredHandler(fn: MfaRequiredHandler) { onMfaRequired = fn }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -14,8 +17,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
     const message = err.error ?? 'Request failed'
-    if (res.status === 403 && onForbidden) {
-      onForbidden(err.required ? `Access denied — requires permission: ${err.required}` : `Access denied: ${message}`)
+    if (res.status === 403) {
+      if (err.code === 'MFA_REQUIRED' && onMfaRequired) {
+        onMfaRequired()
+      } else if (onForbidden) {
+        onForbidden(err.required ? `Access denied — requires permission: ${err.required}` : `Access denied: ${message}`)
+      }
     }
     throw Object.assign(new Error(message), { status: res.status, data: err })
   }
@@ -33,8 +40,7 @@ export const api = {
 
 export type User = {
   id: string; email: string; display_name: string | null
-  role: 'admin' | 'operator' | 'developer' | 'viewer'
-  mfa_enabled: boolean; is_active: boolean; last_login_at: string | null; created_at: string
+  mfa_enabled: boolean; mfa_exempt?: boolean; is_active: boolean; last_login_at: string | null; created_at: string
 }
 
 export type HostType = 'vmware' | 'hyperv' | 'proxmox' | 'kvm' | 'virtualbox' | 'xen' | 'lxc' | 'docker' | 'aws' | 'azure' | 'gcp' | 'physical' | 'unknown'
@@ -198,7 +204,7 @@ export type SshKey = {
   id: string; name: string; description: string | null; key_type: string
   public_key: string; fingerprint: string; rotation_policy: 'manual' | '7d' | '30d' | '90d' | '180d' | '365d'
   last_rotated_at: string | null; next_rotation_at: string | null
-  is_active: boolean; created_at: string
+  is_active: boolean; owner_id: string | null; is_shared: boolean; created_at: string
 }
 
 export type ArchivedKey = {
@@ -214,7 +220,9 @@ export type Assignment = {
   linux_user: string; can_terminal: boolean; is_active: boolean
   expires_at: string | null; granted_by: string | null; created_at: string
   server_name?: string | null; server_is_active?: boolean | null
+  server_os_type?: string | null; server_hostname?: string | null
   key_name?: string | null; key_is_active?: boolean | null
+  domain_user?: string | null
 }
 
 export type AuditLog = {
@@ -498,6 +506,8 @@ export type VaultEntry = {
   is_archived: boolean
   archived_at: string | null
   created_by: string | null
+  owner_id: string | null
+  is_shared: boolean
   created_at: string
   updated_at: string
   linked_credential_label?: string | null

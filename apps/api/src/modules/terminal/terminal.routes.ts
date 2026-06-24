@@ -146,15 +146,9 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
 
       const assignments = await assignmentQuery.execute()
 
-      // Admin fallback: if no assignment, allow admins to connect via management key
+      // Fallback: if no assignment, connect via management key
       if (assignments.length === 0) {
-        if (sessionUser.role !== 'admin') {
-          send({ type: 'error', message: 'No terminal access to this server' })
-          ws.close(4003)
-          return
-        }
-
-        // Admin uses management key
+        // Uses management key
         const server = await db.selectFrom('servers').selectAll().where('id', '=', serverId).executeTakeFirst()
         if (!server || !server.management_key_id) {
           send({ type: 'error', message: 'Server not configured' })
@@ -414,18 +408,6 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { path: remotePath = '/tmp/' } = z.object({ path: z.string().optional() }).parse(req.query)
 
-    // Require the user to have terminal access OR be an admin
-    const sessionUser = req.session.user!
-    if (sessionUser.role !== 'admin') {
-      const assignment = await db.selectFrom('key_assignments')
-        .select(['id'])
-        .where('user_id', '=', sessionUser.id)
-        .where('server_id', '=', serverId)
-        .where('is_active', '=', true)
-        .where('can_terminal', '=', true)
-        .executeTakeFirst()
-      if (!assignment) return reply.code(403).send({ error: 'No terminal access to this server' })
-    }
 
     const data = await req.file()
     if (!data) return reply.code(400).send({ error: 'No file provided' })
@@ -447,8 +429,8 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
     })
 
     await writeAuditLog({
-      userId: sessionUser.id,
-      userEmail: sessionUser.email,
+      userId: req.session.user!.id,
+      userEmail: req.session.user!.email,
       action: 'sftp.upload',
       resource: 'server',
       resourceId: serverId,

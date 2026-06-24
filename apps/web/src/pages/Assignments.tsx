@@ -11,20 +11,20 @@ export default function Assignments() {
   const [keys, setKeys] = useState<SshKey[]>([])
   const [servers, setServers] = useState<Server[]>([])
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ user_id: '', key_id: '', server_id: '', linux_user: '', can_terminal: true, expires_at: '' })
+  const [form, setForm] = useState({ user_id: '', key_id: '', server_id: '', linux_user: '', can_terminal: true, expires_at: '', domain_user: '', domain_password: '' })
   const [error, setError] = useState('')
   const [serverUsers, setServerUsers] = useState<ServerUser[]>([])
   const [loadingServerUsers, setLoadingServerUsers] = useState(false)
   const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null)
   const [editTarget, setEditTarget] = useState<Assignment | null>(null)
-  const [editForm, setEditForm] = useState({ linux_user: '', can_terminal: true, expires_at: '' })
+  const [editForm, setEditForm] = useState({ linux_user: '', can_terminal: true, expires_at: '', domain_user: '', domain_password: '' })
   const [editError, setEditError] = useState('')
 
   const load = () => {
     api.get<{ data: Assignment[] } | Assignment[]>('/assignments').then((r) => setAssignments(Array.isArray(r) ? r : (r as { data: Assignment[] }).data ?? [])).catch(() => {})
     api.get<{ users: User[] }>('/users?limit=200').then((r) => setUsers(r.users)).catch(() => {})
     api.get<SshKey[]>('/keys').then(setKeys).catch(() => {})
-    api.get<Server[]>('/servers').then(r => setServers(r.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))).catch(() => {})
+    api.get<Server[]>('/servers').then(setServers).catch(() => {})
   }
 
   useEffect(() => { load() }, [])
@@ -47,16 +47,16 @@ export default function Assignments() {
   const create = async (e: React.FormEvent) => {
     e.preventDefault(); setError('')
     try {
-      await api.post('/assignments', { ...form, expires_at: form.expires_at || undefined })
+      await api.post('/assignments', { ...form, expires_at: form.expires_at || undefined, domain_user: form.domain_user || undefined, domain_password: form.domain_password || undefined })
       setShowCreate(false)
-      setForm({ user_id: '', key_id: '', server_id: '', linux_user: '', can_terminal: true, expires_at: '' })
+      setForm({ user_id: '', key_id: '', server_id: '', linux_user: '', can_terminal: true, expires_at: '', domain_user: '', domain_password: '' })
       load()
     } catch (err: unknown) { setError((err as Error).message) }
   }
 
   const openEdit = (a: Assignment) => {
     setEditTarget(a)
-    setEditForm({ linux_user: a.linux_user, can_terminal: a.can_terminal, expires_at: a.expires_at ? new Date(a.expires_at).toISOString().slice(0, 16) : '' })
+    setEditForm({ linux_user: a.linux_user, can_terminal: a.can_terminal, expires_at: a.expires_at ? new Date(a.expires_at).toISOString().slice(0, 16) : '', domain_user: a.domain_user ?? '', domain_password: '' })
     setEditError('')
   }
 
@@ -64,7 +64,7 @@ export default function Assignments() {
     e.preventDefault(); setEditError('')
     if (!editTarget) return
     try {
-      await api.patch(`/assignments/${editTarget.id}`, { ...editForm, expires_at: editForm.expires_at || null })
+      await api.patch(`/assignments/${editTarget.id}`, { ...editForm, expires_at: editForm.expires_at || null, domain_user: editForm.domain_user || null, domain_password: editForm.domain_password || null })
       setEditTarget(null)
       load()
     } catch (err: unknown) { setEditError((err as Error).message) }
@@ -101,15 +101,15 @@ export default function Assignments() {
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
         <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 780 }}>
           <colgroup>
-            <col style={{ width: '16%' }} />  {/* User */}
-            <col style={{ width: '13%' }} />  {/* Key */}
-            <col style={{ width: '13%' }} />  {/* Server */}
-            <col style={{ width: '10%' }} />  {/* Linux User */}
-            <col style={{ width: '8%'  }} />  {/* Terminal */}
-            <col style={{ width: '9%'  }} />  {/* Expires */}
-            <col style={{ width: '8%'  }} />  {/* Status */}
-            <col style={{ width: '9%'  }} />  {/* Assigned On */}
-            <col style={{ width: '14%' }} />  {/* Actions */}
+            <col style={{ width: '16%' }} />
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '8%'  }} />
+            <col style={{ width: '9%'  }} />
+            <col style={{ width: '8%'  }} />
+            <col style={{ width: '9%'  }} />
+            <col style={{ width: '14%' }} />
           </colgroup>
           <thead className="bg-gray-800/50">
             <tr className="text-left text-gray-500 text-xs uppercase tracking-wide font-medium">
@@ -142,7 +142,10 @@ export default function Assignments() {
                     ? <span className="text-yellow-400">{a.server_name ?? '(deleted server)'} <Badge label="Deleted" variant="high" /></span>
                     : (a.server_name ?? serverMap[a.server_id] ?? '—')}
                 </td>
-                <td className="px-3 py-2 font-mono text-xs text-indigo-300" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.linux_user}</td>
+                <td className="px-3 py-2 font-mono text-xs text-indigo-300" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {a.linux_user}
+                  {a.domain_user && <span className="ml-1 text-amber-400 text-xs" title={`AD: ${a.domain_user}`}>🏢</span>}
+                </td>
                 <td className="px-3 py-2">{a.can_terminal ? <Badge label="Yes" variant="ok" /> : <Badge label="No" />}</td>
                 <td className="px-3 py-2 text-gray-400 text-xs">{a.expires_at ? new Date(a.expires_at).toLocaleDateString() : '—'}</td>
                 <td className="px-3 py-2"><Badge label={a.is_active ? 'Active' : 'Revoked'} variant={a.is_active ? 'ok' : 'default'} /></td>
@@ -201,6 +204,23 @@ export default function Assignments() {
               <input type="checkbox" checked={editForm.can_terminal} onChange={e => setEditForm(f => ({ ...f, can_terminal: e.target.checked }))} className="rounded" />
               <span className="text-sm text-gray-400">Allow web terminal access</span>
             </label>
+            {editTarget && servers.find(s => s.id === editTarget.server_id)?.is_domain_controller && (
+              <div className="border-t border-gray-700 pt-3 space-y-3">
+                <p className="text-xs text-amber-400 font-medium">🏢 Domain Controller — Operator AD Credential</p>
+                <label className="block">
+                  <span className="text-sm text-gray-400">Domain Username (e.g. DOMAIN\user or user@domain)</span>
+                  <input value={editForm.domain_user} onChange={e => setEditForm(f => ({ ...f, domain_user: e.target.value }))}
+                    placeholder="DOMAIN\johndoe"
+                    className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-400">Domain Password (leave blank to keep existing)</span>
+                  <input type="password" value={editForm.domain_password} onChange={e => setEditForm(f => ({ ...f, domain_password: e.target.value }))}
+                    placeholder="Leave blank to keep existing"
+                    className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </label>
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setEditTarget(null)} className="flex-1 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white text-sm transition-colors">Cancel</button>
               <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Save</button>
@@ -232,25 +252,36 @@ export default function Assignments() {
                 {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </label>
-            <label className="block">
-              <span className="text-sm text-gray-400">Linux User (on server)</span>
-              {serverUsers.length > 0 ? (
-                <select value={form.linux_user} onChange={(e) => setForm((f) => ({ ...f, linux_user: e.target.value }))} required
-                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                  <option value="">— select user —</option>
-                  {serverUsers.map((u) => (
-                    <option key={u.username} value={u.username}>
-                      {u.username} (uid {u.uid}{u.home ? `, ${u.home}` : ''})
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input value={form.linux_user} onChange={(e) => setForm((f) => ({ ...f, linux_user: e.target.value }))} required
-                  placeholder={loadingServerUsers ? 'Loading users…' : form.server_id ? 'Could not load users — type manually' : 'Select a server first'}
-                  disabled={loadingServerUsers}
-                  className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50" />
-              )}
-            </label>
+            {(() => {
+              const selectedServer = servers.find(s => s.id === form.server_id)
+              const isWindows = selectedServer?.os_type === 'windows' || selectedServer?.is_domain_controller
+              const userLabel = isWindows ? 'SSH Username (Windows account)' : 'Linux User (on server)'
+              const userPlaceholder = loadingServerUsers ? 'Loading users…'
+                : !form.server_id ? 'Select a server first'
+                : isWindows ? 'e.g. administrator'
+                : 'Enter username'
+              return (
+                <label className="block">
+                  <span className="text-sm text-gray-400">{userLabel}</span>
+                  {serverUsers.length > 0 ? (
+                    <select value={form.linux_user} onChange={(e) => setForm((f) => ({ ...f, linux_user: e.target.value }))} required
+                      className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                      <option value="">— select user —</option>
+                      {serverUsers.map((u) => (
+                        <option key={u.username} value={u.username}>
+                          {u.username} (uid {u.uid}{u.home ? `, ${u.home}` : ''})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input value={form.linux_user} onChange={(e) => setForm((f) => ({ ...f, linux_user: e.target.value }))} required
+                      placeholder={userPlaceholder}
+                      disabled={loadingServerUsers}
+                      className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50" />
+                  )}
+                </label>
+              )
+            })()}
             <label className="block">
               <span className="text-sm text-gray-400">Expires (optional)</span>
               <input type="datetime-local" value={form.expires_at} onChange={(e) => setForm((f) => ({ ...f, expires_at: e.target.value }))}
@@ -260,6 +291,23 @@ export default function Assignments() {
               <input type="checkbox" checked={form.can_terminal} onChange={(e) => setForm((f) => ({ ...f, can_terminal: e.target.checked }))} className="rounded" />
               <span className="text-sm text-gray-400">Allow web terminal access</span>
             </label>
+            {form.server_id && servers.find(s => s.id === form.server_id)?.is_domain_controller && (
+              <div className="border-t border-gray-700 pt-3 space-y-3">
+                <p className="text-xs text-amber-400 font-medium">🏢 Domain Controller — Operator AD Credential</p>
+                <p className="text-xs text-gray-500">Store the user's Active Directory credentials for this domain controller.</p>
+                <label className="block">
+                  <span className="text-sm text-gray-400">Domain Username (e.g. DOMAIN\user or user@domain)</span>
+                  <input value={form.domain_user} onChange={(e) => setForm((f) => ({ ...f, domain_user: e.target.value }))}
+                    placeholder="DOMAIN\johndoe"
+                    className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-gray-400">Domain Password</span>
+                  <input type="password" value={form.domain_password} onChange={(e) => setForm((f) => ({ ...f, domain_password: e.target.value }))}
+                    className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </label>
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setShowCreate(false)} className="flex-1 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white text-sm transition-colors">Cancel</button>
               <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Assign</button>

@@ -1,7 +1,7 @@
-﻿import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth } from '../../middleware/auth'
 import { withServerSsh } from '../../utils/server-ssh'
 import { sshExec } from '../../utils/ssh'
 import { writeAuditLog } from '../../utils/audit'
@@ -175,19 +175,18 @@ export default async function domainRoutes(fastify: FastifyInstance): Promise<vo
   fastify.addHook('preHandler', requireAuth)
 
   // GET /domain/servers — list Windows servers suitable as DCs
-  fastify.get('/domain/servers', { preHandler: requirePermission('servers:read') }, async () => {
+  fastify.get('/domain/servers', { preHandler: requireAuth }, async (_req) => {
     const anyDb = db as any
-    const servers = await anyDb.selectFrom('servers')
+    return anyDb.selectFrom('servers')
       .select(['id', 'name', 'hostname', 'environment', 'os_type', 'is_active', 'tags'])
       .where('is_domain_controller', '=', true)
       .where('is_active', '=', true)
       .orderBy('name')
       .execute()
-    return servers
   })
 
   // GET /domain/:serverId/health — domain health check
-  fastify.get('/domain/:serverId/health', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/domain/:serverId/health', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
 
     const script = `
@@ -296,7 +295,7 @@ Write-Output "SERVICES:$($svcResults -join ',')"
   })
 
   // POST /domain/:serverId/replication-sync — force AD replication
-  fastify.post('/domain/:serverId/replication-sync', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/replication-sync', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
 
     try {
@@ -347,7 +346,7 @@ if ($sources.Count -eq 0) {
   })
 
   // GET /domain/:serverId/users — fetch all domain users
-  fastify.get('/domain/:serverId/users', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/domain/:serverId/users', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { filter } = z.object({
       filter: z.enum(['all', 'locked', 'password_issues', 'disabled']).default('all'),
@@ -386,7 +385,7 @@ if ($sources.Count -eq 0) {
   })
 
   // POST /domain/:serverId/unlock — unlock an account
-  fastify.post('/domain/:serverId/unlock', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/unlock', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { samAccountName } = z.object({ samAccountName: z.string().min(1).max(64) }).parse(req.body)
 
@@ -413,7 +412,7 @@ if ($sources.Count -eq 0) {
   })
 
   // POST /domain/:serverId/reset-password — reset account password
-  fastify.post('/domain/:serverId/reset-password', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/reset-password', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { samAccountName, password, forceChange } = z.object({
       samAccountName: z.string().min(1).max(64),
@@ -514,7 +513,7 @@ if ($sources.Count -eq 0) {
   })
 
   // POST /domain/:serverId/set-enabled — enable or disable account
-  fastify.post('/domain/:serverId/set-enabled', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/set-enabled', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { samAccountName, enabled } = z.object({
       samAccountName: z.string().min(1).max(64),
@@ -548,7 +547,7 @@ if ($sources.Count -eq 0) {
   })
 
   // POST /domain/:serverId/set-password-never-expires
-  fastify.post('/domain/:serverId/set-password-never-expires', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/set-password-never-expires', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { samAccountName, value } = z.object({
       samAccountName: z.string().min(1).max(64),
@@ -580,7 +579,7 @@ if ($sources.Count -eq 0) {
   })
 
   // GET /domain/:serverId/user-detail/:sam — groups + account detail (on-demand)
-  fastify.get('/domain/:serverId/user-detail/:sam', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/domain/:serverId/user-detail/:sam', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId, sam } = z.object({ serverId: z.string().uuid(), sam: z.string().min(1).max(64) }).parse(req.params)
 
     const script = `
@@ -628,7 +627,7 @@ Write-Output "BADPWD:$($u.BadLogonCount)"
   })
 
   // GET /domain/:serverId/groups — list all AD groups
-  fastify.get('/domain/:serverId/groups', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/domain/:serverId/groups', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
 
     const script = `
@@ -653,7 +652,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
   })
 
   // POST /domain/:serverId/add-to-group
-  fastify.post('/domain/:serverId/add-to-group', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/add-to-group', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { samAccountName, groupName } = z.object({
       samAccountName: z.string().min(1).max(64),
@@ -677,7 +676,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
   })
 
   // POST /domain/:serverId/remove-from-group
-  fastify.post('/domain/:serverId/remove-from-group', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/remove-from-group', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { samAccountName, groupName } = z.object({
       samAccountName: z.string().min(1).max(64),
@@ -701,7 +700,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
   })
 
   // GET /domain/:serverId/group-members — list members of a specific group
-  fastify.get('/domain/:serverId/group-members', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/domain/:serverId/group-members', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { groupName } = z.object({ groupName: z.string().min(1).max(256) }).parse(req.query)
 
@@ -727,7 +726,7 @@ Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
   })
 
   // POST /domain/:serverId/create-group — create a new AD security group
-  fastify.post('/domain/:serverId/create-group', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/create-group', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { name, scope, description } = z.object({
       name:        z.string().min(1).max(256).regex(/^[^'"&|<>]+$/, 'Invalid characters in group name'),
@@ -756,7 +755,7 @@ Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
   })
 
   // POST /domain/:serverId/update-group — rename a group and/or update its description
-  fastify.post('/domain/:serverId/update-group', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/update-group', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { currentName, newName, description } = z.object({
       currentName: z.string().min(1).max(256),
@@ -795,7 +794,7 @@ Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
   })
 
   // POST /domain/:serverId/delete-group — delete a non-privileged AD group
-  fastify.post('/domain/:serverId/delete-group', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/delete-group', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { groupName } = z.object({ groupName: z.string().min(1).max(256) }).parse(req.body)
 
@@ -827,7 +826,7 @@ Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
   })
 
   // GET /domain/:serverId/computers — list all AD-joined computers
-  fastify.get('/domain/:serverId/computers', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/domain/:serverId/computers', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const script = `
 $ProgressPreference = 'SilentlyContinue'
@@ -862,7 +861,7 @@ Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSyste
   })
 
   // POST /domain/:serverId/set-computer-enabled — enable or disable a computer account
-  fastify.post('/domain/:serverId/set-computer-enabled', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/set-computer-enabled', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { name, enabled } = z.object({ name: z.string().min(1).max(256), enabled: z.boolean() }).parse(req.body)
     const psCmd = enabled
@@ -886,7 +885,7 @@ Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSyste
   })
 
   // POST /domain/:serverId/delete-computer — remove a computer account from AD
-  fastify.post('/domain/:serverId/delete-computer', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/domain/:serverId/delete-computer', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { name } = z.object({ name: z.string().min(1).max(256) }).parse(req.body)
     try {
@@ -906,7 +905,7 @@ Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSyste
   })
 
   // GET /domain/:serverId/sessions — active logon sessions on the DC
-  fastify.get('/domain/:serverId/sessions', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/domain/:serverId/sessions', { preHandler: requireAuth }, async (req, reply) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
 
     try {
@@ -941,3 +940,5 @@ Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSyste
     }
   })
 }
+
+

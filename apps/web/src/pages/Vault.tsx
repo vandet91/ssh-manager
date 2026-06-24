@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
-import { api, VaultEntry, VaultType, ServerCredential, Server } from '../api/client'
+import { api, VaultEntry, VaultType, ServerCredential, Server, User } from '../api/client'
+import { usePermissions } from '../context/PermissionContext'
 import Modal from '../components/Modal'
 
 const TYPE_LABELS: Record<VaultType, string> = {
@@ -353,6 +354,8 @@ function OUManager({ onClose, onDone }: {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Vault() {
+  const { isAdmin } = usePermissions()
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [entries, setEntries] = useState<VaultEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -410,8 +413,12 @@ export default function Vault() {
   const load = async () => {
     setLoading(true)
     try {
-      const data = await api.get<VaultEntry[]>('/vault?limit=1000')
+      const [data, me] = await Promise.all([
+        api.get<VaultEntry[]>('/vault?limit=1000'),
+        api.get<User>('/users/me'),
+      ])
       setEntries(data)
+      setCurrentUser(me)
     } catch {
       setError('Failed to load vault')
     } finally {
@@ -464,6 +471,11 @@ export default function Vault() {
     setShowPassword(false)
     if (allServers.length === 0) loadServerCreds()
     setShowForm(true)
+  }
+
+  const toggleShare = async (e: VaultEntry) => {
+    const updated = await api.patch<{ is_shared: boolean }>(`/vault/${e.id}/share`, { shared: !e.is_shared })
+    setEntries(prev => prev.map(x => x.id === e.id ? { ...x, is_shared: updated.is_shared } : x))
   }
 
   const openEdit = (e: VaultEntry) => {
@@ -699,7 +711,10 @@ export default function Vault() {
           {items.map(e => (
             <tr key={e.id} className="hover:bg-gray-800/30">
               <td className="px-3 py-2" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                <div className="text-white font-medium truncate">{e.title}</div>
+                <div className="text-white font-medium truncate flex items-center gap-2">
+                  {e.title}
+                  {e.is_shared && <span className="text-xs px-1.5 py-0.5 rounded bg-green-900/50 text-green-400 border border-green-700 flex-shrink-0">shared</span>}
+                </div>
                 {e.tags && e.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-0.5">
                     {e.tags.map(t => (
@@ -753,6 +768,13 @@ export default function Vault() {
                     <button onClick={() => pullFromCredential(e.id)} title="Pull from linked credential"
                       className="px-2 py-1 text-xs rounded bg-blue-900/60 hover:bg-blue-800 text-blue-300 transition-colors">
                       ↓ Sync
+                    </button>
+                  )}
+                  {(isAdmin || currentUser?.id === e.owner_id) && (
+                    <button onClick={() => toggleShare(e)}
+                      className={`px-2 py-1 text-xs rounded transition-colors ${e.is_shared ? 'bg-green-900/50 hover:bg-green-800 text-green-300' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'}`}
+                      title={e.is_shared ? 'Shared — click to make private' : 'Private — click to share'}>
+                      {e.is_shared ? '🔓' : '🔒'}
                     </button>
                   )}
                   <button onClick={() => setDeleteTarget(e)}

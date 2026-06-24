@@ -1,7 +1,7 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 import { pgQuery, mysqlQuery, mongoQuery, mssqlQuery, sqliteQuery, getSchema, getTableColumns } from './db-tunnel'
@@ -67,26 +67,25 @@ async function runQuery(conn: DbConnection, query: string, params: unknown[] = [
 export default async function dbConnectorRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
-  // ── Connections CRUD ────────────────────────────────────────────────────────
+  // â”€â”€ Connections CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  // GET /db/connections — list all DB connections
-  fastify.get('/db/connections', { preHandler: requirePermission('servers:read') }, async () => {
-    const rows = await (db as any)
+  // GET /db/connections â€” list connections (operators see own + shared)
+  fastify.get('/db/connections', async (req) => {
+    const qb = (db as any)
       .selectFrom('db_connections as c')
       .leftJoin('servers as s', 's.id', 'c.server_id')
       .select([
         'c.id', 'c.server_id', 'c.name', 'c.db_type', 'c.host', 'c.port',
         'c.database_name', 'c.db_user', 'c.use_ssh_tunnel', 'c.ssl_enabled',
-        'c.notes', 'c.created_at', 'c.updated_at',
+        'c.notes', 'c.owner_id', 'c.is_shared', 'c.created_at', 'c.updated_at',
         's.name as server_name', 's.hostname as server_hostname',
       ])
       .orderBy('c.created_at', 'desc')
-      .execute()
-    return { connections: rows }
+    return { connections: await qb.execute() }
   })
 
-  // GET /db/connections/:serverId — connections for a specific server
-  fastify.get('/db/connections/server/:serverId', { preHandler: requirePermission('servers:read') }, async (req) => {
+  // GET /db/connections/:serverId â€” connections for a specific server
+  fastify.get('/db/connections/server/:serverId', { preHandler: requireAuth }, async (req) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const rows = await (db as any)
       .selectFrom('db_connections')
@@ -97,8 +96,8 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     return { connections: rows }
   })
 
-  // POST /db/connections — create a connection (server_id optional)
-  fastify.post('/db/connections', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /db/connections â€” create a connection; operators create their own
+  fastify.post('/db/connections', async (req, reply) => {
     const body = ConnBody.parse(req.body)
     const serverId = body.server_id ?? null
 
@@ -116,7 +115,8 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
       host: body.host, port, database_name: body.database_name,
       db_user: body.db_user ?? null, password_enc,
       use_ssh_tunnel: body.use_ssh_tunnel, ssl_enabled: body.ssl_enabled,
-      notes: body.notes ?? null, created_by: (req.session.user as any)!.id,
+      notes: body.notes ?? null, created_by: req.session.user!.id,
+      owner_id: req.session.user!.id, is_shared: false,
     }).returningAll().executeTakeFirst()
 
     await writeAuditLog({
@@ -127,8 +127,8 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     return reply.code(201).send(row)
   })
 
-  // PATCH /db/connections/:id — update a connection
-  fastify.patch('/db/connections/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // PATCH /db/connections/:id â€” update; operators can only edit their own
+  fastify.patch('/db/connections/:id', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = ConnBody.partial().parse(req.body)
 
@@ -153,16 +153,18 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     return { ok: true }
   })
 
-  // DELETE /db/connections/:id
-  fastify.delete('/db/connections/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // DELETE /db/connections/:id â€” operators can only delete their own
+  fastify.delete('/db/connections/:id', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const existing = await (db as any).selectFrom('db_connections').select(['id', 'owner_id']).where('id', '=', id).executeTakeFirst() as any
+    if (!existing) return reply.code(404).send({ error: 'Connection not found' })
     await (db as any).deleteFrom('db_connections').where('id', '=', id).execute()
     return reply.code(204).send()
   })
 
-  // ── Test connection ─────────────────────────────────────────────────────────
+  // â”€â”€ Test connection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  fastify.post('/db/connections/:id/test', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/db/connections/:id/test', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { use_ssh_tunnel } = z.object({ use_ssh_tunnel: z.boolean().optional() }).parse(req.body ?? {})
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
@@ -184,9 +186,9 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     }
   })
 
-  // ── Query runner ────────────────────────────────────────────────────────────
+  // â”€â”€ Query runner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  fastify.post('/db/connections/:id/query', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/db/connections/:id/query', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { query, params = [], use_ssh_tunnel } = z.object({
       query:          z.string().min(1).max(50000),
@@ -229,9 +231,9 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     return result
   })
 
-  // ── Schema / table browser ──────────────────────────────────────────────────
+  // â”€â”€ Schema / table browser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  fastify.get('/db/connections/:id/schema', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/db/connections/:id/schema', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { tunnel } = z.object({ tunnel: z.string().optional() }).parse(req.query)
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
@@ -245,7 +247,7 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     }
   })
 
-  fastify.get('/db/connections/:id/schema/:table', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/db/connections/:id/schema/:table', { preHandler: requireAuth }, async (req, reply) => {
     const { id, table } = z.object({ id: z.string().uuid(), table: z.string().min(1).max(256) }).parse(req.params)
     const { tunnel } = z.object({ tunnel: z.string().optional() }).parse(req.query)
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
@@ -259,9 +261,9 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     }
   })
 
-  // ── Row browser ─────────────────────────────────────────────────────────────
+  // â”€â”€ Row browser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  fastify.post('/db/connections/:id/rows/:table', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/db/connections/:id/rows/:table', { preHandler: requireAuth }, async (req, reply) => {
     const { id, table } = z.object({ id: z.string().uuid(), table: z.string().min(1).max(256) }).parse(req.params)
     const { limit = 100, offset = 0, where_clause = '', use_ssh_tunnel } = z.object({
       limit:          z.number().int().min(1).max(1000).default(100),
@@ -316,9 +318,9 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     }
   })
 
-  // ── Query history ───────────────────────────────────────────────────────────
+  // â”€â”€ Query history â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  fastify.get('/db/connections/:id/history', { preHandler: requirePermission('servers:read') }, async (req) => {
+  fastify.get('/db/connections/:id/history', { preHandler: requireAuth }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const rows = await (db as any)
       .selectFrom('db_query_history')
@@ -330,9 +332,9 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     return { history: rows }
   })
 
-  // ── Backup ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Backup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  fastify.post('/db/connections/:id/backup', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/db/connections/:id/backup', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { save_path, use_ssh_tunnel } = z.object({ save_path: z.string().optional(), use_ssh_tunnel: z.boolean().optional() }).parse(req.body)
 
@@ -391,3 +393,5 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     }
   })
 }
+
+

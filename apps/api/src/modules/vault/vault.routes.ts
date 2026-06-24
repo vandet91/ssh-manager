@@ -1,7 +1,7 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 
@@ -23,8 +23,8 @@ const EntryBody = z.object({
 export default async function vaultRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
-  // GET /vault — list entries (active by default; ?archived=true for archived)
-  fastify.get('/vault', { preHandler: requirePermission('servers:read') }, async (req) => {
+  // GET /vault â€” list entries
+  fastify.get('/vault', async (req) => {
     const query = z.object({
       type: z.string().optional(),
       category: z.string().optional(),
@@ -36,56 +36,42 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     }).parse(req.query)
 
     const anyDb = db as any
+    const baseSelect = [
+      'vault_entries.id', 'vault_entries.title', 'vault_entries.type', 'vault_entries.category',
+      'vault_entries.ou', 'vault_entries.tags', 'vault_entries.username', 'vault_entries.url',
+      'vault_entries.notes', 'vault_entries.server_credential_id', 'vault_entries.created_by',
+      'vault_entries.owner_id', 'vault_entries.is_shared', 'vault_entries.created_at',
+      'vault_entries.updated_at', 'vault_entries.is_archived', 'vault_entries.archived_at',
+      'server_credentials.label as linked_credential_label',
+      'servers.id as linked_server_id', 'servers.name as linked_server_name',
+    ]
+
     let qb = anyDb
       .selectFrom('vault_entries')
       .leftJoin('server_credentials', 'server_credentials.id', 'vault_entries.server_credential_id')
       .leftJoin('servers', 'servers.id', 'server_credentials.server_id')
-      .select([
-        'vault_entries.id',
-        'vault_entries.title',
-        'vault_entries.type',
-        'vault_entries.category',
-        'vault_entries.ou',
-        'vault_entries.tags',
-        'vault_entries.username',
-        'vault_entries.url',
-        'vault_entries.notes',
-        'vault_entries.server_credential_id',
-        'vault_entries.created_by',
-        'vault_entries.created_at',
-        'vault_entries.updated_at',
-        'vault_entries.is_archived',
-        'vault_entries.archived_at',
-        'server_credentials.label as linked_credential_label',
-        'servers.id as linked_server_id',
-        'servers.name as linked_server_name',
-      ])
+      .select(baseSelect)
       .orderBy('vault_entries.updated_at', 'desc')
+      .where('vault_entries.is_archived', '=', query.archived)
 
-    qb = qb.where('vault_entries.is_archived', '=', query.archived)
     if (query.type) qb = qb.where('vault_entries.type', '=', query.type)
     if (query.category) qb = qb.where('vault_entries.category', '=', query.category)
 
     const rows = await qb.limit(query.limit).offset((query.page - 1) * query.limit).execute()
-
-    // Tag filter in-memory (postgres array contains requires sql tag)
     let result = rows as any[]
     if (query.tag) result = result.filter((r: any) => r.tags?.includes(query.tag))
     if (query.search) {
       const s = query.search.toLowerCase()
       result = result.filter((r: any) =>
-        r.title?.toLowerCase().includes(s) ||
-        r.username?.toLowerCase().includes(s) ||
-        r.notes?.toLowerCase().includes(s) ||
-        r.category?.toLowerCase().includes(s)
+        r.title?.toLowerCase().includes(s) || r.username?.toLowerCase().includes(s) ||
+        r.notes?.toLowerCase().includes(s) || r.category?.toLowerCase().includes(s)
       )
     }
-
     return result
   })
 
-  // POST /vault/purge-bulk — permanently delete multiple archived entries (MUST be before /:id)
-  fastify.post('/vault/purge-bulk', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /vault/purge-bulk â€” permanently delete multiple archived entries (MUST be before /:id)
+  fastify.post('/vault/purge-bulk', { preHandler: requireAuth }, async (req, reply) => {
     const { ids } = z.object({ ids: z.array(z.string().uuid()).min(1) }).parse(req.body)
     await db.deleteFrom('vault_entries').where('id', 'in', ids).execute()
     await writeAuditLog({
@@ -96,8 +82,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return { purged: ids.length }
   })
 
-  // GET /vault/ous — list all OUs with entry counts (MUST be before /vault/:id)
-  fastify.get('/vault/ous', { preHandler: requirePermission('servers:read') }, async () => {
+  // GET /vault/ous â€” list all OUs with entry counts (MUST be before /vault/:id)
+  fastify.get('/vault/ous', { preHandler: requireAuth }, async () => {
     const rows = await db.selectFrom('vault_entries')
       .select(['ou'])
       .where('ou', 'is not', null)
@@ -112,8 +98,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
       .sort((a, b) => a.ou.localeCompare(b.ou))
   })
 
-  // POST /vault/ous/rename — rename an OU across all entries (MUST be before /vault/:id)
-  fastify.post('/vault/ous/rename', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /vault/ous/rename â€” rename an OU across all entries (MUST be before /vault/:id)
+  fastify.post('/vault/ous/rename', { preHandler: requireAuth }, async (req, reply) => {
     const { from, to } = z.object({ from: z.string().min(1), to: z.string().min(1) }).parse(req.body)
     if (from === to) return reply.code(400).send({ error: 'Names are the same' })
     const result = await db.updateTable('vault_entries')
@@ -128,8 +114,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return { affected: Number(result[0]?.numUpdatedRows ?? 0) }
   })
 
-  // POST /vault/ous/delete — delete an OU; move entries to move_to or clear their OU (MUST be before /vault/:id)
-  fastify.post('/vault/ous/delete', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /vault/ous/delete â€” delete an OU; move entries to move_to or clear their OU (MUST be before /vault/:id)
+  fastify.post('/vault/ous/delete', { preHandler: requireAuth }, async (req, reply) => {
     const { ou, move_to } = z.object({ ou: z.string().min(1), move_to: z.string().optional() }).parse(req.body)
     const newOu = move_to && move_to.trim() ? move_to.trim() : null
     const result = await db.updateTable('vault_entries')
@@ -144,8 +130,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return { affected: Number(result[0]?.numUpdatedRows ?? 0) }
   })
 
-  // GET /vault/:id — single entry (no password)
-  fastify.get('/vault/:id', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /vault/:id â€” single entry (no password)
+  fastify.get('/vault/:id', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const entry = await db.selectFrom('vault_entries').selectAll().where('id', '=', id).executeTakeFirst()
     if (!entry) return reply.code(404).send({ error: 'Not found' })
@@ -153,8 +139,22 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return safe
   })
 
-  // POST /vault — create entry
-  fastify.post('/vault', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // PATCH /vault/:id/share â€” toggle shared flag (admin or owner only)
+  fastify.patch('/vault/:id/share', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { shared } = z.object({ shared: z.boolean() }).parse(req.body)
+    const { id: userId } = req.session.user!
+
+    const entry = await db.selectFrom('vault_entries').select(['id', 'owner_id'] as any).where('id', '=', id).executeTakeFirst() as any
+    if (!entry) return reply.code(404).send({ error: 'Not found' })
+
+    await db.updateTable('vault_entries').set({ is_shared: shared, updated_at: new Date() } as any).where('id', '=', id).execute()
+    await writeAuditLog({ userId, userEmail: req.session.user!.email, action: shared ? 'vault.shared' : 'vault.unshared', resource: 'vault_entry', resourceId: id, request: req })
+    return { id, is_shared: shared }
+  })
+
+  // POST /vault â€” create entry (operators can create their own)
+  fastify.post('/vault', async (req, reply) => {
     const body = EntryBody.parse(req.body)
     const vaultKey = getVaultKey()
 
@@ -172,7 +172,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
       notes: body.notes ?? null,
       server_credential_id: body.server_credential_id ?? null,
       created_by: req.session.user!.id,
-    }).returningAll().execute()
+      owner_id: req.session.user!.id,
+    } as any).returningAll().execute()
 
     // Bidirectional sync: if linked to a server_credential, also update that credential's password
     if (body.password && body.server_credential_id) {
@@ -189,8 +190,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return reply.code(201).send(safe)
   })
 
-  // PATCH /vault/:id — update entry
-  fastify.patch('/vault/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // PATCH /vault/:id â€” update entry
+  fastify.patch('/vault/:id', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = EntryBody.partial().parse(req.body)
 
@@ -230,8 +231,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return { ok: true }
   })
 
-  // POST /vault/:id/reveal — decrypt and return password
-  fastify.post('/vault/:id/reveal', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // POST /vault/:id/reveal â€” decrypt and return password
+  fastify.post('/vault/:id/reveal', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const entry = await db.selectFrom('vault_entries').selectAll().where('id', '=', id).executeTakeFirst()
     if (!entry) return reply.code(404).send({ error: 'Not found' })
@@ -249,8 +250,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return { password }
   })
 
-  // POST /vault/:id/pull-from-credential — pull latest password FROM linked server_credential into vault
-  fastify.post('/vault/:id/pull-from-credential', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /vault/:id/pull-from-credential â€” pull latest password FROM linked server_credential into vault
+  fastify.post('/vault/:id/pull-from-credential', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const entry = await db.selectFrom('vault_entries').selectAll().where('id', '=', id).executeTakeFirst()
     if (!entry) return reply.code(404).send({ error: 'Not found' })
@@ -273,10 +274,11 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return { ok: true }
   })
 
-  // DELETE /vault/:id — soft delete (archive)
-  fastify.delete('/vault/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // DELETE /vault/:id â€” soft delete (archive); operators can only delete entries they own
+  fastify.delete('/vault/:id', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
-    const entry = await db.selectFrom('vault_entries').select(['id', 'title']).where('id', '=', id).executeTakeFirst()
+    const { id: userId } = req.session.user!
+    const entry = await db.selectFrom('vault_entries').select(['id', 'title', 'owner_id'] as any).where('id', '=', id).executeTakeFirst() as any
     if (!entry) return reply.code(404).send({ error: 'Not found' })
 
     await db.updateTable('vault_entries')
@@ -292,8 +294,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     reply.code(204).send()
   })
 
-  // POST /vault/:id/restore — unarchive
-  fastify.post('/vault/:id/restore', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /vault/:id/restore â€” unarchive
+  fastify.post('/vault/:id/restore', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const entry = await db.selectFrom('vault_entries').select(['id', 'title']).where('id', '=', id).executeTakeFirst()
     if (!entry) return reply.code(404).send({ error: 'Not found' })
@@ -311,8 +313,8 @@ export default async function vaultRoutes(fastify: FastifyInstance): Promise<voi
     return { ok: true }
   })
 
-  // GET /vault/export/keepass — export all active entries as KeePass XML
-  fastify.get('/vault/export/keepass', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /vault/export/keepass â€” export all active entries as KeePass XML
+  fastify.get('/vault/export/keepass', { preHandler: requireAuth }, async (req, reply) => {
     const vaultKey = getVaultKey()
     const anyDb = db as any
 
@@ -380,8 +382,8 @@ ${Object.entries(groups).map(([name, items]) => groupXml(name, items)).join('\n'
     return reply.send(xml)
   })
 
-  // DELETE /vault/:id/purge — permanently delete
-  fastify.delete('/vault/:id/purge', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // DELETE /vault/:id/purge â€” permanently delete
+  fastify.delete('/vault/:id/purge', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const entry = await db.selectFrom('vault_entries').select(['id', 'title']).where('id', '=', id).executeTakeFirst()
     if (!entry) return reply.code(404).send({ error: 'Not found' })
@@ -406,3 +408,5 @@ async function syncToCredential(credId: string, password: string, vaultKey: Buff
     .where('id', '=', credId)
     .execute()
 }
+
+

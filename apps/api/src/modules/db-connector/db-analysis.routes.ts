@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { decryptSecret, getVaultKey } from '../../utils/vault'
 import { pgQuery, mysqlQuery, mongoQuery, mssqlQuery, sqliteQuery } from './db-tunnel'
 import { DbConnection, DbType, applyTunnelOverride } from './db-connector.routes'
@@ -183,7 +183,7 @@ export default async function dbAnalysisRoutes(fastify: FastifyInstance): Promis
   fastify.addHook('preHandler', requireAuth)
 
   // GET /db/analysis/rules?connection_id=X
-  fastify.get('/db/analysis/rules', { preHandler: requirePermission('servers:read') }, async (req) => {
+  fastify.get('/db/analysis/rules', { preHandler: requireAdmin }, async (req) => {
     const { connection_id } = z.object({ connection_id: z.string().uuid() }).parse(req.query)
     const rules = await (db as any)
       .selectFrom('db_analysis_rules')
@@ -206,7 +206,7 @@ export default async function dbAnalysisRoutes(fastify: FastifyInstance): Promis
   })
 
   // POST /db/analysis/rules?connection_id=X
-  fastify.post('/db/analysis/rules', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/db/analysis/rules', { preHandler: requireAdmin }, async (req, reply) => {
     const { connection_id } = z.object({ connection_id: z.string().uuid() }).parse(req.query)
     const body = RuleBody.parse(req.body)
     const conn = await getConn(connection_id)
@@ -222,7 +222,7 @@ export default async function dbAnalysisRoutes(fastify: FastifyInstance): Promis
   })
 
   // PATCH /db/analysis/rules/:id
-  fastify.patch('/db/analysis/rules/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.patch('/db/analysis/rules/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = RuleBody.partial().parse(req.body)
     const updates: any = {}
@@ -237,14 +237,14 @@ export default async function dbAnalysisRoutes(fastify: FastifyInstance): Promis
   })
 
   // DELETE /db/analysis/rules/:id
-  fastify.delete('/db/analysis/rules/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.delete('/db/analysis/rules/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     await (db as any).deleteFrom('db_analysis_rules').where('id', '=', id).execute()
     return reply.code(204).send()
   })
 
   // POST /db/analysis/rules/:id/run — run a single rule
-  fastify.post('/db/analysis/rules/:id/run', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/db/analysis/rules/:id/run', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { use_ssh_tunnel } = z.object({ use_ssh_tunnel: z.boolean().optional() }).parse(req.body ?? {})
 
@@ -269,7 +269,7 @@ export default async function dbAnalysisRoutes(fastify: FastifyInstance): Promis
   })
 
   // POST /db/analysis/connections/:id/run-all
-  fastify.post('/db/analysis/connections/:id/run-all', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/db/analysis/connections/:id/run-all', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { use_ssh_tunnel } = z.object({ use_ssh_tunnel: z.boolean().optional() }).parse(req.body ?? {})
 
@@ -306,7 +306,7 @@ export default async function dbAnalysisRoutes(fastify: FastifyInstance): Promis
   })
 
   // GET /db/analysis/rules/:id/history
-  fastify.get('/db/analysis/rules/:id/history', { preHandler: requirePermission('servers:read') }, async (req) => {
+  fastify.get('/db/analysis/rules/:id/history', { preHandler: requireAdmin }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const rows = await (db as any)
       .selectFrom('db_analysis_results')
@@ -319,7 +319,7 @@ export default async function dbAnalysisRoutes(fastify: FastifyInstance): Promis
   })
 
   // POST /db/analysis/compare — compare table between two connections
-  fastify.post('/db/analysis/compare', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/db/analysis/compare', { preHandler: requireAdmin }, async (req, reply) => {
     const body = z.object({
       conn_a:          z.string().uuid(),
       conn_b:          z.string().uuid(),

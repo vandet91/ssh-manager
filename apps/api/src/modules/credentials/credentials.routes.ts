@@ -1,14 +1,14 @@
-import { FastifyInstance } from 'fastify'
+﻿import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 import { withServerSsh } from '../../utils/server-ssh'
 
 export default async function credentialsRoutes(fastify: FastifyInstance): Promise<void> {
-  // GET /servers/:id/credentials — list credentials (no plaintext passwords)
-  fastify.get('/servers/:id/credentials', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // GET /servers/:id/credentials â€” list credentials (no plaintext passwords)
+  fastify.get('/servers/:id/credentials', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const rows = await db.selectFrom('server_credentials')
       .select(['id', 'server_id', 'category', 'linux_user', 'service_name', 'service_username',
@@ -28,8 +28,8 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     return rows.map((r) => ({ ...r, created_by_name: r.created_by ? (userMap[r.created_by] ?? null) : null }))
   })
 
-  // POST /servers/:id/credentials — create a credential
-  fastify.post('/servers/:id/credentials', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:id/credentials â€” create a credential
+  fastify.post('/servers/:id/credentials', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       category: z.enum(['linux', 'database', 'web', 'application', 'service', 'other']).default('linux'),
@@ -90,8 +90,8 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     return reply.code(201).send(safe)
   })
 
-  // PATCH /servers/:id/credentials/:credId — update label/notes in-place; password change archives old + creates new
-  fastify.patch('/servers/:id/credentials/:credId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // PATCH /servers/:id/credentials/:credId â€” update label/notes in-place; password change archives old + creates new
+  fastify.patch('/servers/:id/credentials/:credId', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
     const body = z.object({
       label: z.string().min(1).max(200).optional(),
@@ -103,7 +103,7 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     const cred = await db.selectFrom('server_credentials').selectAll().where('id', '=', credId).where('server_id', '=', id).executeTakeFirst()
     if (!cred) return reply.code(404).send({ error: 'Credential not found' })
 
-    // ── Password changed: archive old, create new ───────────────────────────
+    // â”€â”€ Password changed: archive old, create new â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (body.password !== undefined) {
       const vaultKey = getVaultKey()
       let appliedAt: Date | null = null
@@ -122,7 +122,7 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
         }
       }
 
-      // ── If domain credential, sync new password to Active Directory ──────────
+      // â”€â”€ If domain credential, sync new password to Active Directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const domainCredMatch = cred.linux_user?.match(/^(.+)[\\\/](.+)$/)
       if (domainCredMatch) {
         const domainPart = domainCredMatch[1]   // e.g. "pvd.local" or "pvd"
@@ -193,7 +193,7 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
       return { ok: true, new_id: newCred.id, ...(warning ? { warning } : {}) }
     }
 
-    // ── Label/notes only: update in-place, no archive needed ───────────────
+    // â”€â”€ Label/notes only: update in-place, no archive needed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const updates: Record<string, unknown> = { updated_at: new Date() }
     if (body.label !== undefined) updates.label = body.label
     if (body.notes !== undefined) updates.notes = body.notes
@@ -208,8 +208,8 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     return { ok: true }
   })
 
-  // POST /servers/:id/credentials/:credId/reveal — return decrypted password (audit logged)
-  fastify.post('/servers/:id/credentials/:credId/reveal', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // POST /servers/:id/credentials/:credId/reveal â€” return decrypted password (audit logged)
+  fastify.post('/servers/:id/credentials/:credId/reveal', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
 
     const cred = await db.selectFrom('server_credentials').selectAll().where('id', '=', credId).where('server_id', '=', id).executeTakeFirst()
@@ -229,8 +229,8 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     return { password }
   })
 
-  // POST /servers/:id/credentials/:credId/apply — push the stored password to the server via chpasswd
-  fastify.post('/servers/:id/credentials/:credId/apply', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:id/credentials/:credId/apply â€” push the stored password to the server via chpasswd
+  fastify.post('/servers/:id/credentials/:credId/apply', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
 
     const cred = await db.selectFrom('server_credentials').selectAll().where('id', '=', credId).where('server_id', '=', id).executeTakeFirst()
@@ -264,8 +264,8 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     return { ok: true, applied_at: new Date().toISOString() }
   })
 
-  // POST /servers/:id/credentials/:credId/rotate — generate a new secure password, apply via SSH, archive old, create new
-  fastify.post('/servers/:id/credentials/:credId/rotate', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  // POST /servers/:id/credentials/:credId/rotate â€” generate a new secure password, apply via SSH, archive old, create new
+  fastify.post('/servers/:id/credentials/:credId/rotate', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
 
     const cred = await db.selectFrom('server_credentials').selectAll().where('id', '=', credId).where('server_id', '=', id).executeTakeFirst()
@@ -280,7 +280,7 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
 
     const vaultKey = getVaultKey()
 
-    // Apply on server first — only archive/create if apply succeeds
+    // Apply on server first â€” only archive/create if apply succeeds
     try {
       await withServerSsh(id, async (client) => {
         const { sshExec } = await import('../../utils/ssh')
@@ -323,8 +323,8 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     return { ok: true, new_id: newCred.id }
   })
 
-  // POST /servers/:id/credentials/:credId/verify — check if stored password still matches the server
-  fastify.post('/servers/:id/credentials/:credId/verify', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // POST /servers/:id/credentials/:credId/verify â€” check if stored password still matches the server
+  fastify.post('/servers/:id/credentials/:credId/verify', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
 
     const cred = await db.selectFrom('server_credentials').selectAll().where('id', '=', credId).where('server_id', '=', id).executeTakeFirst()
@@ -340,7 +340,7 @@ export default async function credentialsRoutes(fastify: FastifyInstance): Promi
     let match = false
 
     if (server.os_type === 'windows') {
-      // ── Windows: use LogonUser Win32 API (same path as RDP/SMB auth) ─────────
+      // â”€â”€ Windows: use LogonUser Win32 API (same path as RDP/SMB auth) â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // Parse "domain\user" or "domain/user" or plain "user"
       const domainMatch = cred.linux_user.match(/^(.+)[\\\/](.+)$/)
       const winUser   = domainMatch ? domainMatch[2] : cred.linux_user
@@ -400,8 +400,8 @@ try {
 
       match = output.includes('MATCH:True')
     } else {
-      // ── Linux root: try direct SSH as root first (PermitRootLogin yes),
-      //    then fall back to su/sudo elevation via management key (prohibit-password) ──
+      // â”€â”€ Linux root: try direct SSH as root first (PermitRootLogin yes),
+      //    then fall back to su/sudo elevation via management key (prohibit-password) â”€â”€
       if (cred.linux_user === 'root') {
         // Strategy 1: direct SSH as root with password
         const { Client: SshClient } = await import('ssh2')
@@ -455,7 +455,7 @@ try {
           }
         }
       } else {
-        // ── Other Linux users: attempt SSH password authentication ─────────────
+        // â”€â”€ Other Linux users: attempt SSH password authentication â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         const { Client } = await import('ssh2')
         match = await new Promise((resolve) => {
           const client = new Client()
@@ -488,8 +488,8 @@ try {
     return { match, checked_at: new Date().toISOString() }
   })
 
-  // POST /servers/:id/credentials/:credId/copy — reveal password for clipboard only (audit logged same as reveal)
-  fastify.post('/servers/:id/credentials/:credId/copy', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  // POST /servers/:id/credentials/:credId/copy â€” reveal password for clipboard only (audit logged same as reveal)
+  fastify.post('/servers/:id/credentials/:credId/copy', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
 
     const cred = await db.selectFrom('server_credentials').selectAll().where('id', '=', credId).where('server_id', '=', id).executeTakeFirst()
@@ -510,16 +510,16 @@ try {
   })
 
   // DELETE /servers/:id/credentials/:credId
-  //   Active credential  → soft-archive (reason: 'deleted') so history is preserved
-  //   Archived credential → hard-delete (permanent purge)
-  fastify.delete('/servers/:id/credentials/:credId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  //   Active credential  â†’ soft-archive (reason: 'deleted') so history is preserved
+  //   Archived credential â†’ hard-delete (permanent purge)
+  fastify.delete('/servers/:id/credentials/:credId', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
 
     const cred = await db.selectFrom('server_credentials').selectAll().where('id', '=', credId).where('server_id', '=', id).executeTakeFirst()
     if (!cred) return reply.code(404).send({ error: 'Credential not found' })
 
     if (cred.is_archived) {
-      // Already archived — permanently delete
+      // Already archived â€” permanently delete
       await db.deleteFrom('server_credentials').where('id', '=', credId).execute()
       await writeAuditLog({
         userId: req.session.user!.id, userEmail: req.session.user!.email,
@@ -527,7 +527,7 @@ try {
         serverId: id, details: { linux_user: cred.linux_user, label: cred.label }, request: req,
       })
     } else {
-      // Active — soft-archive so history is preserved
+      // Active â€” soft-archive so history is preserved
       await db.updateTable('server_credentials').set({
         is_archived: true, archived_at: new Date(), archived_reason: 'deleted', updated_at: new Date(),
       }).where('id', '=', credId).execute()
@@ -541,3 +541,4 @@ try {
     return reply.code(204).send()
   })
 }
+

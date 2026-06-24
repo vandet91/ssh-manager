@@ -3,7 +3,7 @@ import * as crypto from 'crypto'
 import * as net from 'net'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
 import { withServerSsh } from '../../utils/server-ssh'
@@ -36,7 +36,7 @@ function encryptGuacToken(data: object): string {
 async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /servers/:id/rdp-token
   // Returns an encrypted token the browser uses to open the WebSocket RDP session
-  fastify.post('/servers/:id/rdp-token', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/servers/:id/rdp-token', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       username:  z.string().min(1),
@@ -129,7 +129,7 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /servers/:id/rdp-check — TCP port reachability check (no credentials needed)
-  fastify.get('/servers/:id/rdp-check', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/rdp-check', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const { port } = z.object({ port: z.coerce.number().int().min(1).max(65535).default(3389) }).parse(req.query)
 
@@ -152,7 +152,7 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/windows-setup — save RDP credentials to vault and mark server ready
-  fastify.post('/servers/:id/windows-setup', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.post('/servers/:id/windows-setup', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       username:    z.string().min(1),
@@ -200,7 +200,7 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // GET /servers/:id/rdp-credentials — list vault credentials suitable for RDP
-  fastify.get('/servers/:id/rdp-credentials', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.get('/servers/:id/rdp-credentials', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const creds = await (db as any)
       .selectFrom('server_credentials')
@@ -213,7 +213,7 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // PUT /servers/:id/rdp-credentials/:credId — update an RDP credential
-  fastify.put('/servers/:id/rdp-credentials/:credId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.put('/servers/:id/rdp-credentials/:credId', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
     const body = z.object({
       label:       z.string().min(1),
@@ -309,7 +309,7 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // DELETE /servers/:id/rdp-credentials/:credId — archive or permanently delete
-  fastify.delete('/servers/:id/rdp-credentials/:credId', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
+  fastify.delete('/servers/:id/rdp-credentials/:credId', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
     const body = z.object({ permanent: z.boolean().default(false) }).optional().parse(req.body)
 
@@ -336,7 +336,7 @@ async function rdpRoutes(fastify: FastifyInstance): Promise<void> {
   })
 
   // POST /servers/:id/rdp-credentials/:credId/reveal — decrypt password
-  fastify.post('/servers/:id/rdp-credentials/:credId/reveal', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
+  fastify.post('/servers/:id/rdp-credentials/:credId/reveal', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, credId } = z.object({ id: z.string().uuid(), credId: z.string().uuid() }).parse(req.params)
     const cred = await (db as any)
       .selectFrom('server_credentials').select(['password_enc'])
