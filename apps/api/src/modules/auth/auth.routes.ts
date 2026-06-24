@@ -101,7 +101,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/auth/register', { preHandler: [requireAuth, requirePermission('admin')] }, async (req, reply) => {
     const body = z.object({
       email: z.string().email(),
-      displayName: z.string().min(1),
+      displayName: z.string().optional(),
       password: z.string().min(1),
       role: z.enum(['admin', 'operator', 'developer', 'viewer']).default('viewer'),
     }).parse(req.body)
@@ -119,7 +119,7 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     const [user] = await db.insertInto('users').values({
       email: body.email.toLowerCase(),
-      display_name: body.displayName,
+      display_name: body.displayName || null,
       provider: 'local',
       provider_id: null,
       password_hash: passwordHash,
