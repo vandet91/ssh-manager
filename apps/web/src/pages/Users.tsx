@@ -3,6 +3,34 @@ import { api, User } from '../api/client'
 import Modal from '../components/Modal'
 import Badge from '../components/Badge'
 
+const PERMISSION_LABELS: Record<string, { label: string; desc: string; group: string }> = {
+  'servers:read':      { label: 'View Servers',        desc: 'List servers, view info & credentials', group: 'Servers' },
+  'servers:write':     { label: 'Manage Servers',      desc: 'Add, edit, delete servers; manage credentials', group: 'Servers' },
+  'servers:admin':     { label: 'Server Admin',        desc: 'Root activation, SSHD settings, destructive ops', group: 'Servers' },
+  'keys:read':         { label: 'View SSH Keys',       desc: 'List and view SSH keys', group: 'SSH Keys' },
+  'keys:write':        { label: 'Manage SSH Keys',     desc: 'Create and delete SSH keys', group: 'SSH Keys' },
+  'keys:rotate':       { label: 'Rotate Keys',         desc: 'Rotate SSH keys on servers', group: 'SSH Keys' },
+  'assignments:read':  { label: 'View Assignments',    desc: 'View key-to-server assignments', group: 'Assignments' },
+  'assignments:write': { label: 'Manage Assignments',  desc: 'Create and revoke key assignments', group: 'Assignments' },
+  'terminal:connect':  { label: 'Terminal Access',     desc: 'Open SSH terminal sessions', group: 'Terminal' },
+  'logs:read':         { label: 'View Audit Logs',     desc: 'Read audit and activity logs', group: 'Logs' },
+  'security:read':     { label: 'View Security',       desc: 'View security scan results', group: 'Security' },
+  'security:scan':     { label: 'Run Security Scans',  desc: 'Trigger security scans on servers', group: 'Security' },
+}
+
+const PERMISSION_GROUPS = ['Servers', 'SSH Keys', 'Assignments', 'Terminal', 'Logs', 'Security']
+
+const ALL_PERMISSIONS = Object.keys(PERMISSION_LABELS)
+
+const ROLES = ['operator', 'developer', 'viewer'] as const
+type NonAdminRole = typeof ROLES[number]
+
+const ROLE_COLORS: Record<NonAdminRole, string> = {
+  operator:  'text-blue-400',
+  developer: 'text-purple-400',
+  viewer:    'text-gray-400',
+}
+
 export default function Users() {
   const [users, setUsers] = useState<User[]>([])
   const [currentUser, setCurrentUser] = useState<User | null>(null)
@@ -18,11 +46,22 @@ export default function Users() {
   const [newPwd, setNewPwd] = useState('')
   const [pwdError, setPwdError] = useState('')
 
+  // Role permissions
+  const [rolePerms, setRolePerms] = useState<Record<NonAdminRole, string[]>>({ operator: [], developer: [], viewer: [] })
+  const [permSaving, setPermSaving] = useState<NonAdminRole | null>(null)
+  const [permMsg, setPermMsg] = useState('')
+
   const load = () =>
     api.get<{ users: User[] }>('/users?limit=200').then((r) => setUsers(r.users)).catch(() => {})
 
+  const loadPerms = () =>
+    api.get<{ permissions: Record<NonAdminRole, string[]> }>('/users/role-permissions')
+      .then((r) => setRolePerms(r.permissions))
+      .catch(() => {})
+
   useEffect(() => {
     load()
+    loadPerms()
     api.get<User>('/auth/me').then(setCurrentUser).catch(() => {})
   }, [])
 
@@ -74,10 +113,28 @@ export default function Users() {
     } catch (err: unknown) { setPwdError((err as Error).message) }
   }
 
+  const togglePerm = (role: NonAdminRole, perm: string) => {
+    setRolePerms((prev) => {
+      const cur = prev[role]
+      return { ...prev, [role]: cur.includes(perm) ? cur.filter((p) => p !== perm) : [...cur, perm] }
+    })
+  }
+
+  const savePerms = async (role: NonAdminRole) => {
+    setPermSaving(role); setPermMsg('')
+    try {
+      await api.put(`/users/role-permissions/${role}`, { permissions: rolePerms[role] })
+      setPermMsg(`✓ ${role} permissions saved`)
+      setTimeout(() => setPermMsg(''), 3000)
+    } catch (err: unknown) {
+      setPermMsg('✗ ' + (err as Error).message)
+    } finally { setPermSaving(null) }
+  }
+
   const roles: User['role'][] = ['admin', 'operator', 'developer', 'viewer']
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Users</h1>
         <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors">
@@ -85,6 +142,7 @@ export default function Users() {
         </button>
       </div>
 
+      {/* Users table */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
         <table className="w-full text-xs" style={{ tableLayout: 'auto', borderCollapse: 'collapse', minWidth: 620 }}>
           <colgroup>
@@ -151,6 +209,70 @@ export default function Users() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Role Permissions Panel */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <div className="bg-gray-800/50 px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+          <div>
+            <div className="text-sm font-semibold text-white">Role Permissions</div>
+            <div className="text-xs text-gray-500 mt-0.5">Customize which actions each role can perform. Admin always has full access.</div>
+          </div>
+          {permMsg && <span className={`text-xs font-medium ${permMsg.startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}>{permMsg}</span>}
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" style={{ borderCollapse: 'collapse', minWidth: 600 }}>
+            <thead>
+              <tr className="border-b border-gray-800">
+                <th className="px-4 py-3 text-left text-gray-500 font-medium uppercase tracking-wide" style={{ width: '38%' }}>Permission</th>
+                {ROLES.map((role) => (
+                  <th key={role} className="px-4 py-3 text-center" style={{ width: '20%' }}>
+                    <span className={`font-semibold uppercase tracking-wide ${ROLE_COLORS[role]}`}>{role}</span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {PERMISSION_GROUPS.map((group) => {
+                const permsInGroup = ALL_PERMISSIONS.filter((p) => PERMISSION_LABELS[p].group === group)
+                return [
+                  <tr key={`group-${group}`} className="bg-gray-800/30">
+                    <td colSpan={4} className="px-4 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">{group}</td>
+                  </tr>,
+                  ...permsInGroup.map((perm) => (
+                    <tr key={perm} className="border-b border-gray-800/50 hover:bg-gray-800/20">
+                      <td className="px-4 py-2.5">
+                        <div className="text-gray-200 font-medium">{PERMISSION_LABELS[perm].label}</div>
+                        <div className="text-gray-500 text-xs mt-0.5">{PERMISSION_LABELS[perm].desc}</div>
+                      </td>
+                      {ROLES.map((role) => (
+                        <td key={role} className="px-4 py-2.5 text-center">
+                          <input
+                            type="checkbox"
+                            checked={rolePerms[role].includes(perm)}
+                            onChange={() => togglePerm(role, perm)}
+                            className="w-4 h-4 rounded border-gray-600 bg-gray-800 accent-indigo-500 cursor-pointer"
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  )),
+                ]
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="px-4 py-3 border-t border-gray-800 flex items-center gap-3">
+          {ROLES.map((role) => (
+            <button key={role} onClick={() => savePerms(role)}
+              disabled={permSaving !== null}
+              className="px-4 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-50">
+              {permSaving === role ? 'Saving…' : `Save ${role}`}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Create User Modal */}

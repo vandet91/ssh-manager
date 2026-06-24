@@ -2,8 +2,17 @@ import { FastifyInstance } from 'fastify'
 
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requirePermission, invalidatePermCache } from '../../middleware/auth'
 import { writeAuditLog } from '../../utils/audit'
+
+const ALL_PERMISSIONS = [
+  'servers:read', 'servers:write', 'servers:admin',
+  'keys:read', 'keys:write', 'keys:rotate',
+  'assignments:read', 'assignments:write',
+  'terminal:connect',
+  'logs:read',
+  'security:read', 'security:scan',
+] as const
 
 async function usersRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
@@ -98,6 +107,41 @@ async function usersRoutes(fastify: FastifyInstance): Promise<void> {
       .selectAll()
       .where('user_id', '=', id)
       .execute()
+  })
+
+  // GET /users/role-permissions — get all role→permission mappings
+  fastify.get('/users/role-permissions', { preHandler: requirePermission('admin') }, async () => {
+    const rows = await (db as any).selectFrom('role_permissions').select(['role', 'permission']).execute() as { role: string; permission: string }[]
+    const result: Record<string, string[]> = { operator: [], developer: [], viewer: [] }
+    for (const r of rows) {
+      if (result[r.role]) result[r.role].push(r.permission)
+    }
+    return { permissions: result, all_permissions: ALL_PERMISSIONS }
+  })
+
+  // PUT /users/role-permissions/:role — replace all permissions for a role
+  fastify.put('/users/role-permissions/:role', { preHandler: requirePermission('admin') }, async (req, reply) => {
+    const { role } = z.object({ role: z.enum(['operator', 'developer', 'viewer']) }).parse(req.params)
+    const { permissions } = z.object({ permissions: z.array(z.string()) }).parse(req.body)
+
+    const valid = permissions.filter((p) => (ALL_PERMISSIONS as readonly string[]).includes(p))
+
+    await (db as any).deleteFrom('role_permissions').where('role', '=', role).execute()
+    if (valid.length > 0) {
+      await (db as any).insertInto('role_permissions')
+        .values(valid.map((permission) => ({ role, permission })))
+        .execute()
+    }
+
+    invalidatePermCache()
+
+    await writeAuditLog({
+      userId: req.session.user!.id, userEmail: req.session.user!.email,
+      action: 'role_permissions.updated', resource: 'role_permissions', resourceId: role,
+      details: { role, permissions: valid }, request: req,
+    })
+
+    return { role, permissions: valid }
   })
 
   // GET /users/access-review — periodic access review (who has what role, lockout status)
