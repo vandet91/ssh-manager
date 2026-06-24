@@ -3,31 +3,33 @@ import { api, User } from '../api/client'
 import type { Theme } from '../App'
 import Terminal from '../pages/Terminal'
 import RemoteDesktopPage from '../pages/RemoteDesktopPage'
+import { usePermissions } from '../context/PermissionContext'
 
 const PERSISTENT_ROUTES = ['/terminal', '/remote-desktop']
 
-const nav = [
-  { to: '/dashboard',   label: 'Dashboard',  icon: '▣' },
-  { to: '/servers',     label: 'Servers',     icon: '◫' },
-  { to: '/keys',        label: 'Keys',        icon: '⚷' },
-  { to: '/assignments', label: 'Assignments', icon: '⊞' },
-  { to: '/network-devices',  label: 'Network Devices', icon: '🌐' },
-  { to: '/share',           label: 'Share',          icon: '🔗' },
-  { to: '/commands',        label: 'Commands',       icon: '📚' },
-  { to: '/vault',           label: 'Vault',          icon: '🔐' },
-  { to: '/domain',          label: 'Domain',         icon: '🏢' },
-  { to: '/psexec',          label: 'Remote Exec',    icon: '⚡' },
-  { to: '/db-connector',   label: 'DB Connector',   icon: '🗄' },
-  { to: '/diagrams',       label: 'Diagrams',       icon: '📐' },
-  { to: '/firmware-repo', label: 'Firmware & Backup', icon: '💾' },
-  { to: '/network-scan',  label: 'Network Scanner',   icon: '🔍' },
-  { to: '/terminal',        label: 'Terminal',       icon: '⌨' },
-  { to: '/remote-desktop',  label: 'Remote Desktop', icon: '🖥' },
-  { to: '/logs',        label: 'Logs',        icon: '≡' },
-  { to: '/migration',   label: 'Migration',   icon: '⇄' },
-  { to: '/filemanager', label: 'File Manager', icon: '⊟' },
-  { to: '/users',       label: 'Users',       icon: '◉' },
-  { to: '/settings',    label: 'Settings',    icon: '⚙' },
+// requiredPerm: if set, the nav item only shows when user has that permission
+const nav: { to: string; label: string; icon: string; requiredPerm?: string; adminOnly?: boolean }[] = [
+  { to: '/dashboard',       label: 'Dashboard',        icon: '▣' },
+  { to: '/servers',         label: 'Servers',          icon: '◫', requiredPerm: 'servers:read' },
+  { to: '/keys',            label: 'Keys',             icon: '⚷', requiredPerm: 'keys:read' },
+  { to: '/assignments',     label: 'Assignments',      icon: '⊞', requiredPerm: 'assignments:read' },
+  { to: '/network-devices', label: 'Network Devices',  icon: '🌐', requiredPerm: 'servers:read' },
+  { to: '/share',           label: 'Share',            icon: '🔗' },
+  { to: '/commands',        label: 'Commands',         icon: '📚' },
+  { to: '/vault',           label: 'Vault',            icon: '🔐', requiredPerm: 'servers:read' },
+  { to: '/domain',          label: 'Domain',           icon: '🏢', requiredPerm: 'servers:read' },
+  { to: '/psexec',          label: 'Remote Exec',      icon: '⚡', requiredPerm: 'servers:write' },
+  { to: '/db-connector',    label: 'DB Connector',     icon: '🗄', requiredPerm: 'servers:read' },
+  { to: '/diagrams',        label: 'Diagrams',         icon: '📐', requiredPerm: 'servers:read' },
+  { to: '/firmware-repo',   label: 'Firmware & Backup',icon: '💾', requiredPerm: 'servers:read' },
+  { to: '/network-scan',    label: 'Network Scanner',  icon: '🔍', requiredPerm: 'servers:read' },
+  { to: '/terminal',        label: 'Terminal',         icon: '⌨', requiredPerm: 'terminal:connect' },
+  { to: '/remote-desktop',  label: 'Remote Desktop',   icon: '🖥', requiredPerm: 'servers:read' },
+  { to: '/logs',            label: 'Logs',             icon: '≡', requiredPerm: 'logs:read' },
+  { to: '/migration',       label: 'Migration',        icon: '⇄', requiredPerm: 'servers:write' },
+  { to: '/filemanager',     label: 'File Manager',     icon: '⊟', requiredPerm: 'servers:write' },
+  { to: '/users',           label: 'Users',            icon: '◉', adminOnly: true },
+  { to: '/settings',        label: 'Settings',         icon: '⚙', adminOnly: true },
 ]
 
 const ROLE_STYLE: Record<string, React.CSSProperties> = {
@@ -49,6 +51,13 @@ export default function Layout({ user, onLogout, theme, setTheme }: Props) {
   const location = useLocation()
   const isDark = theme === 'github'
   const isPersistent = PERSISTENT_ROUTES.includes(location.pathname)
+  const { can, isAdmin } = usePermissions()
+
+  const visibleNav = nav.filter(({ requiredPerm, adminOnly }) => {
+    if (adminOnly) return isAdmin
+    if (requiredPerm) return can(requiredPerm)
+    return true
+  })
 
   const logout = async () => {
     await api.post('/auth/logout')
@@ -120,7 +129,7 @@ export default function Layout({ user, onLogout, theme, setTheme }: Props) {
 
         {/* Nav */}
         <nav style={{ flex: 1, padding: '8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {nav.map(({ to, label, icon }) => (
+          {visibleNav.map(({ to, label, icon }) => (
             <NavLink
               key={to}
               to={to}

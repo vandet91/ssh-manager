@@ -1,5 +1,9 @@
 const BASE = '/api'
 
+type ForbiddenHandler = (message: string) => void
+let onForbidden: ForbiddenHandler | null = null
+export function setForbiddenHandler(fn: ForbiddenHandler) { onForbidden = fn }
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -9,7 +13,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw Object.assign(new Error(err.error ?? 'Request failed'), { status: res.status, data: err })
+    const message = err.error ?? 'Request failed'
+    if (res.status === 403 && onForbidden) {
+      onForbidden(err.required ? `Access denied — requires permission: ${err.required}` : `Access denied: ${message}`)
+    }
+    throw Object.assign(new Error(message), { status: res.status, data: err })
   }
   if (res.status === 204) return undefined as T
   return res.json()

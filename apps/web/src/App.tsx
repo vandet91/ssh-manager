@@ -1,7 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { api, User } from './api/client'
+import { api, User, setForbiddenHandler } from './api/client'
 import { TotpElevationProvider } from './context/TotpElevationContext'
+import { PermissionProvider } from './context/PermissionContext'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Servers from './pages/Servers'
@@ -32,17 +33,41 @@ export type Theme = 'github' | 'proxmox'
 
 const THEME_KEY = 'ssh-mgr-theme'
 
+// Global 403 toast — shown at bottom of screen
+function ForbiddenToast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 5000)
+    return () => clearTimeout(t)
+  }, [onDismiss])
+  return (
+    <div onClick={onDismiss} style={{
+      position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+      background: '#7f1d1d', border: '1px solid #991b1b', borderRadius: 10,
+      padding: '12px 20px', color: '#fca5a5', fontSize: 13, fontWeight: 500,
+      zIndex: 9999, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
+      boxShadow: '0 4px 24px rgba(0,0,0,0.5)', maxWidth: 480, textAlign: 'center',
+    }}>
+      <span style={{ fontSize: 16 }}>🚫</span>
+      <span>{message}</span>
+    </div>
+  )
+}
+
 function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
+  const [forbiddenMsg, setForbiddenMsg] = useState('')
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem(THEME_KEY)
     if (saved === 'github' || saved === 'proxmox') return saved
-    return 'github'   // default: GitHub dark
+    return 'github'
   })
 
   useEffect(() => {
+    setForbiddenHandler((msg) => setForbiddenMsg(msg))
+  }, [])
+
+  useEffect(() => {
     const root = document.documentElement
-    // github = :root (no attribute), proxmox = data-theme="proxmox"
     if (theme === 'github') {
       root.removeAttribute('data-theme')
     } else {
@@ -65,7 +90,9 @@ function App() {
 
   return (
     <TotpElevationProvider>
+    <PermissionProvider>
     <BrowserRouter>
+      {forbiddenMsg && <ForbiddenToast message={forbiddenMsg} onDismiss={() => setForbiddenMsg('')} />}
       <Routes>
         <Route path="/share-center" element={<ShareCenter />} />
         <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login onLogin={setUser} />} />
@@ -102,6 +129,7 @@ function App() {
         )}
       </Routes>
     </BrowserRouter>
+    </PermissionProvider>
     </TotpElevationProvider>
   )
 }

@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { db } from '../../db/client'
 import { encryptSecret, decryptSecret, getVaultKey } from '../../utils/vault'
 import { writeAuditLog } from '../../utils/audit'
-import { requireAuth, requirePermission } from '../../middleware/auth'
+import { requireAuth, requirePermission, getPermissions } from '../../middleware/auth'
 import { elevateSession } from '../../utils/totp-guard'
 import { config } from '../../config'
 import { getPasswordPolicy, validatePassword } from '../settings/settings.routes'
@@ -192,6 +192,15 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/auth/me', async (req, reply) => {
     if (!req.session.user) return reply.code(401).send({ error: 'Unauthorized' })
     return req.session.user
+  })
+
+  // GET /auth/me/permissions — returns the current user's permission set
+  fastify.get('/auth/me/permissions', async (req, reply) => {
+    if (!req.session.user) return reply.code(401).send({ error: 'Unauthorized' })
+    const role = req.session.user.role
+    if (role === 'admin') return { role, permissions: ['*'] }
+    const perms = await getPermissions(role)
+    return { role, permissions: Array.from(perms) }
   })
 
   // POST /auth/logout

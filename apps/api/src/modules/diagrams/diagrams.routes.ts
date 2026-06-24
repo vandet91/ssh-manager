@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../../db/client'
-import { requireAuth } from '../../middleware/auth'
+import { requireAuth, requirePermission } from '../../middleware/auth'
 
 const DiagramBody = z.object({
   name: z.string().min(1).max(256),
@@ -15,7 +15,7 @@ export default async function diagramRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', requireAuth)
 
   // GET /diagrams — list all diagrams
-  fastify.get('/diagrams', async (req) => {
+  fastify.get('/diagrams', { preHandler: requirePermission('servers:read') }, async (req) => {
     const rows = await db
       .selectFrom('network_diagrams')
       .leftJoin('users', 'users.id', 'network_diagrams.created_by')
@@ -34,7 +34,7 @@ export default async function diagramRoutes(fastify: FastifyInstance) {
   })
 
   // POST /diagrams — create new diagram
-  fastify.post('/diagrams', async (req, reply) => {
+  fastify.post('/diagrams', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
     const body = DiagramBody.parse(req.body)
     const userId = req.session.user!.id
     const row = await db
@@ -46,7 +46,7 @@ export default async function diagramRoutes(fastify: FastifyInstance) {
   })
 
   // GET /diagrams/:id — load single diagram
-  fastify.get('/diagrams/:id', async (req, reply) => {
+  fastify.get('/diagrams/:id', { preHandler: requirePermission('servers:read') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const row = await db
       .selectFrom('network_diagrams')
@@ -68,7 +68,7 @@ export default async function diagramRoutes(fastify: FastifyInstance) {
   })
 
   // PATCH /diagrams/:id — save/update
-  fastify.patch('/diagrams/:id', async (req, reply) => {
+  fastify.patch('/diagrams/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = DiagramBody.partial().parse(req.body)
     const updates: Record<string, unknown> = { updated_at: new Date() }
@@ -85,7 +85,7 @@ export default async function diagramRoutes(fastify: FastifyInstance) {
   })
 
   // DELETE /diagrams/:id
-  fastify.delete('/diagrams/:id', async (req, reply) => {
+  fastify.delete('/diagrams/:id', { preHandler: requirePermission('servers:write') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const row = await db
       .deleteFrom('network_diagrams')

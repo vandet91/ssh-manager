@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, User } from '../api/client'
 import Modal from '../components/Modal'
 import Badge from '../components/Badge'
+import { usePermissions } from '../context/PermissionContext'
 
 const PERMISSION_LABELS: Record<string, { label: string; desc: string; group: string }> = {
   'servers:read':      { label: 'View Servers',        desc: 'List servers, view info & credentials', group: 'Servers' },
@@ -32,6 +33,7 @@ const ROLE_COLORS: Record<NonAdminRole, string> = {
 }
 
 export default function Users() {
+  const { isAdmin } = usePermissions()
   const [users, setUsers] = useState<User[]>([])
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [editUser, setEditUser] = useState<User | null>(null)
@@ -137,9 +139,11 @@ export default function Users() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Users</h1>
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors">
-          + Add User
-        </button>
+        {isAdmin && (
+          <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors">
+            + Add User
+          </button>
+        )}
       </div>
 
       {/* Users table */}
@@ -181,25 +185,29 @@ export default function Users() {
                   {u.last_login_at ? new Date(u.last_login_at).toLocaleString() : '—'}
                 </td>
                 <td className="px-3 py-2">
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', alignItems: 'center' }}>
-                    <button onClick={() => openEdit(u)} disabled={isSelf}
-                      title={isSelf ? 'You cannot change your own role' : undefined}
-                      className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      style={{ whiteSpace: 'nowrap' }}>
-                      Edit Role
-                    </button>
-                    <button onClick={() => { setShowPwd(u); setNewPwd(''); setPwdError('') }}
-                      className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors"
-                      style={{ whiteSpace: 'nowrap' }}>
-                      Reset Pwd
-                    </button>
-                    <button onClick={() => toggleActive(u)} disabled={isSelf}
-                      title={isSelf ? 'You cannot deactivate your own account' : undefined}
-                      className={`px-2 py-1 text-xs rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${u.is_active ? 'bg-red-700 hover:bg-red-600 text-white' : 'bg-green-700 hover:bg-green-600 text-white'}`}
-                      style={{ whiteSpace: 'nowrap' }}>
-                      {u.is_active ? 'Deactivate' : 'Reactivate'}
-                    </button>
-                  </div>
+                  {isAdmin ? (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', alignItems: 'center' }}>
+                      <button onClick={() => openEdit(u)} disabled={isSelf}
+                        title={isSelf ? 'You cannot change your own role' : undefined}
+                        className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        style={{ whiteSpace: 'nowrap' }}>
+                        Edit Role
+                      </button>
+                      <button onClick={() => { setShowPwd(u); setNewPwd(''); setPwdError('') }}
+                        className="px-2 py-1 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white transition-colors"
+                        style={{ whiteSpace: 'nowrap' }}>
+                        Reset Pwd
+                      </button>
+                      <button onClick={() => toggleActive(u)} disabled={isSelf}
+                        title={isSelf ? 'You cannot deactivate your own account' : undefined}
+                        className={`px-2 py-1 text-xs rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${u.is_active ? 'bg-red-700 hover:bg-red-600 text-white' : 'bg-green-700 hover:bg-green-600 text-white'}`}
+                        style={{ whiteSpace: 'nowrap' }}>
+                        {u.is_active ? 'Deactivate' : 'Reactivate'}
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-gray-600 text-xs">—</span>
+                  )}
                 </td>
               </tr>
               )
@@ -211,7 +219,8 @@ export default function Users() {
         </table>
       </div>
 
-      {/* Role Permissions Panel */}
+      {/* Role Permissions Panel — admin only */}
+      {isAdmin && <>
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <div className="bg-gray-800/50 px-4 py-3 border-b border-gray-800 flex items-center justify-between">
           <div>
@@ -275,8 +284,10 @@ export default function Users() {
         </div>
       </div>
 
-      {/* Create User Modal */}
-      {showCreate && (
+      </>}
+
+      {/* Create User Modal — admin only */}
+      {isAdmin && showCreate && (
         <Modal title="Add User" onClose={() => setShowCreate(false)}>
           <form onSubmit={create} className="space-y-3">
             {createError && <p className="text-red-400 text-sm">{createError}</p>}
@@ -311,8 +322,8 @@ export default function Users() {
         </Modal>
       )}
 
-      {/* Edit Role Modal */}
-      {editUser && (
+      {/* Edit Role Modal — admin only */}
+      {isAdmin && editUser && (
         <Modal title={`Edit User — ${editUser.email}`} onClose={() => setEditUser(null)}>
           <form onSubmit={saveEdit} className="space-y-3">
             {editError && <p className="text-red-400 text-sm">{editError}</p>}
@@ -335,8 +346,8 @@ export default function Users() {
         </Modal>
       )}
 
-      {/* Reset Password Modal */}
-      {showPwd && (
+      {/* Reset Password Modal — admin only */}
+      {isAdmin && showPwd && (
         <Modal title={`Reset Password — ${showPwd.email}`} onClose={() => setShowPwd(null)}>
           <form onSubmit={resetPwd} className="space-y-3">
             {pwdError && <p className="text-red-400 text-sm">{pwdError}</p>}

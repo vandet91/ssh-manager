@@ -47,7 +47,7 @@ const DEFAULT_PERMISSIONS: Record<string, string[]> = {
   viewer: ['servers:read', 'keys:read', 'logs:read'],
 }
 
-async function getPermissions(role: string): Promise<Set<string>> {
+export async function getPermissions(role: string): Promise<Set<string>> {
   if (role === 'admin') return new Set(['*'])
 
   const now = Date.now()
