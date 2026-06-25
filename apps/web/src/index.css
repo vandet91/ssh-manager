@@ -80,7 +80,7 @@
 }
 
 /* ── Proxmox Light ───────────────────────────────────────────────────────── */
-[data-theme="proxmox"] {
+[data-theme="proxmox-light"] {
   /* Backgrounds (lighter) → borders → text (darker) */
   --g950: 240 240 240;   /* #f0f0f0  body / canvas              */
   --g900: 248 248 248;   /* #f8f8f8  panel bg (near white)      */
@@ -187,24 +187,24 @@
   option { background: var(--bg-elevated); color: var(--input-text); }
 
   /* ── Proxmox: flip hardcoded "text-white/gray-*" to dark text ──────────── */
-  [data-theme="proxmox"] .text-white,
-  [data-theme="proxmox"] .text-gray-50  { color: var(--text-heading)   !important; }
-  [data-theme="proxmox"] .text-gray-100 { color: var(--text-primary)   !important; }
-  [data-theme="proxmox"] .text-gray-200,
-  [data-theme="proxmox"] .text-gray-300 { color: var(--text-secondary) !important; }
+  [data-theme="proxmox-light"] .text-white,
+  [data-theme="proxmox-light"] .text-gray-50  { color: var(--text-heading)   !important; }
+  [data-theme="proxmox-light"] .text-gray-100 { color: var(--text-primary)   !important; }
+  [data-theme="proxmox-light"] .text-gray-200,
+  [data-theme="proxmox-light"] .text-gray-300 { color: var(--text-secondary) !important; }
 
   /* ── Proxmox: gray panel surfaces ──────────────────────────────────────── */
-  [data-theme="proxmox"] .bg-gray-800 {
+  [data-theme="proxmox-light"] .bg-gray-800 {
     background-color: var(--bg-panel-alt) !important;
     border: 1px solid var(--border-weak);
   }
-  [data-theme="proxmox"] .bg-gray-900 { background-color: var(--bg-panel) !important; }
+  [data-theme="proxmox-light"] .bg-gray-900 { background-color: var(--bg-panel) !important; }
 
   /* ── Proxmox: borders & dividers ───────────────────────────────────────── */
-  [data-theme="proxmox"] .divide-gray-800 > * + *,
-  [data-theme="proxmox"] .divide-gray-700 > * + * { border-color: var(--border-med) !important; }
-  [data-theme="proxmox"] .border-gray-700,
-  [data-theme="proxmox"] .border-gray-800 { border-color: var(--border-med) !important; }
+  [data-theme="proxmox-light"] .divide-gray-800 > * + *,
+  [data-theme="proxmox-light"] .divide-gray-700 > * + * { border-color: var(--border-med) !important; }
+  [data-theme="proxmox-light"] .border-gray-700,
+  [data-theme="proxmox-light"] .border-gray-800 { border-color: var(--border-med) !important; }
 
   /* ══════════════════════════════════════════════════════════════════════════
      BUTTON VISIBILITY
@@ -237,14 +237,14 @@
   }
 
   /* Proxmox: all button text must be readable (no white-on-light) */
-  [data-theme="proxmox"] button { color: var(--text-primary); }
-  [data-theme="proxmox"] button.text-white,
-  [data-theme="proxmox"] button.text-gray-300,
-  [data-theme="proxmox"] button.text-gray-400 { color: var(--text-primary) !important; }
-  [data-theme="proxmox"] button.bg-indigo-600,
-  [data-theme="proxmox"] button.bg-indigo-500 { color: var(--btn-accent-text) !important; }
-  [data-theme="proxmox"] button.bg-gray-700,
-  [data-theme="proxmox"] button.bg-gray-800 {
+  [data-theme=proxmox-light] button, [data-theme=proxmox-dark] button { color: var(--text-primary); }
+  [data-theme="proxmox-light"] button.text-white,
+  [data-theme="proxmox-light"] button.text-gray-300,
+  [data-theme="proxmox-light"] button.text-gray-400 { color: var(--text-primary) !important; }
+  [data-theme="proxmox-light"] button.bg-indigo-600,
+  [data-theme="proxmox-light"] button.bg-indigo-500 { color: var(--btn-accent-text) !important; }
+  [data-theme="proxmox-light"] button.bg-gray-700,
+  [data-theme="proxmox-light"] button.bg-gray-800 {
     background-color: var(--bg-panel-alt) !important;
     border: 1px solid var(--border-strong) !important;
     color: var(--text-primary) !important;
@@ -334,7 +334,7 @@
   .cyber-table tbody tr:hover td { background: rgba(var(--accent) / 0.05); }
 
   /* Proxmox only: no scanlines */
-  [data-theme="proxmox"] .scanlines::after { display: none; }
+  [data-theme="proxmox-light"] .scanlines::after, [data-theme="modern-light"] .scanlines::after { display: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

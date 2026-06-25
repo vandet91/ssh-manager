@@ -31,9 +31,12 @@ import Diagrams from './pages/Diagrams'
 import FirmwareRepo from './pages/FirmwareRepo'
 import NetworkScan from './pages/NetworkScan'
 
-export type Theme = 'github' | 'proxmox'
+export type ThemeName = 'modern' | 'proxmox'
+export type ThemeMode = 'dark' | 'light'
+export type Theme = `${ThemeName}-${ThemeMode}`
 
 const THEME_KEY = 'ssh-mgr-theme'
+const MODE_KEY  = 'ssh-mgr-mode'
 
 function ForbiddenToast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   useEffect(() => {
@@ -55,9 +58,10 @@ function ForbiddenToast({ message, onDismiss }: { message: string; onDismiss: ()
 }
 
 // Inner component so useNavigate works inside BrowserRouter
-function AppRoutes({ user, setUser, theme, setTheme, forbiddenMsg, setForbiddenMsg }: {
+function AppRoutes({ user, setUser, themeName, setThemeName, themeMode, setThemeMode, forbiddenMsg, setForbiddenMsg }: {
   user: User | null; setUser: (u: User | null) => void
-  theme: Theme; setTheme: (t: Theme) => void
+  themeName: ThemeName; setThemeName: (t: ThemeName) => void
+  themeMode: ThemeMode; setThemeMode: (m: ThemeMode) => void
   forbiddenMsg: string; setForbiddenMsg: (m: string) => void
 }) {
   const nav = useNavigate()
@@ -93,7 +97,7 @@ function AppRoutes({ user, setUser, theme, setTheme, forbiddenMsg, setForbiddenM
         <Route path="/login" element={<Navigate to="/dashboard" replace />} />
         <Route path="/mfa-setup" element={<MfaSetup onDone={reloadUser} />} />
         <Route path="/psexec-shell" element={<PsExecShellPopup />} />
-        <Route element={<Layout user={user} onLogout={() => setUser(null)} theme={theme} setTheme={setTheme} />}>
+        <Route element={<Layout user={user} onLogout={() => setUser(null)} themeName={themeName} setThemeName={setThemeName} themeMode={themeMode} setThemeMode={setThemeMode} />}>
           <Route path="/dashboard"      element={<Dashboard />} />
           <Route path="/servers"        element={<Servers />} />
           <Route path="/keys"           element={<Keys />} />
@@ -126,18 +130,25 @@ function AppRoutes({ user, setUser, theme, setTheme, forbiddenMsg, setForbiddenM
 function App() {
   const [user, setUser]           = useState<User | null | undefined>(undefined)
   const [forbiddenMsg, setForbiddenMsg] = useState('')
-  const [theme, setTheme] = useState<Theme>(() => {
+  const [themeName, setThemeName] = useState<ThemeName>(() => {
     const saved = localStorage.getItem(THEME_KEY)
-    if (saved === 'github' || saved === 'proxmox') return saved
-    return 'github'
+    if (saved === 'proxmox') return 'proxmox'
+    return 'modern'
+  })
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem(MODE_KEY)
+    if (saved === 'light') return 'light'
+    return 'dark'
   })
 
   useEffect(() => {
     const root = document.documentElement
-    if (theme === 'github') root.removeAttribute('data-theme')
-    else root.setAttribute('data-theme', theme)
-    localStorage.setItem(THEME_KEY, theme)
-  }, [theme])
+    const combined: Theme = `${themeName}-${themeMode}`
+    if (combined === 'modern-dark') root.removeAttribute('data-theme')
+    else root.setAttribute('data-theme', combined)
+    localStorage.setItem(THEME_KEY, themeName)
+    localStorage.setItem(MODE_KEY, themeMode)
+  }, [themeName, themeMode])
 
   useEffect(() => {
     api.get<User>('/auth/me')
@@ -159,7 +170,8 @@ function App() {
     <BrowserRouter>
       <AppRoutes
         user={user ?? null} setUser={setUser}
-        theme={theme} setTheme={setTheme}
+        themeName={themeName} setThemeName={setThemeName}
+        themeMode={themeMode} setThemeMode={setThemeMode}
         forbiddenMsg={forbiddenMsg} setForbiddenMsg={setForbiddenMsg}
       />
     </BrowserRouter>

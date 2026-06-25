@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { api, User } from '../api/client'
 import { setPermissionRole } from '../context/PermissionContext'
-import type { Theme } from '../App'
+import type { ThemeName, ThemeMode } from '../App'
 import Terminal from '../pages/Terminal'
 import RemoteDesktopPage from '../pages/RemoteDesktopPage'
 
@@ -36,14 +36,16 @@ const nav: { to: string; label: string; icon: string; adminOnly?: boolean }[] = 
 interface Props {
   user: User
   onLogout: () => void
-  theme: Theme
-  setTheme: (t: Theme) => void
+  themeName: ThemeName
+  setThemeName: (t: ThemeName) => void
+  themeMode: ThemeMode
+  setThemeMode: (m: ThemeMode) => void
 }
 
-export default function Layout({ user, onLogout, theme, setTheme }: Props) {
+export default function Layout({ user, onLogout, themeName, setThemeName, themeMode, setThemeMode }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
-  const isDark = theme === 'github'
+  const isDark = themeMode === 'dark'
   const isPersistent = PERSISTENT_ROUTES.includes(location.pathname)
   const isAdmin = true
 
@@ -74,13 +76,10 @@ export default function Layout({ user, onLogout, theme, setTheme }: Props) {
 
         {/* Brand */}
         <div style={{
-          padding: '16px 20px',
+          padding: '16px 20px 12px',
           borderBottom: '1px solid var(--sidebar-border)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             <div style={{
               width: 28, height: 28, borderRadius: 6,
               background: 'var(--accent-hex)',
@@ -98,28 +97,59 @@ export default function Layout({ user, onLogout, theme, setTheme }: Props) {
             </div>
           </div>
 
-          {/* Dark / Light toggle */}
-          <button
-            onClick={() => setTheme(isDark ? 'proxmox' : 'github')}
-            title={isDark ? 'Switch to Proxmox Light' : 'Switch to GitHub Dark'}
-            style={{
-              width: 28, height: 28, borderRadius: 6, flexShrink: 0,
-              background: 'rgba(255,255,255,0.08)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              color: 'var(--sidebar-text)',
-              cursor: 'pointer', fontSize: 14,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'background 0.15s',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.15)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
-          >
-            {isDark ? '☀' : '◑'}
-          </button>
+          {/* Theme picker */}
+          <div style={{ display: 'flex', gap: 6 }}>
+            {/* Modern / Proxmox toggle */}
+            <div style={{
+              display: 'flex', flex: 1,
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: 6,
+              border: '1px solid rgba(255,255,255,0.08)',
+              overflow: 'hidden',
+            }}>
+              {(['modern', 'proxmox'] as ThemeName[]).map(name => (
+                <button
+                  key={name}
+                  onClick={() => setThemeName(name)}
+                  style={{
+                    flex: 1, padding: '4px 0',
+                    fontSize: 11, fontWeight: 500,
+                    border: 'none', cursor: 'pointer',
+                    borderRadius: 5,
+                    background: themeName === name ? 'var(--accent-hex)' : 'transparent',
+                    color: themeName === name ? '#fff' : 'var(--sidebar-text)',
+                    transition: 'background 0.15s, color 0.15s',
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+
+            {/* Dark / Light toggle */}
+            <button
+              onClick={() => setThemeMode(isDark ? 'light' : 'dark')}
+              title={isDark ? 'Switch to Light mode' : 'Switch to Dark mode'}
+              style={{
+                width: 30, height: 30, borderRadius: 6, flexShrink: 0,
+                background: 'rgba(0,0,0,0.25)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                color: 'var(--sidebar-text)',
+                cursor: 'pointer', fontSize: 14,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.12)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'rgba(0,0,0,0.25)')}
+            >
+              {isDark ? '☀' : '🌙'}
+            </button>
+          </div>
         </div>
 
         {/* Nav */}
-        <nav style={{ flex: 1, padding: '8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <nav style={{ flex: 1, padding: '8px', display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto' }}>
           {visibleNav.map(({ to, label, icon }) => (
             <NavLink
               key={to}
