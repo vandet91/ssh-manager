@@ -56,10 +56,66 @@ async function securityRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /security/findings/:serverId
   fastify.get('/security/findings/:serverId', { preHandler: requireAdmin }, async (req) => {
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
-    return db.selectFrom('security_scans').selectAll()
+    const [findings, suppressions] = await Promise.all([
+      db.selectFrom('security_scans').selectAll()
+        .where('server_id', '=', serverId)
+        .orderBy('scanned_at', 'desc')
+        .execute(),
+      db.selectFrom('security_suppressions')
+        .select(['check_id', 'reason', 'suppressed_at'])
+        .where('server_id', '=', serverId)
+        .execute(),
+    ])
+    const suppressedMap = Object.fromEntries(suppressions.map(s => [s.check_id, s]))
+    return findings.map(f => ({
+      ...f,
+      suppressed: !!suppressedMap[f.check_id],
+      suppression_reason: suppressedMap[f.check_id]?.reason ?? null,
+    }))
+  })
+
+  // GET /security/suppressions/:serverId
+  fastify.get('/security/suppressions/:serverId', { preHandler: requireAdmin }, async (req) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+    return db.selectFrom('security_suppressions').selectAll()
       .where('server_id', '=', serverId)
-      .orderBy('scanned_at', 'desc')
       .execute()
+  })
+
+  // POST /security/suppressions
+  fastify.post('/security/suppressions', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = z.object({
+      server_id: z.string().uuid(),
+      check_id:  z.string().min(1),
+      reason:    z.string().max(500).default(''),
+    }).parse(req.body)
+    const userId = req.session.user!.id
+    await db.insertInto('security_suppressions').values({
+      server_id:     body.server_id,
+      check_id:      body.check_id,
+      reason:        body.reason,
+      suppressed_by: userId,
+    })
+    .onConflict(oc => oc.columns(['server_id', 'check_id']).doUpdateSet({
+      reason:        body.reason,
+      suppressed_by: userId,
+      suppressed_at: new Date(),
+    }))
+    .execute()
+    return reply.code(201).send({ ok: true })
+  })
+
+  // DELETE /security/suppressions/:serverId/:checkId
+  fastify.delete('/security/suppressions/:serverId/:checkId', { preHandler: requireAdmin }, async (req, reply) => {
+    const { serverId, checkId } = z.object({
+      serverId: z.string().uuid(),
+      checkId:  z.string().min(1),
+    }).parse(req.params)
+    await db.deleteFrom('security_suppressions')
+      .where('server_id', '=', serverId)
+      .where('check_id',  '=', checkId)
+      .execute()
+    return reply.code(200).send({ ok: true })
   })
 }
 

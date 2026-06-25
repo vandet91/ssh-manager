@@ -2,6 +2,158 @@ import { useEffect, useState } from 'react'
 import { api, Server, SecurityScan } from '../api/client'
 import Badge from '../components/Badge'
 
+// ── Port reference ─────────────────────────────────────────────────────────────
+
+type PortEntry = { port: string; proto: string; service: string; role: string; risk: 'safe' | 'db' | 'cluster' | 'infra' | 'review' }
+
+const PORT_REF: PortEntry[] = [
+  // Always safe
+  { port: '22',    proto: 'TCP', service: 'SSH',                    role: 'Remote management',           risk: 'safe'    },
+  { port: '80',    proto: 'TCP', service: 'HTTP',                   role: 'Web server',                  risk: 'safe'    },
+  { port: '443',   proto: 'TCP', service: 'HTTPS',                  role: 'Web server (TLS)',             risk: 'safe'    },
+  { port: '8080',  proto: 'TCP', service: 'HTTP alt',               role: 'App / proxy',                 risk: 'safe'    },
+  { port: '8443',  proto: 'TCP', service: 'HTTPS alt',              role: 'App / proxy (TLS)',            risk: 'safe'    },
+  // Databases
+  { port: '3306',  proto: 'TCP', service: 'MySQL',                  role: 'MySQL / MariaDB server',       risk: 'db'      },
+  { port: '33060', proto: 'TCP', service: 'MySQL X Protocol',       role: 'MySQL 8+ X DevAPI',            risk: 'db'      },
+  { port: '5432',  proto: 'TCP', service: 'PostgreSQL',             role: 'PostgreSQL server',            risk: 'db'      },
+  { port: '1433',  proto: 'TCP', service: 'MSSQL',                  role: 'SQL Server',                   risk: 'db'      },
+  { port: '1521',  proto: 'TCP', service: 'Oracle DB',              role: 'Oracle listener',              risk: 'db'      },
+  { port: '27017', proto: 'TCP', service: 'MongoDB',                role: 'MongoDB server',               risk: 'db'      },
+  { port: '27018', proto: 'TCP', service: 'MongoDB shard',          role: 'MongoDB shardsvr',             risk: 'db'      },
+  { port: '27019', proto: 'TCP', service: 'MongoDB config',         role: 'MongoDB configsvr',            risk: 'db'      },
+  { port: '6379',  proto: 'TCP', service: 'Redis',                  role: 'Redis server',                 risk: 'db'      },
+  { port: '6380',  proto: 'TCP', service: 'Redis TLS',              role: 'Redis server (TLS)',            risk: 'db'      },
+  { port: '9042',  proto: 'TCP', service: 'Cassandra CQL',          role: 'Cassandra native client',      risk: 'db'      },
+  { port: '7000',  proto: 'TCP', service: 'Cassandra inter-node',   role: 'Cassandra cluster comms',      risk: 'cluster' },
+  { port: '7001',  proto: 'TCP', service: 'Cassandra TLS',          role: 'Cassandra cluster (TLS)',       risk: 'cluster' },
+  // MySQL NDB Cluster
+  { port: '1186',  proto: 'TCP', service: 'MySQL NDB Mgmt',         role: 'NDB management node',          risk: 'cluster' },
+  { port: '2202',  proto: 'TCP', service: 'MySQL NDB Data',         role: 'NDB data node (ndbd/ndbmtd)',  risk: 'cluster' },
+  { port: '2203',  proto: 'TCP', service: 'MySQL NDB Data alt',     role: 'NDB data node (alt)',          risk: 'cluster' },
+  // Galera (MySQL/MariaDB cluster)
+  { port: '4567',  proto: 'TCP', service: 'Galera replication',     role: 'Galera cluster sync',          risk: 'cluster' },
+  { port: '4568',  proto: 'TCP', service: 'Galera IST',             role: 'Galera incremental state',     risk: 'cluster' },
+  { port: '4444',  proto: 'TCP', service: 'Galera SST',             role: 'Galera full state transfer',   risk: 'cluster' },
+  // PostgreSQL replication
+  { port: '5433',  proto: 'TCP', service: 'PgBouncer',              role: 'PostgreSQL connection pool',   risk: 'cluster' },
+  { port: '5434',  proto: 'TCP', service: 'Patroni REST',           role: 'Patroni HA API',               risk: 'cluster' },
+  { port: '2379',  proto: 'TCP', service: 'etcd client',            role: 'Patroni / K8s coordination',   risk: 'cluster' },
+  { port: '2380',  proto: 'TCP', service: 'etcd peer',              role: 'etcd cluster peer comms',      risk: 'cluster' },
+  // Infrastructure
+  { port: '53',    proto: 'TCP/UDP', service: 'DNS',                role: 'DNS server',                   risk: 'infra'   },
+  { port: '123',   proto: 'UDP', service: 'NTP',                    role: 'Time sync server',             risk: 'infra'   },
+  { port: '161',   proto: 'UDP', service: 'SNMP',                   role: 'Network monitoring',           risk: 'infra'   },
+  { port: '514',   proto: 'UDP', service: 'Syslog',                 role: 'Log collector',                risk: 'infra'   },
+  { port: '9100',  proto: 'TCP', service: 'Prometheus node exporter', role: 'Metrics scraping',           risk: 'infra'   },
+  { port: '9090',  proto: 'TCP', service: 'Prometheus',             role: 'Prometheus server',            risk: 'infra'   },
+  { port: '3000',  proto: 'TCP', service: 'Grafana',                role: 'Dashboard UI',                 risk: 'infra'   },
+  // Review these
+  { port: '21',    proto: 'TCP', service: 'FTP',                    role: 'File transfer (insecure)',      risk: 'review'  },
+  { port: '23',    proto: 'TCP', service: 'Telnet',                 role: 'Remote shell (insecure)',       risk: 'review'  },
+  { port: '25',    proto: 'TCP', service: 'SMTP',                   role: 'Mail relay',                   risk: 'review'  },
+  { port: '111',   proto: 'TCP', service: 'rpcbind / portmapper',   role: 'NFS prerequisite',             risk: 'review'  },
+  { port: '2049',  proto: 'TCP', service: 'NFS',                    role: 'Network file system',          risk: 'review'  },
+  { port: '631',   proto: 'TCP', service: 'CUPS',                   role: 'Print server (localhost OK)',   risk: 'review'  },
+]
+
+const RISK_COLOR: Record<PortEntry['risk'], string> = {
+  safe:    '#22c55e',
+  db:      '#3b82f6',
+  cluster: '#8b5cf6',
+  infra:   '#06b6d4',
+  review:  '#ef4444',
+}
+const RISK_LABEL: Record<PortEntry['risk'], string> = {
+  safe:    'Safe',
+  db:      'Database',
+  cluster: 'Cluster',
+  infra:   'Infrastructure',
+  review:  'Review',
+}
+
+function PortReference({ output }: { output: string }) {
+  const [search, setSearch] = useState('')
+  // Extract port numbers from the output string
+  const foundPorts = new Set<string>()
+  const portRe = /(?:0\.0\.0\.0|\*|[\d.]+):(\d+)/g
+  let m: RegExpExecArray | null
+  while ((m = portRe.exec(output)) !== null) foundPorts.add(m[1])
+
+  const filtered = PORT_REF.filter(p =>
+    !search ||
+    p.port.includes(search) ||
+    p.service.toLowerCase().includes(search.toLowerCase()) ||
+    p.role.toLowerCase().includes(search.toLowerCase())
+  )
+
+  return (
+    <div style={{ marginTop: 12, borderTop: '1px solid var(--border-weak)', paddingTop: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
+        <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Port Reference
+        </p>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {(['safe','db','cluster','infra','review'] as PortEntry['risk'][]).map(r => (
+            <span key={r} style={{
+              fontSize: 10, padding: '1px 6px', borderRadius: 4,
+              background: `${RISK_COLOR[r]}18`, color: RISK_COLOR[r],
+              border: `1px solid ${RISK_COLOR[r]}40`,
+            }}>{RISK_LABEL[r]}</span>
+          ))}
+        </div>
+      </div>
+      <input
+        placeholder="Search port, service…"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        style={{
+          width: '100%', boxSizing: 'border-box',
+          padding: '5px 10px', marginBottom: 8, fontSize: 12,
+          background: 'var(--bg-input)', border: '1px solid var(--border-med)',
+          borderRadius: 6, color: 'var(--text-primary)', outline: 'none',
+        }}
+      />
+      <div style={{ maxHeight: 280, overflowY: 'auto', borderRadius: 6, border: '1px solid var(--border-weak)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+          <thead>
+            <tr style={{ background: 'var(--bg-input)', position: 'sticky', top: 0 }}>
+              {['Port','Proto','Service','Role','Type'].map(h => (
+                <th key={h} style={{ padding: '5px 8px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(p => {
+              const isFound = foundPorts.has(p.port)
+              return (
+                <tr key={p.port} style={{
+                  background: isFound ? `${RISK_COLOR[p.risk]}10` : 'transparent',
+                  borderTop: '1px solid var(--border-weak)',
+                }}>
+                  <td style={{ padding: '4px 8px', fontFamily: 'monospace', fontWeight: 700, color: isFound ? RISK_COLOR[p.risk] : 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                    {isFound && <span title="Found on this server" style={{ marginRight: 4 }}>◉</span>}{p.port}
+                  </td>
+                  <td style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>{p.proto}</td>
+                  <td style={{ padding: '4px 8px', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{p.service}</td>
+                  <td style={{ padding: '4px 8px', color: 'var(--text-secondary)' }}>{p.role}</td>
+                  <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
+                    <span style={{
+                      fontSize: 10, padding: '1px 6px', borderRadius: 4,
+                      background: `${RISK_COLOR[p.risk]}18`, color: RISK_COLOR[p.risk],
+                      border: `1px solid ${RISK_COLOR[p.risk]}40`,
+                    }}>{RISK_LABEL[p.risk]}</span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 type Finding = {
   check_id: string
   category: string
@@ -13,12 +165,14 @@ type Finding = {
   expected: string
   remediation: string
   reference: string
+  suppressed?: boolean
+  suppression_reason?: string | null
 }
 
 const CAT_LABEL: Record<string, string> = {
   ssh: 'SSH', password_policy: 'Password Policy', accounts: 'Accounts',
   file_permissions: 'File Permissions', kernel: 'Kernel', audit: 'Audit & Logging',
-  firewall: 'Firewall', updates: 'Updates',
+  firewall: 'Firewall', updates: 'Updates', services: 'Services',
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -29,15 +183,21 @@ const STATUS_ICON: Record<string, string> = {
 }
 
 export default function Security() {
-  const [servers, setServers] = useState<Server[]>([])
-  const [scans, setScans] = useState<Record<string, SecurityScan>>({})
-  const [scanning, setScanning] = useState<string | null>(null)
-  const [scanningAll, setScanningAll] = useState(false)
+  const [servers, setServers]           = useState<Server[]>([])
+  const [scans, setScans]               = useState<Record<string, SecurityScan>>({})
+  const [scanning, setScanning]         = useState<string | null>(null)
+  const [scanningAll, setScanningAll]   = useState(false)
   const [selectedServer, setSelectedServer] = useState<string | null>(null)
-  const [catFilter, setCatFilter] = useState<string>('all')
+  const [catFilter, setCatFilter]       = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<'all' | 'fail' | 'warn' | 'pass'>('all')
   const [expandedCheck, setExpandedCheck] = useState<string | null>(null)
   const [copiedRemediation, setCopiedRemediation] = useState<string | null>(null)
+  const [showSuppressed, setShowSuppressed] = useState(false)
+
+  // Suppress modal state
+  const [suppressTarget, setSuppressTarget] = useState<Finding | null>(null)
+  const [suppressReason, setSuppressReason] = useState('')
+  const [suppressing, setSuppressing]       = useState(false)
 
   const load = async () => {
     const svrs = await api.get<Server[]>('/servers').catch(() => [] as Server[])
@@ -56,9 +216,7 @@ export default function Security() {
 
   const scanServer = async (id: string) => {
     setScanning(id)
-    setCatFilter('all')
-    setStatusFilter('all')
-    setExpandedCheck(null)
+    setCatFilter('all'); setStatusFilter('all'); setExpandedCheck(null)
     try { await api.post(`/security/scan/${id}`) }
     catch { /* ignore */ }
     finally { setScanning(null); load() }
@@ -71,31 +229,59 @@ export default function Security() {
     finally { setScanningAll(false); setTimeout(load, 3000) }
   }
 
+  const handleSuppress = async () => {
+    if (!suppressTarget || !selectedServer) return
+    setSuppressing(true)
+    try {
+      await api.post('/security/suppressions', {
+        server_id: selectedServer,
+        check_id:  suppressTarget.check_id,
+        reason:    suppressReason,
+      })
+      setSuppressTarget(null)
+      setSuppressReason('')
+      load()
+    } catch { /* ignore */ }
+    finally { setSuppressing(false) }
+  }
+
+  const handleUnsuppress = async (checkId: string) => {
+    if (!selectedServer) return
+    try {
+      await api.delete(`/security/suppressions/${selectedServer}/${encodeURIComponent(checkId)}`)
+      load()
+    } catch { /* ignore */ }
+  }
+
   const selectedScan = selectedServer ? scans[selectedServer] : null
-  const findings: Finding[] = selectedScan
+  const allFindings: Finding[] = selectedScan
     ? (selectedScan.findings ?? []) as Finding[]
     : []
 
-  // Summary counts
-  const passCount = findings.filter((f) => f.status === 'pass').length
-  const warnCount = findings.filter((f) => f.status === 'warn').length
-  const failCount = findings.filter((f) => f.status === 'fail').length
-  const skipCount = findings.filter((f) => f.status === 'skip').length
-  const scored = findings.length - skipCount
+  const suppressedCount = allFindings.filter(f => f.suppressed).length
+
+  // Summary counts (excluding suppressed from score)
+  const activeFindings = allFindings.filter(f => !f.suppressed)
+  const passCount = activeFindings.filter((f) => f.status === 'pass').length
+  const warnCount = activeFindings.filter((f) => f.status === 'warn').length
+  const failCount = activeFindings.filter((f) => f.status === 'fail').length
+  const skipCount = activeFindings.filter((f) => f.status === 'skip').length
+  const scored = activeFindings.length - skipCount
   const score = scored > 0 ? Math.round(((passCount + warnCount * 0.5) / scored) * 100) : 0
   const scoreColor = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : '#ef4444'
 
-  // Categories present
+  // Which findings to show based on suppression toggle
+  const findings = showSuppressed ? allFindings : allFindings.filter(f => !f.suppressed)
   const categories = [...new Set(findings.map((f) => f.category))].filter(Boolean)
 
   const filtered = findings.filter((f) => {
-    const catOk = catFilter === 'all' || f.category === catFilter
+    const catOk    = catFilter === 'all' || f.category === catFilter
     const statusOk = statusFilter === 'all' || f.status === statusFilter
     return catOk && statusOk
   })
 
-  // Sort: fail first, then warn, then pass/skip
   const sorted = [...filtered].sort((a, b) => {
+    if (a.suppressed !== b.suppressed) return a.suppressed ? 1 : -1
     const order = { fail: 0, warn: 1, pass: 2, skip: 3 }
     return (order[a.status] ?? 2) - (order[b.status] ?? 2)
   })
@@ -109,6 +295,45 @@ export default function Security() {
           {scanningAll ? 'Scanning all…' : 'Scan All Servers'}
         </button>
       </div>
+
+      {/* Suppress modal */}
+      {suppressTarget && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-med)', borderRadius: 12, padding: 24, maxWidth: 460, width: '100%' }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-heading)', margin: '0 0 6px' }}>Suppress Finding</h3>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 14px' }}>
+              <strong>{suppressTarget.description}</strong><br />
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{suppressTarget.check_id}</span>
+            </p>
+            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Reason (optional)</label>
+            <textarea
+              autoFocus
+              value={suppressReason}
+              onChange={e => setSuppressReason(e.target.value)}
+              placeholder="e.g. DB cluster requires these ports for replication"
+              rows={3}
+              style={{
+                width: '100%', boxSizing: 'border-box', background: 'var(--bg-input)',
+                border: '1px solid var(--border-med)', borderRadius: 6, padding: '8px 10px',
+                color: 'var(--text-primary)', fontSize: 13, resize: 'vertical',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+              <button onClick={() => { setSuppressTarget(null); setSuppressReason('') }} style={{
+                padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border-med)',
+                background: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13,
+              }}>Cancel</button>
+              <button onClick={handleSuppress} disabled={suppressing} style={{
+                padding: '6px 16px', borderRadius: 6, border: 'none',
+                background: '#f59e0b', color: '#000', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                opacity: suppressing ? 0.6 : 1,
+              }}>
+                {suppressing ? 'Suppressing…' : 'Suppress Finding'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" style={{ alignItems: 'start' }}>
         {/* Server list */}
@@ -202,11 +427,11 @@ export default function Security() {
                 }}>
                   <span style={{ fontSize: 16, fontWeight: 700, color: scoreColor }}>{score}</span>
                 </div>
-                <div>
+                <div style={{ flex: 1 }}>
                   <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-heading)', margin: '0 0 4px' }}>
                     {servers.find((s) => s.id === selectedServer)?.name} — Security Score
                   </p>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                     {(['pass', 'warn', 'fail', 'skip'] as const).map((st) => {
                       const count = { pass: passCount, warn: warnCount, fail: failCount, skip: skipCount }[st]
                       return (
@@ -221,7 +446,16 @@ export default function Security() {
                         </span>
                       )
                     })}
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)', alignSelf: 'center' }}>
+                    {suppressedCount > 0 && (
+                      <span style={{
+                        fontSize: 11, fontWeight: 600, color: '#94a3b8',
+                        background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.3)',
+                        borderRadius: 5, padding: '1px 7px',
+                      }}>
+                        ⊘ SUPPRESSED {suppressedCount}
+                      </span>
+                    )}
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                       {new Date(selectedScan.scanned_at).toLocaleString()}
                     </span>
                   </div>
@@ -246,6 +480,18 @@ export default function Security() {
                   ))}
                 </div>
 
+                {/* Show suppressed toggle */}
+                {suppressedCount > 0 && (
+                  <button onClick={() => setShowSuppressed(v => !v)} style={{
+                    padding: '3px 10px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
+                    border: '1px solid rgba(148,163,184,0.3)',
+                    background: showSuppressed ? 'rgba(148,163,184,0.15)' : 'transparent',
+                    color: '#94a3b8',
+                  }}>
+                    {showSuppressed ? '⊘ Hide suppressed' : `⊘ Show suppressed (${suppressedCount})`}
+                  </button>
+                )}
+
                 {/* Category filter */}
                 <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
                   <button onClick={() => setCatFilter('all')} style={{
@@ -255,7 +501,7 @@ export default function Security() {
                     color: catFilter === 'all' ? 'white' : 'var(--text-muted)',
                   }}>All categories</button>
                   {categories.map((cat) => {
-                    const catFindings = findings.filter((f) => f.category === cat)
+                    const catFindings = findings.filter((f) => f.category === cat && !f.suppressed)
                     const hasFail = catFindings.some((f) => f.status === 'fail')
                     const hasWarn = catFindings.some((f) => f.status === 'warn')
                     const dot = hasFail ? '#ef4444' : hasWarn ? '#f59e0b' : '#22c55e'
@@ -280,12 +526,14 @@ export default function Security() {
                 {sorted.map((f) => {
                   const isOpen = expandedCheck === f.check_id
                   const st = f.status ?? (f.passed ? 'pass' : 'fail')
+                  const isSuppressed = !!f.suppressed
                   return (
                     <div key={f.check_id} style={{
                       background: 'var(--bg-card)',
                       border: '1px solid var(--border-med)',
-                      borderLeft: `3px solid ${STATUS_COLOR[st]}`,
+                      borderLeft: `3px solid ${isSuppressed ? '#475569' : STATUS_COLOR[st]}`,
                       borderRadius: 8, overflow: 'hidden',
+                      opacity: isSuppressed ? 0.55 : 1,
                     }}>
                       <button
                         type="button"
@@ -299,20 +547,24 @@ export default function Security() {
                         <span style={{
                           flexShrink: 0, width: 52, textAlign: 'center',
                           fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
-                          background: `${STATUS_COLOR[st]}18`,
-                          color: STATUS_COLOR[st],
-                          border: `1px solid ${STATUS_COLOR[st]}40`,
+                          background: isSuppressed ? 'rgba(71,85,105,0.2)' : `${STATUS_COLOR[st]}18`,
+                          color: isSuppressed ? '#64748b' : STATUS_COLOR[st],
+                          border: `1px solid ${isSuppressed ? '#47556940' : `${STATUS_COLOR[st]}40`}`,
                           borderRadius: 5, padding: '2px 5px',
                         }}>
-                          {STATUS_ICON[st]} {st.toUpperCase()}
+                          {isSuppressed ? '⊘ SKIP' : `${STATUS_ICON[st]} ${st.toUpperCase()}`}
                         </span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', lineHeight: 1.3 }}>{f.description}</p>
                           <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
                             {CAT_LABEL[f.category] ?? f.category}{f.reference ? ` · ${f.reference}` : ''}
+                            {isSuppressed && f.suppression_reason && ` · ${f.suppression_reason}`}
                           </span>
                         </div>
-                        <Badge label={f.severity} variant={f.severity as 'high'} />
+                        {isSuppressed
+                          ? <span style={{ fontSize: 10, color: '#64748b', background: 'rgba(71,85,105,0.2)', border: '1px solid #47556940', borderRadius: 5, padding: '2px 7px', flexShrink: 0 }}>Suppressed</span>
+                          : <Badge label={f.severity} variant={f.severity as 'high'} />
+                        }
                         <span style={{ flexShrink: 0, fontSize: 11, color: 'var(--text-muted)', marginLeft: 4 }}>{isOpen ? '▲' : '▼'}</span>
                       </button>
 
@@ -329,8 +581,8 @@ export default function Security() {
                             </div>
                           </div>
 
-                          {!f.passed && f.remediation && (
-                            <div>
+                          {!f.passed && f.remediation && !isSuppressed && (
+                            <div style={{ marginBottom: 10 }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                                 <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Remediation</p>
                                 <button onClick={() => {
@@ -353,18 +605,45 @@ export default function Security() {
                               }}>{f.remediation}</pre>
                             </div>
                           )}
+
+                          {/* Port reference for open-ports check */}
+                          {f.check_id === 'svc-open-ports' && (
+                            <PortReference output={f.output ?? ''} />
+                          )}
+
+                          {/* Suppress / Unsuppress */}
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                            {isSuppressed ? (
+                              <button onClick={() => handleUnsuppress(f.check_id)} style={{
+                                fontSize: 11, padding: '4px 12px', borderRadius: 6,
+                                border: '1px solid rgba(148,163,184,0.3)',
+                                background: 'transparent', color: '#94a3b8', cursor: 'pointer',
+                              }}>
+                                ↺ Remove Suppression
+                              </button>
+                            ) : (f.status === 'fail' || f.status === 'warn') && (
+                              <button onClick={() => { setSuppressTarget(f); setSuppressReason('') }} style={{
+                                fontSize: 11, padding: '4px 12px', borderRadius: 6, border: 'none',
+                                background: 'rgba(245,158,11,0.15)', color: '#f59e0b',
+                                cursor: 'pointer', fontWeight: 600,
+                              }}>
+                                ⊘ Suppress Finding
+                              </button>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
                   )
                 })}
-                {sorted.length === 0 && findings.length > 0 && (
+                {sorted.length === 0 && allFindings.length > 0 && (
                   <p className="text-gray-500 text-sm text-center py-4">No findings match the current filter.</p>
                 )}
               </div>
 
               <p style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center' }}>
-                CIS Benchmark-inspired controls · {findings.length} checks total
+                CIS Benchmark-inspired controls · {allFindings.length} checks total
+                {suppressedCount > 0 && ` · ${suppressedCount} suppressed`}
               </p>
             </>
           )}

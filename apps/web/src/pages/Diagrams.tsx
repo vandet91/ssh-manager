@@ -243,13 +243,15 @@ function drawEdge(ctx: CanvasRenderingContext2D, e: DiagramEdge, nodes: DiagramN
   ctx.restore()
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number) {
-  // Background fill — matches --bg-body dark theme
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg-body').trim() || '#0d1117'
+interface GridOptions { bg: string; lineColor: string; size: number; show: boolean }
+
+function drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number, opts: GridOptions) {
+  ctx.fillStyle = opts.bg
   ctx.fillRect(0, 0, W, H)
-  ctx.save(); ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1
-  for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke() }
-  for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke() }
+  if (!opts.show || opts.size < 4) return
+  ctx.save(); ctx.strokeStyle = opts.lineColor; ctx.lineWidth = 1
+  for (let x = 0; x < W; x += opts.size) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke() }
+  for (let y = 0; y < H; y += opts.size) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke() }
   ctx.restore()
 }
 
@@ -264,6 +266,28 @@ export default function Diagrams() {
   const [diagramName, setDiagramName] = useState('')
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
+
+  // Block in-app navigation (NavLink uses history.pushState internally)
+  useEffect(() => {
+    if (!dirty) return
+    const original = window.history.pushState.bind(window.history)
+    window.history.pushState = function (state: unknown, title: string, url?: string | URL | null) {
+      if (window.confirm('You have unsaved changes in "' + diagramName + '".\n\nLeave without saving?')) {
+        window.history.pushState = original
+        original(state, title, url)
+      }
+    }
+    return () => { window.history.pushState = original }
+  }, [dirty, diagramName])
+
+  // Block browser tab close / refresh
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty) { e.preventDefault(); e.returnValue = '' }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [dirty])
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -283,6 +307,12 @@ export default function Diagrams() {
   const [rightTab, setRightTab] = useState<'palette' | 'props' | 'servers' | 'legend'>('palette')
   const [paletteSearch, setPaletteSearch] = useState('')
   const [paletteCategory, setPaletteCategory] = useState('All')
+
+  // Canvas appearance
+  const [canvasBg, setCanvasBg]         = useState('#0d1117')
+  const [gridColor, setGridColor]       = useState('#21262d')
+  const [gridSize, setGridSize]         = useState(40)
+  const [showGrid, setShowGrid]         = useState(true)
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
@@ -306,11 +336,11 @@ export default function Diagrams() {
     canvas.width = W; canvas.height = H
     const ctx = canvas.getContext('2d')!
     ctx.clearRect(0, 0, W, H)
-    drawGrid(ctx, W, H)
+    drawGrid(ctx, W, H, { bg: canvasBg, lineColor: gridColor, size: gridSize, show: showGrid })
     nodes.filter(n => ZONE_TYPES.has(n.type) || n.isZone).forEach(n => drawNode(ctx, n, selected?.id === n.id, connectFrom?.id === n.id))
     edges.forEach(e => drawEdge(ctx, e, nodes, selectedEdge?.id === e.id))
     nodes.filter(n => !ZONE_TYPES.has(n.type) && !n.isZone).forEach(n => drawNode(ctx, n, selected?.id === n.id, connectFrom?.id === n.id))
-  }, [nodes, edges, selected, selectedEdge, connectFrom])
+  }, [nodes, edges, selected, selectedEdge, connectFrom, canvasBg, gridColor, gridSize, showGrid])
 
   useEffect(() => { draw() }, [draw])
   useEffect(() => { const h = () => draw(); window.addEventListener('resize', h); return () => window.removeEventListener('resize', h) }, [draw])
@@ -472,8 +502,9 @@ export default function Diagrams() {
   // ── Styles ────────────────────────────────────────────────────────────────
 
   const inp: React.CSSProperties = { width: '100%', background: 'var(--input-bg)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text)', fontSize: 12, padding: '5px 8px' }
-  const btn: React.CSSProperties = { padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-panel)', color: 'var(--text)', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' as const }
-  const btnPri: React.CSSProperties = { padding: '4px 12px', borderRadius: 6, border: '1px solid var(--accent-hex)', background: 'var(--accent-hex)22', color: 'var(--accent-hex)', fontSize: 12, cursor: 'pointer' }
+  const btn: React.CSSProperties = { padding: '5px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--bg-panel-alt)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' as const }
+  const btnPri: React.CSSProperties = { padding: '6px 16px', borderRadius: 6, background: '#4f46e5', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+  const btnDanger: React.CSSProperties = { padding: '2px 8px', borderRadius: 5, background: 'var(--error)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 11 }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -491,7 +522,7 @@ export default function Diagrams() {
           <div style={{ padding: 8, borderBottom: '1px solid var(--border)', display: 'flex', gap: 5 }}>
             <input autoFocus value={newName} onChange={e => setNewName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && newDiagram()} placeholder="Name…" style={{ ...inp, padding: '4px 7px' }} />
-            <button style={btnPri} onClick={newDiagram}>✓</button>
+            <button style={{ ...btnPri, padding: '4px 10px', fontSize: 12 }} onClick={newDiagram}>✓</button>
           </div>
         )}
 
@@ -501,10 +532,16 @@ export default function Diagrams() {
             <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>No diagrams yet.<br />Click + New to start.</div>
           )}
           {diagrams.map(d => (
-            <div key={d.id} onClick={() => openDiagram(d)} style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)', borderLeft: `3px solid ${activeDiagram?.id === d.id ? 'var(--accent-hex)' : 'transparent'}`, background: activeDiagram?.id === d.id ? 'var(--accent-hex)15' : 'transparent' }}>
+            <div key={d.id} onClick={() => openDiagram(d)} style={{
+              padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
+              borderLeft: `3px solid ${activeDiagram?.id === d.id ? 'var(--accent-hex)' : 'transparent'}`,
+              background: activeDiagram?.id === d.id ? 'var(--accent-hex)15' : 'transparent',
+            }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{new Date(d.updated_at).toLocaleDateString()}</div>
-              <button onClick={e => { e.stopPropagation(); deleteDiagram(d.id) }} style={{ marginTop: 3, fontSize: 10, color: '#f85149', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>🗑 Delete</button>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{new Date(d.updated_at).toLocaleDateString()}</div>
+              <div style={{ marginTop: 6 }}>
+                <button onClick={e => { e.stopPropagation(); deleteDiagram(d.id) }} style={btnDanger}>Del</button>
+              </div>
             </div>
           ))}
         </div>
@@ -562,48 +599,83 @@ export default function Diagrams() {
                 ))}
               </div>
 
-              <div style={{ flex: 1, overflowY: 'auto', padding: 10 }}>
+              {/* ── Palette sticky header (search + category filter) ── */}
+              {rightTab === 'palette' && (
+                <div style={{ flexShrink: 0, padding: '8px 10px 6px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)' }}>
+                  <input value={paletteSearch} onChange={e => setPaletteSearch(e.target.value)}
+                    placeholder="Search devices…" style={{ ...inp, marginBottom: 6 }} />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                    {['All', ...CATEGORIES].map(cat => (
+                      <button key={cat} onClick={() => setPaletteCategory(cat)} style={{ padding: '2px 8px', borderRadius: 10, border: '1px solid var(--border)', background: paletteCategory === cat ? 'var(--accent-hex)22' : 'transparent', color: paletteCategory === cat ? 'var(--accent-hex)' : 'var(--text-muted)', fontSize: 10, cursor: 'pointer' }}>{cat}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-                {/* ── Palette tab ── */}
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 10 }}>
+
+                {/* ── Palette tab device grid ── */}
                 {rightTab === 'palette' && (
-                  <>
-                    <input value={paletteSearch} onChange={e => setPaletteSearch(e.target.value)}
-                      placeholder="Search devices…" style={{ ...inp, marginBottom: 8 }} />
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 10 }}>
-                      {['All', ...CATEGORIES].map(cat => (
-                        <button key={cat} onClick={() => setPaletteCategory(cat)} style={{ padding: '2px 8px', borderRadius: 10, border: '1px solid var(--border)', background: paletteCategory === cat ? 'var(--accent-hex)22' : 'transparent', color: paletteCategory === cat ? 'var(--accent-hex)' : 'var(--text-muted)', fontSize: 10, cursor: 'pointer' }}>{cat}</button>
-                      ))}
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
-                      {filteredDevices.map(d => (
-                        <div key={d.type}
-                          draggable
-                          onDragStart={e => { e.dataTransfer.setData('device-type', d.type); e.dataTransfer.setData('server-id', ''); e.dataTransfer.setData('server-name', '') }}
-                          onClick={() => { const cx = (wrapRef.current?.clientWidth || 400) / 2 + (Math.random() - .5) * 200; const cy = (wrapRef.current?.clientHeight || 300) / 2 + (Math.random() - .5) * 100; addNode(d.type, cx, cy) }}
-                          style={{ padding: '7px 6px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--card-bg)', cursor: 'grab', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, transition: 'border-color .15s' }}
-                          onMouseEnter={e => (e.currentTarget.style.borderColor = d.color)}
-                          onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)')}
-                          title={`${d.category} — drag or click to add`}
-                        >
-                          {d.mdiPath ? (
-                            <svg viewBox="0 0 24 24" width={20} height={20} style={{ flexShrink: 0 }}>
-                              <path d={d.mdiPath} fill={d.color} />
-                            </svg>
-                          ) : (
-                            <div style={{ width: 20, height: 20, borderRadius: 3, border: `1.5px dashed ${d.color}` }} />
-                          )}
-                          <span style={{ fontSize: 10, color: 'var(--text)', textAlign: 'center', lineHeight: 1.2 }}>{d.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
+                    {filteredDevices.map(d => (
+                      <div key={d.type}
+                        draggable
+                        onDragStart={e => { e.dataTransfer.setData('device-type', d.type); e.dataTransfer.setData('server-id', ''); e.dataTransfer.setData('server-name', '') }}
+                        onClick={() => { const cx = (wrapRef.current?.clientWidth || 400) / 2 + (Math.random() - .5) * 200; const cy = (wrapRef.current?.clientHeight || 300) / 2 + (Math.random() - .5) * 100; addNode(d.type, cx, cy) }}
+                        style={{ padding: '7px 6px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--card-bg)', cursor: 'grab', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, transition: 'border-color .15s' }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = d.color)}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)')}
+                        title={`${d.category} — drag or click to add`}
+                      >
+                        {d.mdiPath ? (
+                          <svg viewBox="0 0 24 24" width={20} height={20} style={{ flexShrink: 0 }}>
+                            <path d={d.mdiPath} fill={d.color} />
+                          </svg>
+                        ) : (
+                          <div style={{ width: 20, height: 20, borderRadius: 3, border: `1.5px dashed ${d.color}` }} />
+                        )}
+                        <span style={{ fontSize: 10, color: 'var(--text)', textAlign: 'center', lineHeight: 1.2 }}>{d.label}</span>
+                      </div>
+                    ))}
+                  </div>
                 )}
 
                 {/* ── Props tab ── */}
                 {rightTab === 'props' && (
                   <>
-                    {!selected && !selectedEdge && <div style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', marginTop: 24 }}>Click a device to edit</div>}
+                    {/* Canvas settings — always visible at top of props tab */}
+                    <div style={{ marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 14 }}>
+                      <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 10px' }}>Canvas</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)' }}>
+                          Background
+                          <input type="color" value={canvasBg} onChange={e => setCanvasBg(e.target.value)}
+                            style={{ width: 32, height: 24, border: 'none', borderRadius: 4, cursor: 'pointer', padding: 0 }} />
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            Grid
+                            <input type="checkbox" checked={showGrid} onChange={e => setShowGrid(e.target.checked)} style={{ cursor: 'pointer' }} />
+                          </span>
+                          <input type="color" value={gridColor} onChange={e => setGridColor(e.target.value)}
+                            style={{ width: 32, height: 24, border: 'none', borderRadius: 4, cursor: 'pointer', padding: 0 }} />
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                          Grid size
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <input type="range" min={10} max={120} step={5} value={gridSize} onChange={e => setGridSize(Number(e.target.value))}
+                              style={{ width: 80, cursor: 'pointer' }} />
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 28, textAlign: 'right' }}>{gridSize}px</span>
+                          </div>
+                        </label>
+                        <button onClick={() => { setCanvasBg('#0d1117'); setGridColor('#21262d'); setGridSize(40); setShowGrid(true) }}
+                          style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', alignSelf: 'flex-end' }}>
+                          Reset defaults
+                        </button>
+                      </div>
+                    </div>
+
+                    {!selected && !selectedEdge && <div style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', marginTop: 8 }}>Click a device to edit its properties</div>}
 
                     {selected && (() => {
                       const def = DEVICE_LIBRARY.find(d => d.type === selected.type)

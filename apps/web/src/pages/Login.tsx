@@ -27,6 +27,23 @@ export default function Login({ onLogin }: Props) {
     }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    if (!bgUrl) return
+    const prev = {
+      overflow:       document.body.style.overflow,
+      scrollbarGutter: document.body.style.scrollbarGutter,
+      background:     document.body.style.background,
+    }
+    document.body.style.overflow        = 'hidden'
+    document.body.style.scrollbarGutter = 'auto'
+    document.body.style.background      = 'transparent'
+    return () => {
+      document.body.style.overflow        = prev.overflow
+      document.body.style.scrollbarGutter = prev.scrollbarGutter
+      document.body.style.background      = prev.background
+    }
+  }, [bgUrl])
+
   const submitLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true); setLoginError('')
@@ -73,12 +90,14 @@ export default function Login({ onLogin }: Props) {
   return (
     <div style={{
       minHeight: '100vh',
+      width: '100vw',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       padding: '0 16px',
       position: 'relative',
       overflow: 'hidden',
+      boxSizing: 'border-box',
       background: bgUrl ? 'transparent' : '#0a0a0f',
     }}>
       {/* Background image */}

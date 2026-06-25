@@ -748,7 +748,23 @@ export default function Terminal() {
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
             >
               <option value="">— server —</option>
-              {servers.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.hostname})</option>)}
+              {(() => {
+                const grouped: Record<string, Server[]> = {}
+                for (const s of servers) {
+                  const grp = s.environment?.trim() || 'Other'
+                  ;(grouped[grp] ??= []).push(s)
+                }
+                const order = Object.keys(grouped).sort((a, b) =>
+                  a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)
+                )
+                return order.map(grp => (
+                  <optgroup key={grp} label={grp}>
+                    {grouped[grp].map(s => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.hostname})</option>
+                    ))}
+                  </optgroup>
+                ))
+              })()}
             </select>
 
             {tab.selectedServer && totalUsers > 0 && (
@@ -954,7 +970,11 @@ export default function Terminal() {
             )
             const sendCmd = (cmd: string) => {
               const ws = wsRefs.current[activeTabId]
-              if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: cmd + '\n' }))
+              if (!ws || ws.readyState !== WebSocket.OPEN) return
+              // If command has <placeholder> tokens, paste without Enter so user can fill them in
+              const hasPlaceholder = /<[^>]+>/.test(cmd)
+              ws.send(JSON.stringify({ type: 'input', data: hasPlaceholder ? cmd : cmd + '\n' }))
+              xtermRefs.current[activeTabId]?.focus()
             }
             return (
               <div style={{ width: 300, flexShrink: 0, height: '100%', background: '#111827', borderLeft: '1px solid #1f2937', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
