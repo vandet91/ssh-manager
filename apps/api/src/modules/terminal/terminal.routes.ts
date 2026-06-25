@@ -17,6 +17,13 @@ type WsMessage =
   | { type: 'resize'; cols: number; rows: number }
   | { type: 'ping' }
 
+// Strip sequences that break asciinema playback (Windows ConPTY resize requests)
+// CSI 8 ; rows ; cols t — tells terminal to resize window; breaks absolute positioning in playback
+const CAST_STRIP_RE = /\x1b\[8;\d+;\d+t/g
+function stripForCast(text: string): string {
+  return text.replace(CAST_STRIP_RE, '')
+}
+
 async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/terminal/:serverId', { websocket: true }, async (connection, req) => {
     const ws = connection.socket as unknown as {
@@ -106,7 +113,7 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
             const text = data.toString('utf8')
             send({ type: 'output', data: text })
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(6)
-            castStream.write(JSON.stringify([Number(elapsed), 'o', text]) + '\n')
+            castStream.write(JSON.stringify([Number(elapsed), 'o', stripForCast(text)]) + '\n')
           })
 
           stream.on('close', () => {
@@ -219,7 +226,7 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
             const text = data.toString('utf8')
             send({ type: 'output', data: text })
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(6)
-            castStream.write(JSON.stringify([Number(elapsed), 'o', text]) + '\n')
+            castStream.write(JSON.stringify([Number(elapsed), 'o', stripForCast(text)]) + '\n')
           })
 
           stream.on('close', () => {
@@ -355,7 +362,7 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
           const text = data.toString('utf8')
           send({ type: 'output', data: text })
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(6)
-          castStream.write(JSON.stringify([Number(elapsed), 'o', text]) + '\n')
+          castStream.write(JSON.stringify([Number(elapsed), 'o', stripForCast(text)]) + '\n')
         })
 
         stream.on('close', () => {

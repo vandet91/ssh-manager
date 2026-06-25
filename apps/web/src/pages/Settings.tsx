@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { api, TelegramSettings, AlertSettings, TotpActionRule, TotpActionSettings, DistroArt, distroArtApi } from '../api/client'
 
 interface PasswordPolicy {
@@ -1150,11 +1150,125 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* ── Login Background ──────────────────────────────────────────────── */}
+        <div style={{ marginTop: 32 }}>
+          <LoginBgSection />
+        </div>
+
         {/* ── Distro Art ────────────────────────────────────────────────────── */}
         <DistroArtSection />
 
         </>
       )}
+    </div>
+  )
+}
+
+// ─── Login Background Section ──────────────────────────────────────────────────
+
+function LoginBgSection() {
+  const [preview, setPreview] = useState<string | null>(null)
+  const [hasImage, setHasImage] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [msg, setMsg] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    fetch('/api/settings/login-bg').then(r => {
+      if (r.ok && r.status !== 204) {
+        setHasImage(true)
+        setPreview(`/api/settings/login-bg?t=${Date.now()}`)
+      }
+    }).catch(() => {})
+  }, [])
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setPreview(URL.createObjectURL(file))
+  }
+
+  const upload = async () => {
+    const file = fileRef.current?.files?.[0]
+    if (!file) return
+    setUploading(true); setMsg('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const r = await fetch('/api/settings/login-bg', { method: 'POST', body: form, credentials: 'include' })
+      if (!r.ok) throw new Error((await r.json()).error ?? 'Upload failed')
+      setHasImage(true)
+      setMsg('Background updated.')
+    } catch (e: any) { setMsg(e.message) }
+    setUploading(false)
+  }
+
+  const remove = async () => {
+    if (!confirm('Remove login background?')) return
+    await fetch('/api/settings/login-bg', { method: 'DELETE', credentials: 'include' })
+    setHasImage(false); setPreview(null); setMsg('Background removed.')
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-med)', borderRadius: 10, padding: 24, marginBottom: 24 }}>
+      <h3 style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 600, color: 'var(--text-heading)' }}>🖼 Login Page Background</h3>
+      <p style={{ margin: '0 0 20px', fontSize: 13, color: 'var(--text-muted)' }}>
+        Upload a background image for the login page. Recommended: landscape photo, 1920×1080 or larger. Max 10 MB.
+      </p>
+
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        {/* Preview */}
+        <div style={{
+          width: 240, height: 135, borderRadius: 8, overflow: 'hidden', flexShrink: 0,
+          border: '1px solid var(--border-med)', background: 'var(--bg-canvas)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          position: 'relative',
+        }}>
+          {preview ? (
+            <img src={preview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          ) : (
+            <span style={{ fontSize: 32, opacity: 0.2 }}>🖼</span>
+          )}
+          {preview && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              background: 'linear-gradient(135deg,rgba(0,0,0,0.5),rgba(0,0,20,0.35))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <div style={{
+                background: 'rgba(15,15,30,0.75)', backdropFilter: 'blur(8px)',
+                border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6,
+                padding: '6px 12px', color: '#fff', fontSize: 11,
+              }}>Preview</div>
+            </div>
+          )}
+        </div>
+
+        {/* Controls */}
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif"
+            onChange={handleFile}
+            style={{ display: 'block', marginBottom: 12, fontSize: 13, color: 'var(--text-primary)' }} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={upload} disabled={uploading || !fileRef.current?.files?.length}
+              className="btn-primary" style={{ padding: '7px 16px', fontSize: 13 }}>
+              {uploading ? 'Uploading…' : 'Upload'}
+            </button>
+            {hasImage && (
+              <button onClick={remove}
+                style={{
+                  padding: '7px 16px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
+                  background: 'rgba(242,73,92,0.12)', border: '1px solid rgba(242,73,92,0.35)',
+                  color: '#f2495c',
+                }}>
+                Remove
+              </button>
+            )}
+          </div>
+          {msg && <p style={{ marginTop: 10, fontSize: 13, color: msg.includes('failed') || msg.includes('Max') ? '#f2495c' : 'var(--text-muted)' }}>{msg}</p>}
+        </div>
+      </div>
     </div>
   )
 }

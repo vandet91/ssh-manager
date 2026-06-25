@@ -189,19 +189,19 @@ function AsciiLogo({ distro, osType, customMap = {} }: {
     textShadow: `0 0 16px ${color}44`,
   })
 
-  // ── Windows: 4-color flag ─────────────────────────────────────────────────
+  // ── Windows: perspective flag (real Windows logo feel) ───────────────────
   if (isWin) {
-    const B = '███████'
     return (
-      <pre style={preStyle('#fff')}>
-        <span style={{ color: '#f25022' }}>{B}</span>{'  '}<span style={{ color: '#7fba00' }}>{B}</span>{'\n'}
-        <span style={{ color: '#f25022' }}>{B}</span>{'  '}<span style={{ color: '#7fba00' }}>{B}</span>{'\n'}
-        <span style={{ color: '#f25022' }}>{B}</span>{'  '}<span style={{ color: '#7fba00' }}>{B}</span>{'\n'}
-        {'\n'}
-        <span style={{ color: '#00a4ef' }}>{B}</span>{'  '}<span style={{ color: '#ffb900' }}>{B}</span>{'\n'}
-        <span style={{ color: '#00a4ef' }}>{B}</span>{'  '}<span style={{ color: '#ffb900' }}>{B}</span>{'\n'}
-        <span style={{ color: '#00a4ef' }}>{B}</span>{'  '}<span style={{ color: '#ffb900' }}>{B}</span>
-      </pre>
+      <svg width="90" height="88" viewBox="0 0 90 88" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block', margin: '0 auto' }}>
+        {/* Red — top-left */}
+        <path d="M0 12 L40 6 L40 42 L0 42 Z" fill="#f25022"/>
+        {/* Green — top-right */}
+        <path d="M43 5 L90 0 L90 42 L43 42 Z" fill="#7fba00"/>
+        {/* Blue — bottom-left */}
+        <path d="M0 46 L40 46 L40 82 L0 76 Z" fill="#00a4ef"/>
+        {/* Yellow — bottom-right */}
+        <path d="M43 46 L90 46 L90 88 L43 83 Z" fill="#ffb900"/>
+      </svg>
     )
   }
 

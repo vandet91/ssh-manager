@@ -43,12 +43,17 @@ async function upsertSsoUser(data: {
     return { ...existing, display_name: data.displayName }
   }
 
-  // Also check by email (user might have been bootstrapped without provider_id)
+  // Also check by email (user might have been bootstrapped or created as local)
   const byEmail = await db.selectFrom('users').selectAll().where('email', '=', data.email).executeTakeFirst()
   if (byEmail) {
-    await db.updateTable('users').set({ provider: data.provider, provider_id: data.providerId, display_name: data.displayName, last_login_at: new Date(), updated_at: new Date() })
-      .where('id', '=', byEmail.id).execute()
-    return { ...byEmail, provider: data.provider, provider_id: data.providerId, display_name: data.displayName }
+    // Only set provider/provider_id if account has no password (pure SSO bootstrap)
+    const updates: Record<string, unknown> = { display_name: data.displayName, last_login_at: new Date(), updated_at: new Date() }
+    if (!byEmail.password_hash) {
+      updates.provider = data.provider
+      updates.provider_id = data.providerId
+    }
+    await db.updateTable('users').set(updates as any).where('id', '=', byEmail.id).execute()
+    return { ...byEmail, ...updates }
   }
 
   const role = data.email === config.BOOTSTRAP_ADMIN_EMAIL.toLowerCase() ? 'admin' : 'operator'

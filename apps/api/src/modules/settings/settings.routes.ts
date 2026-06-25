@@ -528,6 +528,85 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
 
     return { ok: true }
   })
+
+  // ── Login Background Image ────────────────────────────────────────────────────
+
+  const LOGIN_BG_PATH = process.env.RECORDINGS_STORAGE_PATH
+    ? require('path').join(process.env.RECORDINGS_STORAGE_PATH, '..', 'assets')
+    : '/var/lib/ssh-manager/assets'
+
+  // GET /settings/login-bg — PUBLIC (no auth, needed by login page)
+  fastify.get('/settings/login-bg', async (_req, reply) => {
+    const fs = require('fs') as typeof import('fs')
+    const path = require('path') as typeof import('path')
+    const row = await (db as any).selectFrom('settings').select('value')
+      .where('key', '=', 'login_bg_file').executeTakeFirst()
+    if (!row) return reply.status(204).send()
+    const raw = row.value as string
+    const filename = raw.startsWith('"') ? JSON.parse(raw) as string : raw
+    const filePath = path.join(LOGIN_BG_PATH, filename)
+    if (!fs.existsSync(filePath)) return reply.status(204).send()
+    const ext = path.extname(filename).toLowerCase()
+    const mime = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+    reply.header('Content-Type', mime)
+    reply.header('Cache-Control', 'public, max-age=86400')
+    return reply.send(fs.createReadStream(filePath))
+  })
+
+  // POST /settings/login-bg — admin upload
+  fastify.post('/settings/login-bg', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
+    const fs = require('fs') as typeof import('fs')
+    const fsp = require('fs/promises') as typeof import('fs/promises')
+    const path = require('path') as typeof import('path')
+
+    await fsp.mkdir(LOGIN_BG_PATH, { recursive: true })
+
+    const parts = req.parts()
+    let fileBuffer: Buffer | null = null
+    let originalFilename = ''
+
+    for await (const part of parts) {
+      if (part.type === 'file') {
+        originalFilename = part.filename
+        const chunks: Buffer[] = []
+        for await (const chunk of part.file) chunks.push(chunk)
+        fileBuffer = Buffer.concat(chunks)
+      }
+    }
+
+    if (!fileBuffer || !originalFilename) return reply.status(400).send({ error: 'No file provided' })
+
+    const ext = require('path').extname(originalFilename).toLowerCase()
+    const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif']
+    if (!allowed.includes(ext)) return reply.status(400).send({ error: 'Only JPEG, PNG, WebP, GIF allowed' })
+    if (fileBuffer.length > 10 * 1024 * 1024) return reply.status(400).send({ error: 'Max 10 MB' })
+
+    // Remove old file
+    const existing = await (db as any).selectFrom('settings').select('value').where('key', '=', 'login_bg_file').executeTakeFirst()
+    if (existing) {
+      try { fs.unlinkSync(path.join(LOGIN_BG_PATH, JSON.parse(existing.value))) } catch {}
+    }
+
+    const filename = `login-bg${ext}`
+    await fsp.writeFile(path.join(LOGIN_BG_PATH, filename), fileBuffer)
+
+    await (db as any).insertInto('settings').values({ key: 'login_bg_file', value: JSON.stringify(filename) })
+      .onConflict((oc: any) => oc.column('key').doUpdateSet({ value: JSON.stringify(filename) })).execute()
+
+    return { ok: true }
+  })
+
+  // DELETE /settings/login-bg — admin remove
+  fastify.delete('/settings/login-bg', { preHandler: [requireAuth, requireAdmin] }, async (_req, reply) => {
+    const fs = require('fs') as typeof import('fs')
+    const path = require('path') as typeof import('path')
+    const existing = await (db as any).selectFrom('settings').select('value').where('key', '=', 'login_bg_file').executeTakeFirst()
+    if (existing) {
+      try { fs.unlinkSync(path.join(LOGIN_BG_PATH, JSON.parse(existing.value))) } catch {}
+      await (db as any).deleteFrom('settings').where('key', '=', 'login_bg_file').execute()
+    }
+    return reply.status(204).send()
+  })
 }
 
 export default settingsRoutes

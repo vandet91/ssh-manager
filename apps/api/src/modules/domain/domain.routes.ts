@@ -51,7 +51,7 @@ async function withDomainSsh<T>(
   }
 
   // Default: management key
-  return withDomainSsh(req, serverId, fn)
+  return withServerSsh(serverId, fn)
 }
 
 // ── PS helpers ────────────────────────────────────────────────────────────────

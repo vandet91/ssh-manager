@@ -23,7 +23,6 @@ async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     const user = await db.selectFrom('users').selectAll()
       .where('email', '=', body.email.toLowerCase())
-      .where('provider', '=', 'local')
       .executeTakeFirst()
 
     if (!user || !user.password_hash) {

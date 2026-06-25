@@ -56,9 +56,11 @@ function ActionBadge({ action }: { action: string }) {
 
 function PlayerModal({ recording, onClose }: { recording: SessionRecording; onClose: () => void }) {
   const playerRef = useRef<HTMLDivElement>(null)
+  const [playerError, setPlayerError] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
+    setPlayerError(null)
     const load = async () => {
       try {
         const AsciinemaPlayer = await import('asciinema-player')
@@ -67,10 +69,14 @@ function PlayerModal({ recording, onClose }: { recording: SessionRecording; onCl
         if (mounted && playerRef.current) {
           playerRef.current.innerHTML = ''
           AsciinemaPlayer.create(`/api/logs/sessions/${recording.id}/play`, playerRef.current, {
-            cols: 220, rows: 40, autoPlay: true, fit: 'width',
+            autoPlay: true, fit: 'width',
+            terminalFontFamily: '"JetBrains Mono", "Cascadia Code", monospace',
+            theme: 'monokai',
           })
         }
-      } catch {}
+      } catch (e: any) {
+        if (mounted) setPlayerError(e?.message ?? 'Failed to load player')
+      }
     }
     load()
     return () => { mounted = false }
@@ -132,7 +138,13 @@ function PlayerModal({ recording, onClose }: { recording: SessionRecording; onCl
         </div>
         {/* Player */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 16, minHeight: 0 }}>
-          <div ref={playerRef} style={{ width: '100%' }} />
+          {playerError ? (
+            <div style={{ padding: 24, color: '#f87171', background: '#1f1010', borderRadius: 8, fontFamily: 'monospace', fontSize: 13 }}>
+              ✗ {playerError}
+            </div>
+          ) : (
+            <div ref={playerRef} style={{ width: '100%' }} />
+          )}
         </div>
       </div>
     </div>
