@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, TelegramSettings, AlertSettings, TotpActionRule, TotpActionSettings } from '../api/client'
+import { api, TelegramSettings, AlertSettings, TotpActionRule, TotpActionSettings, DistroArt, distroArtApi } from '../api/client'
 
 interface PasswordPolicy {
   min_length: number
@@ -1150,7 +1150,269 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* ── Distro Art ────────────────────────────────────────────────────── */}
+        <DistroArtSection />
+
         </>
+      )}
+    </div>
+  )
+}
+
+// ─── Distro Art Section ────────────────────────────────────────────────────────
+const monoFont = '"JetBrains Mono","Fira Code","Cascadia Code",monospace'
+
+function ArtPreview({ lines, color, scroll = false }: { lines: string[]; color: string; scroll?: boolean }) {
+  return (
+    <pre style={{
+      fontFamily: monoFont, fontSize: 10, lineHeight: 1.5,
+      color, margin: 0, userSelect: 'none', textAlign: 'left',
+      textShadow: `0 0 10px ${color}44`,
+      overflow: scroll ? 'auto' : 'hidden',
+      maxHeight: scroll ? 'none' : 130,
+      width: '100%',
+    }}>
+      {lines.join('\n')}
+    </pre>
+  )
+}
+
+function DistroArtSection() {
+  const [list, setList] = useState<DistroArt[]>([])
+  const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState<DistroArt | null>(null)
+  const [isNew, setIsNew] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const [err, setErr] = useState('')
+
+  // edit form state
+  const [editKey, setEditKey] = useState('')
+  const [editColor, setEditColor] = useState('#94a3b8')
+  const [editArt, setEditArt] = useState('')
+
+  const load = () => {
+    setLoading(true)
+    distroArtApi.list().then(data => { setList(data); setLoading(false) }).catch(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [])
+
+  const openEdit = (item: DistroArt, newEntry = false) => {
+    setEditing(item)
+    setIsNew(newEntry)
+    setEditKey(item.key)
+    setEditColor(item.color)
+    setEditArt(item.art_lines.join('\n'))
+    setErr('')
+  }
+
+
+  const openNew = () => openEdit({ key: '', art_lines: [], color: '#94a3b8' }, true)
+
+  const save = async () => {
+    const lines = editArt.split('\n')
+    if (!editKey.trim()) { setErr('Key is required'); return }
+    if (lines.every(l => !l.trim())) { setErr('Art cannot be empty'); return }
+    setSaving(true); setErr('')
+    try {
+      await distroArtApi.save(editKey.trim().toLowerCase(), lines, editColor)
+      setEditing(null)
+      load()
+    } catch (e: any) {
+      setErr(e.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const del = async (key: string) => {
+    if (!confirm(`Delete "${key}" logo? The Terminal will fall back to the built-in default.`)) return
+    setDeleting(key)
+    try {
+      await distroArtApi.remove(key)
+      load()
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  const previewLines = editArt ? editArt.split('\n') : ['(no art yet)']
+
+  return (
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{ background: 'var(--card-header-bg)', borderBottom: '1px solid var(--card-border)', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 18 }}>🎨</span>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-heading)' }}>Distro Art</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              ASCII art logos shown in the Terminal right panel when connected to a server.
+              The key must match the server's <code style={{ fontSize: 11 }}>distro</code> / <code style={{ fontSize: 11 }}>os_id</code> value.
+            </div>
+          </div>
+        </div>
+        <button onClick={openNew} className="btn-primary" style={{ padding: '7px 16px', fontSize: 13, flexShrink: 0 }}>
+          + Add Logo
+        </button>
+      </div>
+
+      <div style={{ padding: 20 }}>
+        {loading && <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</p>}
+        {!loading && list.length === 0 && (
+          <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            No custom logos yet. The Terminal uses built-in defaults. Click <strong>+ Add Logo</strong> to override any distro.
+          </p>
+        )}
+
+        {/* Logo grid */}
+        {list.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
+            {list.map(item => (
+              <div key={item.key} style={{
+                background: 'var(--bg-body)', border: '1px solid var(--border-weak)',
+                borderRadius: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, position: 'relative',
+              }}>
+                {/* Key + color dot */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: '50%', background: item.color, flexShrink: 0, display: 'inline-block', boxShadow: `0 0 6px ${item.color}` }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', fontFamily: monoFont }}>{item.key}</span>
+                </div>
+                {/* Preview */}
+                <div style={{ background: '#0d1117', borderRadius: 6, padding: '8px 4px', minHeight: 80, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <ArtPreview lines={item.art_lines} color={item.color} />
+                </div>
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => openEdit(item)} style={{
+                    flex: 1, fontSize: 11, padding: '4px 0', borderRadius: 4, border: '1px solid var(--border-weak)',
+                    background: 'var(--card-bg)', color: 'var(--text)', cursor: 'pointer',
+                  }}>Edit</button>
+                  <button onClick={() => del(item.key)} disabled={deleting === item.key} style={{
+                    fontSize: 11, padding: '4px 8px', borderRadius: 4, border: '1px solid #7f1d1d',
+                    background: 'transparent', color: '#f87171', cursor: 'pointer',
+                  }}>{deleting === item.key ? '…' : '✕'}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Tip */}
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6, borderTop: '1px solid var(--border-weak)', paddingTop: 12 }}>
+          <strong>Tips:</strong> Keep all lines the same width (~16–20 chars). Use Unicode blocks: <code>█ ▀ ▄ ▌ ▐ ░ ▒ ▓</code> or classic ASCII: <code>/ \ | _ . - #</code>.
+          You can ask AI to generate art — just paste it into the editor. The <code>default</code> key overrides the fallback for unknown Linux distros.
+        </div>
+      </div>
+
+      {/* Edit modal */}
+      {editing && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }} onClick={e => { if (e.target === e.currentTarget) setEditing(null) }}>
+          <div style={{
+            background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 12,
+            width: 700, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto',
+            display: 'flex', flexDirection: 'column',
+          }}>
+            {/* Modal header */}
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-weak)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-heading)' }}>
+                {isNew ? 'Add Distro Logo' : `Edit: ${editing.key}`}
+              </div>
+              <button onClick={() => setEditing(null)} style={{ background: 'none', border: 'none', fontSize: 18, color: 'var(--text-muted)', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+              {/* Left: controls */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {/* Key */}
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    DISTRO KEY <span style={{ color: 'var(--danger)' }}>*</span>
+                  </label>
+                  <input
+                    value={editKey}
+                    onChange={e => setEditKey(e.target.value.toLowerCase())}
+                    disabled={!isNew}
+                    placeholder="e.g. ubuntu, debian, arch, default"
+                    style={{
+                      width: '100%', padding: '7px 10px', borderRadius: 6, fontSize: 12,
+                      border: '1px solid var(--border-weak)', background: 'var(--input-bg)',
+                      color: 'var(--text)', fontFamily: monoFont, boxSizing: 'border-box',
+                      opacity: isNew ? 1 : 0.6,
+                    }}
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                    Must match the server's distro / os_id field (lowercase).
+                  </div>
+                </div>
+
+                {/* Color */}
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>COLOR</label>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input type="color" value={editColor} onChange={e => setEditColor(e.target.value)}
+                      style={{ width: 40, height: 32, border: 'none', cursor: 'pointer', borderRadius: 4, padding: 2 }} />
+                    <input value={editColor} onChange={e => setEditColor(e.target.value)}
+                      style={{
+                        flex: 1, padding: '7px 10px', borderRadius: 6, fontSize: 12,
+                        border: '1px solid var(--border-weak)', background: 'var(--input-bg)', color: 'var(--text)', fontFamily: monoFont,
+                      }} />
+                  </div>
+                </div>
+
+                {/* Art textarea */}
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                    ASCII ART <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(one line per row)</span>
+                  </label>
+                  <textarea
+                    value={editArt}
+                    onChange={e => setEditArt(e.target.value)}
+                    rows={14}
+                    spellCheck={false}
+                    placeholder={'   ██████   \n  ██    ██  \n ██  ██  ██ \n ...'}
+                    style={{
+                      width: '100%', padding: '8px 10px', borderRadius: 6, fontSize: 12,
+                      border: '1px solid var(--border-weak)', background: '#0d1117',
+                      color: editColor, fontFamily: monoFont, lineHeight: 1.5, resize: 'vertical',
+                      boxSizing: 'border-box', outline: 'none',
+                    }}
+                  />
+                </div>
+
+                {err && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>}
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={save} disabled={saving} className="btn-primary" style={{ padding: '8px 20px' }}>
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button onClick={() => setEditing(null)} style={{
+                    padding: '8px 16px', borderRadius: 6, border: '1px solid var(--border-weak)',
+                    background: 'transparent', color: 'var(--text)', cursor: 'pointer', fontSize: 13,
+                  }}>Cancel</button>
+                </div>
+              </div>
+
+              {/* Right: live preview */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>LIVE PREVIEW</div>
+                <div style={{
+                  background: '#0d1117', borderRadius: 8, border: '1px solid var(--border-weak)',
+                  flex: 1, minHeight: 200, padding: 16, overflow: 'auto',
+                }}>
+                  <ArtPreview lines={previewLines} color={editColor} scroll />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                  This is how the logo will appear in the Terminal panel when connected to a server with distro = <code style={{ fontFamily: monoFont }}>{editKey || '…'}</code>.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -1276,7 +1276,33 @@ export default function Servers() {
               <p className="text-gray-300 text-sm">Connecting and gathering system info…</p>
             </div>
           )}
-          {infoError && <p className="text-red-400 text-sm py-4">{infoError}</p>}
+          {infoError && (
+            <div className="space-y-3">
+              <p className="text-red-400 text-sm">{infoError}</p>
+              {/* Show cached OS info if available */}
+              {(infoServer?.os_name || infoServer?.os_pretty_name) && (
+                <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4 space-y-2">
+                  <p className="text-xs text-yellow-400 font-medium mb-3">⚠ Server offline — showing last known info</p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <span className="text-gray-400">OS</span>
+                    <span className="text-gray-200">{infoServer.os_pretty_name || infoServer.os_name}</span>
+                    {infoServer.os_version && <>
+                      <span className="text-gray-400">Version</span>
+                      <span className="text-gray-200">{infoServer.os_version}</span>
+                    </>}
+                    {infoServer.kernel_version && <>
+                      <span className="text-gray-400">Kernel</span>
+                      <span className="text-gray-200 font-mono">{infoServer.kernel_version}</span>
+                    </>}
+                    {infoServer.last_seen_at && <>
+                      <span className="text-gray-400">Last seen</span>
+                      <span className="text-gray-200">{new Date(infoServer.last_seen_at).toLocaleString()}</span>
+                    </>}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {/* Windows servers render the credential UI; SSH scan runs in background */}
           {infoServer?.os_type === 'windows' && !serverInfo && (
             <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>

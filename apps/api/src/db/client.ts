@@ -81,6 +81,14 @@ export interface ServerTable {
   // AI firmware check
   firmware_check_at: Date | null
   firmware_check_result: unknown | null
+  // Distro / OS cache (populated on each successful /info fetch)
+  distro: Opt<string>
+  os_name: string | null
+  os_pretty_name: string | null
+  os_version: string | null
+  os_id: string | null
+  kernel_version: string | null
+  last_seen_at: Date | null
   created_at: ColumnType<Date, never, never>
   updated_at: Opt<Date>
 }
@@ -305,8 +313,17 @@ export interface NetworkDiagramTable {
   updated_at: Opt<Date>
 }
 
+export interface DistroArtTable {
+  key: string
+  art_lines: unknown        // string[]
+  color: string
+  updated_by: string | null
+  updated_at: ColumnType<Date, never, Date>
+}
+
 export interface Database {
   users: UserTable
+  distro_art: DistroArtTable
   servers: ServerTable
   snmp_profiles: SnmpProfileTable
   ssh_keys: SshKeyTable

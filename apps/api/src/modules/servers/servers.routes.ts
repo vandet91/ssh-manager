@@ -375,9 +375,20 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
               return { linux_user, key_type: keyType, comment, fingerprint, key_body: keyBody, key_body_short: keyBody.slice(0, 32) + '…',
                 db_key_id: matched?.id ?? null, db_key_name: matched?.name ?? null, is_known: !!matched, is_archived: matched ? !matched.is_active : false }
             })
-            // Save OS type + host type to DB
-            db.updateTable('servers').set({ os_type: osType, host_type: virtInfo.host_type, host_type_detail: virtInfo.detail ?? undefined, updated_at: new Date() })
-              .where('id', '=', id).execute().catch(() => {})
+            // Save OS type + host type + OS details to DB
+            db.updateTable('servers').set({
+              os_type: osType,
+              host_type: virtInfo.host_type,
+              host_type_detail: virtInfo.detail ?? undefined,
+              os_name: winInfo.os?.name || 'Windows',
+              os_pretty_name: winInfo.os?.pretty_name || winInfo.os?.name || 'Windows',
+              os_version: winInfo.os?.version || '',
+              os_id: 'windows',
+              kernel_version: winInfo.os?.kernel || '',
+              ...(server.distro ? {} : { distro: 'windows' }),
+              last_seen_at: new Date(),
+              updated_at: new Date(),
+            }).where('id', '=', id).execute().catch(() => {})
             return { ...winInfo, management_key_id: server.management_key_id, authorized_keys: authorizedKeys, virt: virtInfo }
           }
 
@@ -464,19 +475,37 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
             }
           })
 
-          // Save OS type + host type to DB
-          db.updateTable('servers').set({ os_type: 'linux', host_type: virtInfo.host_type, host_type_detail: virtInfo.detail ?? undefined, updated_at: new Date() })
-            .where('id', '=', id).execute().catch(() => {})
+          const osName       = osInfo['NAME'] || osInfo['PRETTY_NAME'] || 'Unknown'
+          const osPrettyName = osInfo['PRETTY_NAME'] || osName
+          const osVersion    = osInfo['VERSION'] || osInfo['VERSION_ID'] || ''
+          const osId         = (osInfo['ID'] || '').toLowerCase()
+          const kernelVer    = unameR.stdout.trim()
+
+          // Save OS type + host type + OS details to DB
+          db.updateTable('servers').set({
+            os_type: 'linux',
+            host_type: virtInfo.host_type,
+            host_type_detail: virtInfo.detail ?? undefined,
+            os_name: osName,
+            os_pretty_name: osPrettyName,
+            os_version: osVersion,
+            os_id: osId,
+            kernel_version: kernelVer,
+            // Auto-fill distro from os-release ID if not already set
+            ...(server.distro ? {} : { distro: osId || undefined }),
+            last_seen_at: new Date(),
+            updated_at: new Date(),
+          }).where('id', '=', id).execute().catch(() => {})
 
           return {
             os_type: 'linux' as const,
             management_key_id: server.management_key_id,
             os: {
-              name: osInfo['NAME'] || osInfo['PRETTY_NAME'] || 'Unknown',
-              pretty_name: osInfo['PRETTY_NAME'] || '',
-              version: osInfo['VERSION'] || osInfo['VERSION_ID'] || '',
-              id: osInfo['ID'] || '',
-              kernel: unameR.stdout,
+              name: osName,
+              pretty_name: osPrettyName,
+              version: osVersion,
+              id: osId,
+              kernel: kernelVer,
             },
             uptime: uptimeOut.stdout,
             memory: memOut.stdout,

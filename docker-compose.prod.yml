@@ -2,8 +2,13 @@ services:
   api:
     build: ./apps/api
     restart: always
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     environment:
       - NODE_ENV=production
+      - TFTP_ROOT=/var/lib/ssh-manager/tftp-root
+      - TZ=Asia/Phnom_Penh
     env_file: .env
     depends_on:
       postgres:
@@ -12,6 +17,9 @@ services:
         condition: service_healthy
     volumes:
       - recordings:/var/lib/ssh-manager/recordings
+      - shares:/tmp/ssh-manager-shares
+      - guac-uploads:/tmp/guac-uploads
+      - tftp-data:/var/lib/ssh-manager/tftp-root
     deploy:
       resources:
         limits:
@@ -25,11 +33,54 @@ services:
       - "3000:3000"
     depends_on:
       - api
+      - guac-proxy
     deploy:
       resources:
         limits:
           cpus: '0.5'
           memory: 256M
+
+  tftp-server:
+    build: ./services/tftp
+    restart: always
+    ports:
+      - "69:69/udp"
+    volumes:
+      - tftp-data:/tftp-root
+    environment:
+      - TFTP_ROOT=/tftp-root
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+
+  guacd:
+    image: guacamole/guacd:1.5.5
+    restart: always
+    volumes:
+      - guac-uploads:/tmp/guac-uploads
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  guac-proxy:
+    build: ./apps/guac-proxy
+    restart: always
+    environment:
+      - GUACD_HOST=guacd
+      - GUACD_PORT=4822
+      - PORT=3002
+      - GUAC_CRYPT_KEY=${GUAC_CRYPT_KEY:-ChangeMe32CharKeyForGuacamole!!!}
+    depends_on:
+      - guacd
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
 
   postgres:
     image: postgres:15-alpine
@@ -54,6 +105,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
+    command: redis-server --appendonly yes --appendfsync everysec
     volumes:
       - redisdata:/data
     healthcheck:
@@ -71,3 +123,6 @@ volumes:
   pgdata:
   redisdata:
   recordings:
+  shares:
+  guac-uploads:
+  tftp-data:

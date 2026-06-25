@@ -66,6 +66,13 @@ export type Server = {
   windows_rdp_ready: boolean
   is_domain_controller: boolean
   distro: string | null
+  // Cached OS info (saved on last successful /info fetch)
+  os_name: string | null
+  os_pretty_name: string | null
+  os_version: string | null
+  os_id: string | null
+  kernel_version: string | null
+  last_seen_at: string | null
   // Network device access
   access_ssh_enabled: boolean
   access_ssh_auth_type: 'key' | 'password' | null
@@ -582,5 +589,21 @@ export type TotpActionRule = {
 export type TotpActionSettings = {
   actions: TotpActionRule[]
   elevationMinutes: number
+}
+
+export type DistroArt = {
+  key: string
+  art_lines: string[]
+  color: string
+}
+
+export const distroArtApi = {
+  list: () => api.get<DistroArt[]>('/distro-art'),
+  save: (key: string, art_lines: string[], color: string) =>
+    api.put<{ ok: boolean }>(`/distro-art/${encodeURIComponent(key)}`, { art_lines, color }),
+  remove: (key: string) =>
+    api.delete(`/distro-art/${encodeURIComponent(key)}`),
+  generate: (distro: string, style?: string) =>
+    api.post<{ art_lines: string[]; color: string }>('/distro-art/generate', { distro, style }),
 }
 

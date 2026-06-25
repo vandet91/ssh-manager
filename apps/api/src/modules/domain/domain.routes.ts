@@ -1,11 +1,58 @@
 ﻿import { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
+import { Client } from 'ssh2'
 import { db } from '../../db/client'
 import { requireAuth } from '../../middleware/auth'
 import { withServerSsh } from '../../utils/server-ssh'
-import { sshExec } from '../../utils/ssh'
+import { connectSsh, sshExec } from '../../utils/ssh'
 import { writeAuditLog } from '../../utils/audit'
-import { encryptSecret, getVaultKey } from '../../utils/vault'
+import { decryptSecret, encryptSecret, getVaultKey } from '../../utils/vault'
+
+// ── Auth-aware SSH helper ─────────────────────────────────────────────────────
+// Reads ?auth=management|key:assignmentId|cred:credId from the request and
+// connects using the appropriate method. Falls back to the management key.
+
+async function withDomainSsh<T>(
+  req: FastifyRequest,
+  serverId: string,
+  fn: (client: Client) => Promise<T>,
+): Promise<T> {
+  const q = req.query as Record<string, string>
+  const auth = q.auth ?? 'management'
+  const authId = q.authId ?? ''
+
+  if (auth === 'key' && authId) {
+    const row = await db.selectFrom('key_assignments')
+      .innerJoin('ssh_keys', 'ssh_keys.id', 'key_assignments.key_id')
+      .select(['key_assignments.linux_user', 'ssh_keys.private_key_enc'])
+      .where('key_assignments.id', '=', authId)
+      .where('key_assignments.server_id', '=', serverId)
+      .where('key_assignments.is_active', '=', true)
+      .executeTakeFirst()
+    if (!row) throw Object.assign(new Error('Key assignment not found'), { statusCode: 400 })
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', serverId).executeTakeFirst()
+    if (!server) throw Object.assign(new Error('Server not found'), { statusCode: 404 })
+    const vaultKey = getVaultKey()
+    const privateKey = decryptSecret(row.private_key_enc, vaultKey)
+    const client = await connectSsh({ host: server.hostname, port: server.ssh_port, username: row.linux_user, privateKey, readyTimeout: 15000 })
+    try { return await fn(client) } finally { client.end() }
+  }
+
+  if (auth === 'cred' && authId) {
+    const cred = await db.selectFrom('server_credentials').selectAll()
+      .where('id', '=', authId).where('server_id', '=', serverId).executeTakeFirst()
+    if (!cred) throw Object.assign(new Error('Credential not found'), { statusCode: 400 })
+    const server = await db.selectFrom('servers').selectAll().where('id', '=', serverId).executeTakeFirst()
+    if (!server) throw Object.assign(new Error('Server not found'), { statusCode: 404 })
+    const vaultKey = getVaultKey()
+    const password = decryptSecret(cred.password_enc, vaultKey)
+    const client = await connectSsh({ host: server.hostname, port: server.ssh_port, username: cred.linux_user ?? 'Administrator', password, readyTimeout: 15000 })
+    try { return await fn(client) } finally { client.end() }
+  }
+
+  // Default: management key
+  return withDomainSsh(req, serverId, fn)
+}
 
 // ── PS helpers ────────────────────────────────────────────────────────────────
 
@@ -174,6 +221,35 @@ function parseUsers(stdout: string): DomainUser[] {
 export default async function domainRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
 
+  // GET /domain/:serverId/auth-options — list available auth methods for this server
+  fastify.get('/domain/:serverId/auth-options', { preHandler: requireAuth }, async (req) => {
+    const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
+
+    const [keyAssignments, credentials, server] = await Promise.all([
+      db.selectFrom('key_assignments')
+        .innerJoin('ssh_keys', 'ssh_keys.id', 'key_assignments.key_id')
+        .select(['key_assignments.id', 'key_assignments.linux_user', 'ssh_keys.name as key_name'])
+        .where('key_assignments.server_id', '=', serverId)
+        .where('key_assignments.is_active', '=', true)
+        .execute(),
+      db.selectFrom('server_credentials')
+        .select(['id', 'linux_user', 'label', 'category'])
+        .where('server_id', '=', serverId)
+        .where('is_archived', '=', false)
+        .execute(),
+      db.selectFrom('servers')
+        .select(['management_key_id', 'management_linux_user'])
+        .where('id', '=', serverId)
+        .executeTakeFirst(),
+    ])
+
+    return {
+      management: server ? { user: server.management_linux_user } : null,
+      keys: keyAssignments.map(k => ({ id: k.id, user: k.linux_user, keyName: k.key_name })),
+      credentials: credentials.map(c => ({ id: c.id, user: c.linux_user, label: c.label, category: c.category })),
+    }
+  })
+
   // GET /domain/servers — list Windows servers suitable as DCs
   fastify.get('/domain/servers', { preHandler: requireAuth }, async (_req) => {
     const anyDb = db as any
@@ -234,7 +310,7 @@ Write-Output "SERVICES:$($svcResults -join ',')"
 `.trim()
 
     try {
-      const health = await withServerSsh(serverId, async (client) => {
+      const health = await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
         if (r.stderr && !r.stdout.trim()) throw new Error(friendlyAdError(r.stderr, 'Domain health check'))
 
@@ -299,7 +375,7 @@ Write-Output "SERVICES:$($svcResults -join ',')"
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
 
     try {
-      const result = await withServerSsh(serverId, async (client) => {
+      const result = await withDomainSsh(req, serverId, async (client) => {
         // Step 1: get the domain DN so we can target exactly that NC
         // Step 2: syncall on just the domain partition — skips ForestDnsZones/DomainDnsZones
         //         application partitions which cause "invalid NC" errors when the account
@@ -354,7 +430,7 @@ if ($sources.Count -eq 0) {
     }).parse(req.query)
 
     try {
-      const users = await withServerSsh(serverId, async (client) => {
+      const users = await withDomainSsh(req, serverId, async (client) => {
         const result = await sshExec(client, psEncoded(GET_USERS_SCRIPT))
         if (result.stderr && result.stdout.trim() === '') {
           throw new Error(friendlyAdError(result.stderr, 'User list'))
@@ -390,7 +466,7 @@ if ($sources.Count -eq 0) {
     const { samAccountName } = z.object({ samAccountName: z.string().min(1).max(64) }).parse(req.body)
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(`Unlock-ADAccount -Identity '${samAccountName}'`))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Unlock account'))
       })
@@ -429,7 +505,7 @@ if ($sources.Count -eq 0) {
     ].join('\n')
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(psCmd))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Reset password'))
       })
@@ -525,7 +601,7 @@ if ($sources.Count -eq 0) {
       : `Disable-ADAccount -Identity '${samAccountName}'`
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(psCmd))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Set account status'))
       })
@@ -557,7 +633,7 @@ if ($sources.Count -eq 0) {
     const psCmd = `Set-ADUser -Identity '${samAccountName}' -PasswordNeverExpires $${value ? 'true' : 'false'}`
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(psCmd))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Set password policy'))
       })
@@ -598,7 +674,7 @@ Write-Output "BADPWD:$($u.BadLogonCount)"
 `.trim()
 
     try {
-      const detail = await withServerSsh(serverId, async (client) => {
+      const detail = await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
         if (r.stderr && !r.stdout) throw new Error(friendlyAdError(r.stderr, 'User detail'))
         const lines: Record<string, string> = {}
@@ -637,7 +713,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
 `.trim()
 
     try {
-      const groups = await withServerSsh(serverId, async (client) => {
+      const groups = await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
         if (r.stderr && !r.stdout) throw new Error(friendlyAdError(r.stderr, 'Group list'))
         return r.stdout.split('\n').filter(Boolean).map(line => {
@@ -660,7 +736,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
     }).parse(req.body)
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(`Add-ADGroupMember -Identity '${groupName}' -Members '${samAccountName}'`))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Add to group'))
       })
@@ -684,7 +760,7 @@ Get-ADGroup -Filter * -Properties Description | ForEach-Object {
     }).parse(req.body)
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(`Remove-ADGroupMember -Identity '${groupName}' -Members '${samAccountName}' -Confirm:$false`))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Remove from group'))
       })
@@ -711,7 +787,7 @@ Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
 `.trim()
 
     try {
-      const members = await withServerSsh(serverId, async (client) => {
+      const members = await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
         if (r.stderr && !r.stdout) throw new Error(friendlyAdError(r.stderr, 'Group members'))
         return r.stdout.split('\n').filter(Boolean).map(line => {
@@ -739,7 +815,7 @@ Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
       : `New-ADGroup -Name '${name}' -GroupScope ${scope} -GroupCategory Security`
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Create group'))
       })
@@ -778,7 +854,7 @@ Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
     if (steps.length === 0) return { ok: true }
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(steps.join('\n')))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Update group'))
       })
@@ -810,7 +886,7 @@ Get-ADGroupMember -Identity '${groupName}' | ForEach-Object {
     }
 
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(`Remove-ADGroup -Identity '${groupName}' -Confirm:$false`))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Delete group'))
       })
@@ -845,7 +921,7 @@ Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSyste
   } | ConvertTo-Json -Compress
 `.trim()
     try {
-      const output = await withServerSsh(serverId, async (client) => {
+      const output = await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(script))
         return r.stdout.trim()
       })
@@ -868,7 +944,7 @@ Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSyste
       ? `Enable-ADAccount -Identity (Get-ADComputer -Identity '${name}')`
       : `Disable-ADAccount -Identity (Get-ADComputer -Identity '${name}')`
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(psCmd))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Set computer status'))
       })
@@ -889,7 +965,7 @@ Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSyste
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
     const { name } = z.object({ name: z.string().min(1).max(256) }).parse(req.body)
     try {
-      await withServerSsh(serverId, async (client) => {
+      await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, psEncoded(`Remove-ADComputer -Identity '${name}' -Confirm:$false`))
         if (r.code !== 0 && r.stderr) throw new Error(friendlyAdError(r.stderr, 'Delete computer'))
       })
@@ -909,7 +985,7 @@ Get-ADComputer -Filter * -Properties Name,DNSHostName,IPv4Address,OperatingSyste
     const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
 
     try {
-      const raw = await withServerSsh(serverId, async (client) => {
+      const raw = await withDomainSsh(req, serverId, async (client) => {
         const r = await sshExec(client, 'qwinsta 2>&1')
         return r.stdout
       })

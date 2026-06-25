@@ -27,7 +27,6 @@ const nav: { to: string; label: string; icon: string; adminOnly?: boolean }[] = 
   { to: '/terminal',        label: 'Terminal',          icon: '⌨' },
   { to: '/remote-desktop',  label: 'Remote Desktop',    icon: '🖥' },
   { to: '/logs',            label: 'Logs',              icon: '≡',  adminOnly: true },
-  { to: '/activity',        label: 'My Activity',       icon: '📋' },
   { to: '/migration',       label: 'Migration',         icon: '⇄',  adminOnly: true },
   { to: '/filemanager',     label: 'File Manager',      icon: '⊟' },
   { to: '/users',           label: 'Users',             icon: '◉',  adminOnly: true },

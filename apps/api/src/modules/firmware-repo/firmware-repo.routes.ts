@@ -16,7 +16,14 @@ async function ensureDir(dir: string) {
 }
 
 function sanitize(s: string) {
-  return s.replace(/[^a-zA-Z0-9._\- ]/g, '_').slice(0, 80)
+  // Replace anything not alphanumeric/dash/underscore/dot, then strip leading dots to block traversal
+  return s.replace(/[^a-zA-Z0-9._\-]/g, '_').replace(/^\.+/, '_').slice(0, 80)
+}
+
+function assertInsideRoot(resolvedPath: string, root: string) {
+  if (!resolvedPath.startsWith(root + '/') && resolvedPath !== root) {
+    throw Object.assign(new Error('Access denied'), { statusCode: 403 })
+  }
 }
 
 async function sha256File(filePath: string): Promise<string> {
@@ -62,11 +69,13 @@ export default async function firmwareRepoRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'vendor, model, version and file are required' })
     }
 
-    const dir = path.join(FIRMWARE_ROOT, sanitize(vendor), sanitize(model))
+    const dir = path.resolve(FIRMWARE_ROOT, sanitize(vendor), sanitize(model))
+    assertInsideRoot(dir, path.resolve(FIRMWARE_ROOT))
     await ensureDir(dir)
 
     const filename = `${sanitize(version)}_${sanitize(originalFilename)}`
-    const filePath = path.join(dir, filename)
+    const filePath = path.resolve(dir, filename)
+    assertInsideRoot(filePath, path.resolve(FIRMWARE_ROOT))
     await fs.writeFile(filePath, fileBuffer)
     const checksum = crypto.createHash('sha256').update(fileBuffer).digest('hex')
 

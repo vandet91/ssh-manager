@@ -5,6 +5,17 @@ import { api } from '../api/client'
 
 type DcServer = { id: string; name: string; hostname: string; environment: string; tags?: { domain_name?: string } }
 
+type AuthOption =
+  | { type: 'management'; label: string; user: string }
+  | { type: 'key';  id: string; label: string; user: string }
+  | { type: 'cred'; id: string; label: string; user: string }
+
+type AuthOptions = {
+  management: { user: string } | null
+  keys: { id: string; user: string; keyName: string }[]
+  credentials: { id: string; user: string; label: string; category: string }[]
+}
+
 type DomainUser = {
   samAccountName: string
   displayName: string
@@ -588,7 +599,7 @@ function ConfirmModal({ title, message, confirmLabel, danger, onConfirm, onClose
 
 // ── User Detail Panel ─────────────────────────────────────────────────────────
 
-function UserDetailPanel({ user, serverId }: { user: DomainUser; serverId: string }) {
+function UserDetailPanel({ user, serverId, authQuery }: { user: DomainUser; serverId: string; authQuery: (path: string) => string }) {
   const [detail, setDetail] = useState<UserDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -600,17 +611,17 @@ function UserDetailPanel({ user, serverId }: { user: DomainUser; serverId: strin
   const [actionError, setActionError] = useState('')
 
   useEffect(() => {
-    api.get<UserDetail>(`/domain/${serverId}/user-detail/${user.samAccountName}`)
+    api.get<UserDetail>(authQuery(`/domain/${serverId}/user-detail/${user.samAccountName}`))
       .then(d => setDetail(d))
       .catch(e => setError(e.data?.error ?? 'Failed to load details'))
       .finally(() => setLoading(false))
-  }, [serverId, user.samAccountName])
+  }, [serverId, user.samAccountName]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadGroups = async () => {
     if (groups.length > 0) { setShowAddGroup(true); return }
     setGroupsLoading(true)
     try {
-      const g = await api.get<AdGroup[]>(`/domain/${serverId}/groups`)
+      const g = await api.get<AdGroup[]>(authQuery(`/domain/${serverId}/groups`))
       setGroups(g)
       setShowAddGroup(true)
     } catch { }
@@ -620,7 +631,7 @@ function UserDetailPanel({ user, serverId }: { user: DomainUser; serverId: strin
   const addToGroup = async (groupName: string) => {
     setActionBusy(groupName); setActionError('')
     try {
-      await api.post(`/domain/${serverId}/add-to-group`, { samAccountName: user.samAccountName, groupName })
+      await api.post(authQuery(`/domain/${serverId}/add-to-group`), { samAccountName: user.samAccountName, groupName })
       setDetail(d => d ? { ...d, groups: [...d.groups, { name: groupName, scope: '', category: '' }] } : d)
       setShowAddGroup(false); setGroupSearch('')
     } catch (e: any) { setActionError(e.data?.error ?? 'Failed') }
@@ -630,7 +641,7 @@ function UserDetailPanel({ user, serverId }: { user: DomainUser; serverId: strin
   const removeFromGroup = async (groupName: string) => {
     setActionBusy(groupName); setActionError('')
     try {
-      await api.post(`/domain/${serverId}/remove-from-group`, { samAccountName: user.samAccountName, groupName })
+      await api.post(authQuery(`/domain/${serverId}/remove-from-group`), { samAccountName: user.samAccountName, groupName })
       setDetail(d => d ? { ...d, groups: d.groups.filter(g => g.name !== groupName) } : d)
     } catch (e: any) { setActionError(e.data?.error ?? 'Failed') }
     setActionBusy(null)
@@ -760,8 +771,8 @@ function UserDetailPanel({ user, serverId }: { user: DomainUser; serverId: strin
 
 // ── User Row ──────────────────────────────────────────────────────────────────
 
-function UserRow({ user, serverId, onRefresh }: {
-  user: DomainUser; serverId: string; onRefresh: () => void
+function UserRow({ user, serverId, onRefresh, authQuery }: {
+  user: DomainUser; serverId: string; onRefresh: () => void; authQuery: (path: string) => string
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -776,9 +787,9 @@ function UserRow({ user, serverId, onRefresh }: {
     setBusy(false)
   }
 
-  const unlock = () => action(() => api.post(`/domain/${serverId}/unlock`, { samAccountName: user.samAccountName }))
-  const toggleEnabled = () => action(() => api.post(`/domain/${serverId}/set-enabled`, { samAccountName: user.samAccountName, enabled: !user.enabled }))
-  const toggleNeverExpires = () => action(() => api.post(`/domain/${serverId}/set-password-never-expires`, { samAccountName: user.samAccountName, value: !user.passwordNeverExpires }))
+  const unlock = () => action(() => api.post(authQuery(`/domain/${serverId}/unlock`), { samAccountName: user.samAccountName }))
+  const toggleEnabled = () => action(() => api.post(authQuery(`/domain/${serverId}/set-enabled`), { samAccountName: user.samAccountName, enabled: !user.enabled }))
+  const toggleNeverExpires = () => action(() => api.post(authQuery(`/domain/${serverId}/set-password-never-expires`), { samAccountName: user.samAccountName, value: !user.passwordNeverExpires }))
 
   return (
     <>
@@ -871,7 +882,7 @@ function UserRow({ user, serverId, onRefresh }: {
       {expanded && (
         <tr style={{ borderColor: 'var(--border-weak)' }}>
           <td /> {/* expand toggle column */}
-          <UserDetailPanel user={user} serverId={serverId} />
+          <UserDetailPanel user={user} serverId={serverId} authQuery={authQuery} />
         </tr>
       )}
 
@@ -897,7 +908,7 @@ function UserRow({ user, serverId, onRefresh }: {
 
 // ── Groups Panel ──────────────────────────────────────────────────────────────
 
-function GroupsPanel({ serverId }: { serverId: string }) {
+function GroupsPanel({ serverId, authQuery }: { serverId: string; authQuery: (path: string) => string }) {
   const [groups, setGroups] = useState<AdGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -928,7 +939,7 @@ function GroupsPanel({ serverId }: { serverId: string }) {
   const load = async () => {
     setLoading(true); setError('')
     try {
-      const g = await api.get<AdGroup[]>(`/domain/${serverId}/groups`)
+      const g = await api.get<AdGroup[]>(authQuery(`/domain/${serverId}/groups`))
       setGroups(g)
     } catch (e: any) { setError(e.data?.error ?? 'Failed to load groups') }
     setLoading(false)
@@ -940,7 +951,7 @@ function GroupsPanel({ serverId }: { serverId: string }) {
     if (!newName.trim()) return
     setCreating(true); setCreateError('')
     try {
-      await api.post(`/domain/${serverId}/create-group`, { name: newName.trim(), scope: newScope, description: newDesc.trim() || undefined })
+      await api.post(authQuery(`/domain/${serverId}/create-group`), { name: newName.trim(), scope: newScope, description: newDesc.trim() || undefined })
       setNewName(''); setNewDesc(''); setShowCreate(false)
       await load()
     } catch (e: any) { setCreateError(e.data?.error ?? 'Failed to create group') }
@@ -951,7 +962,7 @@ function GroupsPanel({ serverId }: { serverId: string }) {
     if (deleteInput !== name) return
     setDeleteBusy(true); setDeleteError('')
     try {
-      await api.post(`/domain/${serverId}/delete-group`, { groupName: name })
+      await api.post(authQuery(`/domain/${serverId}/delete-group`), { groupName: name })
       setConfirmDelete(null); setDeleteInput('')
       setGroups(g => g.filter(x => x.name !== name))
       if (expandedGroup === name) setExpandedGroup(null)
@@ -963,7 +974,7 @@ function GroupsPanel({ serverId }: { serverId: string }) {
     if (members[groupName]) return
     setMembersLoading(groupName)
     try {
-      const res = await api.get<{ members: AdGroupMember[] }>(`/domain/${serverId}/group-members?groupName=${encodeURIComponent(groupName)}`)
+      const res = await api.get<{ members: AdGroupMember[] }>(authQuery(`/domain/${serverId}/group-members?groupName=${encodeURIComponent(groupName)}`))
       setMembers(m => ({ ...m, [groupName]: res.members }))
     } catch { setMembers(m => ({ ...m, [groupName]: [] })) }
     setMembersLoading(null)
@@ -977,7 +988,7 @@ function GroupsPanel({ serverId }: { serverId: string }) {
     if (!editGroup) return
     setEditBusy(true); setEditError('')
     try {
-      await api.post(`/domain/${serverId}/update-group`, {
+      await api.post(authQuery(`/domain/${serverId}/update-group`), {
         currentName: editGroup.name,
         newName: editName !== editGroup.name ? editName : undefined,
         description: editDesc,
@@ -1000,7 +1011,7 @@ function GroupsPanel({ serverId }: { serverId: string }) {
     if (!sam) return
     setAddBusy(groupName); setAddError(e => ({ ...e, [groupName]: '' }))
     try {
-      await api.post(`/domain/${serverId}/add-to-group`, { samAccountName: sam, groupName })
+      await api.post(authQuery(`/domain/${serverId}/add-to-group`), { samAccountName: sam, groupName })
       setMembers(m => ({ ...m, [groupName]: [...(m[groupName] ?? []), { samAccountName: sam, name: sam, type: 'user' }] }))
       setAddSam(s => ({ ...s, [groupName]: '' }))
     } catch (e: any) { setAddError(err => ({ ...err, [groupName]: e.data?.error ?? 'Failed' })) }
@@ -1010,7 +1021,7 @@ function GroupsPanel({ serverId }: { serverId: string }) {
   const removeMember = async (groupName: string, sam: string) => {
     setRemoveBusy(sam)
     try {
-      await api.post(`/domain/${serverId}/remove-from-group`, { samAccountName: sam, groupName })
+      await api.post(authQuery(`/domain/${serverId}/remove-from-group`), { samAccountName: sam, groupName })
       setMembers(m => ({ ...m, [groupName]: (m[groupName] ?? []).filter(x => x.samAccountName !== sam) }))
     } catch (e: any) { alert(e.data?.error ?? 'Failed') }
     setRemoveBusy(null)
@@ -1324,6 +1335,8 @@ function GroupsPanel({ serverId }: { serverId: string }) {
 export default function Domain() {
   const [servers, setServers] = useState<DcServer[]>([])
   const [selectedId, setSelectedId] = useState<string>('')
+  const [authOptions, setAuthOptions] = useState<AuthOption[]>([])
+  const [selectedAuth, setSelectedAuth] = useState<string>('management')
   const [tab, setTab] = useState<Tab>('locked')
   const [search, setSearch] = useState('')
   const [ouFilter, setOuFilter] = useState('')
@@ -1336,11 +1349,21 @@ export default function Domain() {
   const [showHealth, setShowHealth] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Build query string for the current auth selection
+  const authQuery = useCallback((base: string): string => {
+    if (selectedAuth === 'management') return base
+    const [type, id] = selectedAuth.split(':')
+    return `${base}${base.includes('?') ? '&' : '?'}auth=${type}&authId=${id}`
+  }, [selectedAuth])
+
+  const domainGet = useCallback((path: string) => api.get<unknown>(authQuery(path)), [authQuery]) as <T>(path: string) => Promise<T>
+  const domainPost = useCallback((path: string, body?: unknown) => api.post<unknown>(authQuery(path), body), [authQuery]) as <T>(path: string, body?: unknown) => Promise<T>
+
   const loadUsers = useCallback(async (serverId: string, currentTab: Tab) => {
     if (!serverId) return
     setLoading(true); setError('')
     try {
-      const res = await api.get<{ users: DomainUser[]; total: number }>(
+      const res = await domainGet<{ users: DomainUser[]; total: number }>(
         `/domain/${serverId}/users?filter=${currentTab}`
       )
       setAllUsers(res.users)
@@ -1353,7 +1376,7 @@ export default function Domain() {
       setAllUsers([])
     }
     setLoading(false)
-  }, [])
+  }, [domainGet]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep a ref so the mount effect always calls the latest version without being in its dep array
   const loadUsersRef = useRef(loadUsers)
@@ -1372,6 +1395,19 @@ export default function Domain() {
       }
     }).catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load auth options when server changes
+  useEffect(() => {
+    if (!selectedId) return
+    setSelectedAuth('management')
+    api.get<AuthOptions>(`/domain/${selectedId}/auth-options`).then(opts => {
+      const options: AuthOption[] = []
+      if (opts.management) options.push({ type: 'management', label: `Management key (${opts.management.user})`, user: opts.management.user })
+      opts.keys.forEach(k => options.push({ type: 'key', id: k.id, label: `SSH Key: ${k.keyName} (${k.user})`, user: k.user }))
+      opts.credentials.forEach(c => options.push({ type: 'cred', id: c.id, label: `Credential: ${c.label} (${c.user})`, user: c.user }))
+      setAuthOptions(options)
+    }).catch(() => {})
+  }, [selectedId])
 
   // Reload when tab or server changes (skip initial empty selectedId)
   useEffect(() => {
@@ -1415,14 +1451,14 @@ export default function Domain() {
     setSessionsLoading(true)
     setSessionsError('')
     try {
-      const res = await api.get<{ sessions: Session[] }>(`/domain/${serverId}/sessions`)
+      const res = await domainGet<{ sessions: Session[] }>(`/domain/${serverId}/sessions`)
       setSessions(res.sessions)
     } catch (err: unknown) {
       setSessionsError((err as Error).message)
     } finally {
       setSessionsLoading(false)
     }
-  }, [])
+  }, [domainGet]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [computers, setComputers] = useState<AdComputer[]>([])
   const [computersLoading, setComputersLoading] = useState(false)
@@ -1438,14 +1474,14 @@ export default function Domain() {
   const loadComputers = useCallback(async (serverId: string) => {
     setComputersLoading(true); setComputersError('')
     try {
-      const res = await api.get<{ computers: AdComputer[] }>(`/domain/${serverId}/computers`)
+      const res = await domainGet<{ computers: AdComputer[] }>(`/domain/${serverId}/computers`)
       setComputers(res.computers)
     } catch (err: unknown) {
       setComputersError((err as Error).message)
     } finally {
       setComputersLoading(false)
     }
-  }, [])
+  }, [domainGet]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const pingAllComputers = useCallback(async (list: AdComputer[]) => {
     const hosts = list.map(c => c.IPv4Address ?? c.DNSHostName ?? c.Name).filter(Boolean) as string[]
@@ -1508,6 +1544,22 @@ export default function Domain() {
                 className="rounded-lg px-3 py-2 text-sm border"
                 style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }}>
                 {servers.map(s => <option key={s.id} value={s.id}>{s.name}{s.tags?.domain_name ? ` — ${s.tags.domain_name}` : ` (${s.hostname})`}</option>)}
+              </select>
+            </div>
+          )}
+          {authOptions.length > 1 && (
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Auth</label>
+              <select value={selectedAuth}
+                onChange={e => setSelectedAuth(e.target.value)}
+                className="rounded-lg px-3 py-2 text-sm border"
+                style={{ background: 'var(--input-bg)', borderColor: 'var(--input-border)', color: 'var(--input-text)' }}>
+                {authOptions.map(o => (
+                  <option key={o.type === 'management' ? 'management' : `${o.type}:${o.id}`}
+                    value={o.type === 'management' ? 'management' : `${o.type}:${o.id}`}>
+                    {o.label}
+                  </option>
+                ))}
               </select>
             </div>
           )}
@@ -1577,7 +1629,7 @@ export default function Domain() {
       </div>
 
       {/* Groups Panel */}
-      {tab === 'groups' && selectedId && <GroupsPanel serverId={selectedId} />}
+      {tab === 'groups' && selectedId && <GroupsPanel serverId={selectedId} authQuery={authQuery} />}
 
       {/* Filters + table (user tabs only) */}
       {tab !== 'groups' && tab !== 'sessions' && tab !== 'computers' && (<>
@@ -1653,7 +1705,7 @@ export default function Domain() {
                   </td></tr>
                 ) : (
                   filteredUsers.map(u => (
-                    <UserRow key={u.samAccountName} user={u} serverId={selectedId} onRefresh={load} />
+                    <UserRow key={u.samAccountName} user={u} serverId={selectedId} onRefresh={load} authQuery={authQuery} />
                   ))
                 )}
               </tbody>
@@ -1796,7 +1848,7 @@ export default function Domain() {
                               onClick={async () => {
                                 setComputerActionBusy(c.Name)
                                 try {
-                                  await api.post(`/domain/${selectedId}/set-computer-enabled`, { name: c.Name, enabled: !c.Enabled })
+                                  await domainPost(`/domain/${selectedId}/set-computer-enabled`, { name: c.Name, enabled: !c.Enabled })
                                   setComputers(prev => prev.map(x => x.Name === c.Name ? { ...x, Enabled: !c.Enabled } : x))
                                 } catch (e: any) { alert(e.data?.error ?? 'Failed') }
                                 setComputerActionBusy(null)
@@ -1853,7 +1905,7 @@ export default function Domain() {
                   if (e.key === 'Enter' && deleteComputerInput === confirmDeleteComputer) {
                     setDeleteComputerBusy(true)
                     try {
-                      await api.post(`/domain/${selectedId}/delete-computer`, { name: confirmDeleteComputer })
+                      await domainPost(`/domain/${selectedId}/delete-computer`, { name: confirmDeleteComputer })
                       setComputers(prev => prev.filter(x => x.Name !== confirmDeleteComputer))
                       setConfirmDeleteComputer(null)
                     } catch (err: any) { setDeleteComputerError(err.data?.error ?? 'Failed') }
@@ -1879,7 +1931,7 @@ export default function Domain() {
                 onClick={async () => {
                   setDeleteComputerBusy(true)
                   try {
-                    await api.post(`/domain/${selectedId}/delete-computer`, { name: confirmDeleteComputer })
+                    await domainPost(`/domain/${selectedId}/delete-computer`, { name: confirmDeleteComputer })
                     setComputers(prev => prev.filter(x => x.Name !== confirmDeleteComputer))
                     setConfirmDeleteComputer(null)
                   } catch (err: any) { setDeleteComputerError(err.data?.error ?? 'Failed') }

@@ -5,150 +5,231 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon } from '@xterm/addon-search'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
-import { api, Server, Assignment, ServerCredential } from '../api/client'
+import { api, Server, Assignment, ServerCredential, distroArtApi, DistroArt } from '../api/client'
 import '@xterm/xterm/css/xterm.css'
 
 const MIN_FONT = 10
 const MAX_FONT = 24
 
-function DistroLogo({ distro, osType }: { distro: string | null | undefined; osType: string | null | undefined }) {
-  const d = distro ?? ''
-  const isWin = osType === 'windows'
+const monoFont = '"JetBrains Mono","Fira Code","Cascadia Code",monospace'
 
-  if (isWin || d.startsWith('windows')) {
-    // Windows logo tiles
+// ─────────────────────────────────────────────────────────────────────────────
+// DISTRO_ART — Edit this section to customise logos.
+//
+//   key   : matches the server's distro / os_id value (lowercase).
+//           Use 'default' as the fallback when no key is found.
+//   art   : array of strings, one per line. All lines should be the same width.
+//   color : hex color for the art.
+//
+// Multi-color logos (windows, centos) are handled as special cases below
+// because they need per-character coloring via JSX spans.
+// ─────────────────────────────────────────────────────────────────────────────
+type ArtDef = { art: string[]; color: string }
+
+const DISTRO_ART: Record<string, ArtDef> = {
+
+  // ── Default / Unknown Linux (Tux-inspired) ────────────────────────────────
+  default: { color: '#94a3b8', art: [
+    '     .---.     ',
+    '    / . . \\    ',
+    '   |       |   ',
+    '   |  ___  |   ',
+    '   | /   \\ |   ',
+    '    \\_____/    ',
+    '  /|       |\\  ',
+    ' /_|_______|_\\ ',
+    '   |       |   ',
+    '   |_______|   ',
+  ]},
+
+  // ── Debian ────────────────────────────────────────────────────────────────
+  debian: { color: '#d40000', art: [
+    '    ████████    ',
+    '  ██        ██  ',
+    ' █   ███████  █ ',
+    ' █  ██         ',
+    ' █   ███████   ',
+    '  ██        ██  ',
+    '    ████████    ',
+  ]},
+
+  // ── Ubuntu ────────────────────────────────────────────────────────────────
+  ubuntu: { color: '#E95420', art: [
+    '    ████████    ',
+    '  ██▄      ▄██  ',
+    ' ██  ██████  ██ ',
+    ' ██ ████████ ██ ',
+    ' ██  ██████  ██ ',
+    '  ██▀      ▀██  ',
+    '    ████████    ',
+  ]},
+
+  // ── RHEL ──────────────────────────────────────────────────────────────────
+  rhel: { color: '#CC0000', art: [
+    '   ██████████   ',
+    '  ██  ███████   ',
+    '  ██  █▀▀▀██   ',
+    '  ██████        ',
+    '  ██  █         ',
+    '  ██  ██        ',
+    '  ██  ████████  ',
+  ]},
+
+  // ── Rocky Linux ───────────────────────────────────────────────────────────
+  rocky: { color: '#10B981', art: [
+    '    ████████    ',
+    '  ██        ██  ',
+    ' ██  ██████  ██ ',
+    ' ██  █▀▀▀▀  ██ ',
+    ' ██  █      ██ ',
+    '  ██        ██  ',
+    '    ████████    ',
+  ]},
+
+  // ── AlmaLinux ─────────────────────────────────────────────────────────────
+  almalinux: { color: '#F4A522', art: [
+    '         ▄      ',
+    '        ███     ',
+    '       █████    ',
+    '      ███████   ',
+    '     ███   ███  ',
+    '    ███     ███ ',
+    '   ███       ███',
+    '  █████████████ ',
+  ]},
+
+  // ── Fedora ────────────────────────────────────────────────────────────────
+  fedora: { color: '#60a5fa', art: [
+    '    ████████    ',
+    '   ███    ███   ',
+    '   ███    ███   ',
+    '  ████████████  ',
+    '   ███          ',
+    '   ███          ',
+    '   ███          ',
+  ]},
+
+  // ── openSUSE ──────────────────────────────────────────────────────────────
+  opensuse: { color: '#73BA25', art: [
+    '    ████████    ',
+    '  ██        ██  ',
+    ' ██  ██████  ██ ',
+    ' ██  ██  ██  ██ ',
+    ' ██  ██████  ██ ',
+    '  ██        ██  ',
+    '    ████████    ',
+  ]},
+
+  // ── Arch Linux ────────────────────────────────────────────────────────────
+  arch: { color: '#1793D1', art: [
+    '        ▲        ',
+    '       ███       ',
+    '      █████      ',
+    '     ███ ███     ',
+    '    ███   ███    ',
+    '   ███     ███   ',
+    '  ███████████████',
+  ]},
+
+  // ── Alpine Linux ──────────────────────────────────────────────────────────
+  alpine: { color: '#0D597F', art: [
+    '       ▄▄        ',
+    '      ████       ',
+    '     ██████      ',
+    '    ████████     ',
+    '   ████  ████    ',
+    '  ████    ████   ',
+    ' ████      ████  ',
+    '████████████████ ',
+  ]},
+
+  // ── Kali Linux ────────────────────────────────────────────────────────────
+  kali: { color: '#267BF0', art: [
+    '   ████████████  ',
+    '  ██          ██ ',
+    '  ██  ███████ ██ ',
+    '  ██  ██      ██ ',
+    '  ██  ███████ ██ ',
+    '  ██          ██ ',
+    '   ████████████  ',
+  ]},
+
+  // ── Proxmox ───────────────────────────────────────────────────────────────
+  proxmox: { color: '#E57000', art: [
+    '  ██████████████ ',
+    '  ██  ██████████ ',
+    '  ██  ██▀▀▀▀██  ',
+    '  ████████▀▀    ',
+    '  ██  ██        ',
+    '  ██  ██        ',
+    '  ████████████  ',
+  ]},
+
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AsciiLogo({ distro, osType, customMap = {} }: {
+  distro: string | null | undefined
+  osType: string | null | undefined
+  customMap?: Record<string, DistroArt>
+}) {
+  const d = (distro ?? '').toLowerCase()
+  const isWin = osType === 'windows' || d === 'windows' || d.startsWith('windows')
+  const isCentos = d === 'centos'
+
+  const preStyle = (color: string): React.CSSProperties => ({
+    fontFamily: monoFont,
+    fontSize: 11,
+    lineHeight: 1.6,
+    color,
+    margin: 0,
+    userSelect: 'none',
+    textAlign: 'center',
+    whiteSpace: 'pre',
+    textShadow: `0 0 16px ${color}44`,
+  })
+
+  // ── Windows: 4-color flag ─────────────────────────────────────────────────
+  if (isWin) {
+    const B = '███████'
     return (
-      <svg width="72" height="72" viewBox="0 0 88 88" fill="none">
-        <rect x="2" y="2" width="40" height="40" rx="3" fill="#f25022"/>
-        <rect x="46" y="2" width="40" height="40" rx="3" fill="#7fba00"/>
-        <rect x="2" y="46" width="40" height="40" rx="3" fill="#00a4ef"/>
-        <rect x="46" y="46" width="40" height="40" rx="3" fill="#ffb900"/>
-      </svg>
-    )
-  }
-  if (d === 'ubuntu') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#E95420"/>
-        <circle cx="50" cy="50" r="20" fill="none" stroke="white" strokeWidth="10"/>
-        <circle cx="50" cy="18" r="9" fill="white"/>
-        <circle cx="78" cy="66" r="9" fill="white"/>
-        <circle cx="22" cy="66" r="9" fill="white"/>
-      </svg>
-    )
-  }
-  if (d === 'debian') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#A81D33"/>
-        <text x="50" y="68" textAnchor="middle" fontSize="60" fill="white" fontFamily="serif">D</text>
-      </svg>
-    )
-  }
-  if (d === 'centos') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <polygon points="50,2 98,50 50,98 2,50" fill="#932279"/>
-        <polygon points="50,2 50,50 2,50" fill="#EF9234"/>
-        <polygon points="98,50 50,50 50,98" fill="#EF9234"/>
-        <polygon points="50,2 98,50 50,50" fill="#fff" opacity="0.15"/>
-        <rect x="35" y="35" width="30" height="30" fill="white"/>
-      </svg>
-    )
-  }
-  if (d === 'rhel') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#CC0000"/>
-        <text x="50" y="62" textAnchor="middle" fontSize="32" fill="white" fontWeight="bold" fontFamily="sans-serif">RHEL</text>
-      </svg>
-    )
-  }
-  if (d === 'rocky') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#10B981"/>
-        <text x="50" y="65" textAnchor="middle" fontSize="38" fill="white" fontWeight="bold" fontFamily="sans-serif">R</text>
-      </svg>
-    )
-  }
-  if (d === 'almalinux') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#F4A522"/>
-        <text x="50" y="65" textAnchor="middle" fontSize="38" fill="white" fontWeight="bold" fontFamily="sans-serif">A</text>
-      </svg>
-    )
-  }
-  if (d === 'fedora') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#294172"/>
-        <text x="50" y="65" textAnchor="middle" fontSize="38" fill="#3C6EB4" fontWeight="bold" fontFamily="sans-serif">f</text>
-        <text x="50" y="65" textAnchor="middle" fontSize="38" fill="white" fontWeight="bold" fontFamily="sans-serif" opacity="0.9">f</text>
-      </svg>
-    )
-  }
-  if (d === 'opensuse') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#73BA25"/>
-        <text x="50" y="65" textAnchor="middle" fontSize="30" fill="white" fontWeight="bold" fontFamily="sans-serif">SUSE</text>
-      </svg>
-    )
-  }
-  if (d === 'arch') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#1793D1"/>
-        <polygon points="50,10 90,85 10,85" fill="none" stroke="white" strokeWidth="8"/>
-        <polygon points="50,32 75,78 25,78" fill="white"/>
-      </svg>
-    )
-  }
-  if (d === 'alpine') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#0D597F"/>
-        <polygon points="50,15 85,80 15,80" fill="white"/>
-        <polygon points="50,38 72,80 28,80" fill="#0D597F"/>
-      </svg>
-    )
-  }
-  if (d === 'kali') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#267BF0"/>
-        <text x="50" y="65" textAnchor="middle" fontSize="30" fill="white" fontWeight="bold" fontFamily="sans-serif">KALI</text>
-      </svg>
-    )
-  }
-  if (d === 'proxmox') {
-    return (
-      <svg width="72" height="72" viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="50" r="48" fill="#E57000"/>
-        <text x="50" y="65" textAnchor="middle" fontSize="26" fill="white" fontWeight="bold" fontFamily="sans-serif">PVE</text>
-      </svg>
+      <pre style={preStyle('#fff')}>
+        <span style={{ color: '#f25022' }}>{B}</span>{'  '}<span style={{ color: '#7fba00' }}>{B}</span>{'\n'}
+        <span style={{ color: '#f25022' }}>{B}</span>{'  '}<span style={{ color: '#7fba00' }}>{B}</span>{'\n'}
+        <span style={{ color: '#f25022' }}>{B}</span>{'  '}<span style={{ color: '#7fba00' }}>{B}</span>{'\n'}
+        {'\n'}
+        <span style={{ color: '#00a4ef' }}>{B}</span>{'  '}<span style={{ color: '#ffb900' }}>{B}</span>{'\n'}
+        <span style={{ color: '#00a4ef' }}>{B}</span>{'  '}<span style={{ color: '#ffb900' }}>{B}</span>{'\n'}
+        <span style={{ color: '#00a4ef' }}>{B}</span>{'  '}<span style={{ color: '#ffb900' }}>{B}</span>
+      </pre>
     )
   }
 
-  // Default: Tux
+  // ── CentOS: 4-color pinwheel ──────────────────────────────────────────────
+  if (isCentos) {
+    const H = '█████'
+    return (
+      <pre style={preStyle('#fff')}>
+        <span style={{ color: '#932279' }}>{H}</span>{'   '}<span style={{ color: '#EF9234' }}>{H}</span>{'\n'}
+        <span style={{ color: '#932279' }}>{H}</span>{'   '}<span style={{ color: '#EF9234' }}>{H}</span>{'\n'}
+        <span style={{ color: '#932279' }}>{H}</span>{'   '}<span style={{ color: '#EF9234' }}>{H}</span>{'\n'}
+        {'     █████     '}{'\n'}
+        <span style={{ color: '#89D44B' }}>{H}</span>{'   '}<span style={{ color: '#CC0000' }}>{H}</span>{'\n'}
+        <span style={{ color: '#89D44B' }}>{H}</span>{'   '}<span style={{ color: '#CC0000' }}>{H}</span>{'\n'}
+        <span style={{ color: '#89D44B' }}>{H}</span>{'   '}<span style={{ color: '#CC0000' }}>{H}</span>
+      </pre>
+    )
+  }
+
+  // ── Lookup: custom DB entry → hardcoded DISTRO_ART → 'default' ───────────
+  const custom = customMap[d] ?? customMap['default']
+  const base = DISTRO_ART[d] ?? DISTRO_ART.default
+  const art = custom ? custom.art_lines : base.art
+  const color = custom ? custom.color : base.color
   return (
-    <svg width="72" height="86" viewBox="0 0 80 96" fill="none">
-      <ellipse cx="40" cy="68" rx="28" ry="26" fill="#1a1a1a"/>
-      <ellipse cx="40" cy="72" rx="18" ry="18" fill="#f5f0e0"/>
-      <ellipse cx="40" cy="28" rx="22" ry="22" fill="#1a1a1a"/>
-      <ellipse cx="40" cy="30" rx="14" ry="14" fill="#f5f0e0"/>
-      <circle cx="34" cy="25" r="3.5" fill="white"/>
-      <circle cx="46" cy="25" r="3.5" fill="white"/>
-      <circle cx="34.8" cy="25" r="2" fill="#1a1a1a"/>
-      <circle cx="46.8" cy="25" r="2" fill="#1a1a1a"/>
-      <ellipse cx="40" cy="34" rx="6" ry="4" fill="#f4a020"/>
-      <ellipse cx="30" cy="92" rx="10" ry="5" fill="#f4a020"/>
-      <ellipse cx="50" cy="92" rx="10" ry="5" fill="#f4a020"/>
-      <ellipse cx="14" cy="68" rx="8" ry="18" fill="#1a1a1a" transform="rotate(-10 14 68)"/>
-      <ellipse cx="66" cy="68" rx="8" ry="18" fill="#1a1a1a" transform="rotate(10 66 68)"/>
-    </svg>
+    <pre style={preStyle(color)}>
+      {art.join('\n')}
+    </pre>
   )
 }
 const DEFAULT_FONT = 14
@@ -210,6 +291,7 @@ export default function Terminal() {
   const [cmdCat, setCmdCat] = useState('All')
   const [cmdSearch, setCmdSearch] = useState('')
   const [linuxNotes, setLinuxNotes] = useState<{id:string,type:string,device_type?:string,name:string,content?:string}[]>([])
+  const [customDistroArt, setCustomDistroArt] = useState<Record<string, DistroArt>>({})
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]
   const activeServerOs = servers.find(s => s.id === activeTab?.selectedServer)?.os_type
@@ -240,9 +322,11 @@ export default function Terminal() {
     Promise.all([
       api.get<Server[]>('/servers').catch(() => [] as Server[]),
       api.get<Assignment[]>('/assignments').catch(() => [] as Assignment[]),
-    ]).then(([allServers, assigns]) => {
+      distroArtApi.list().catch(() => [] as DistroArt[]),
+    ]).then(([allServers, assigns, artList]) => {
       setAssignments(assigns)
       setServers(allServers.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))
+      setCustomDistroArt(Object.fromEntries(artList.map(a => [a.key, a])))
     })
   }, [])
 
@@ -933,28 +1017,39 @@ export default function Terminal() {
                 <>
                   {/* OS Logo */}
                   <div style={{ marginBottom: 20 }}>
-                    <DistroLogo distro={connectedServer.distro} osType={connectedServer.os_type} />
+                    <AsciiLogo distro={connectedServer.distro} osType={connectedServer.os_type} customMap={customDistroArt} />
                   </div>
 
                   {/* Server info */}
                   <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {/* Server name */}
-                    <div style={{ textAlign: 'center', marginBottom: 4 }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: '#e5e7eb', marginBottom: 2 }}>{connectedServer.name}</div>
-                      <div style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace' }}>{connectedServer.hostname}</div>
-                    </div>
-
                     <div style={{ height: 1, background: '#1f2937', margin: '2px 0' }} />
 
                     {/* OS */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontSize: 11, color: '#6b7280' }}>OS</span>
                       <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 500 }}>
-                        {connectedServer.distro
-                          ? connectedServer.distro.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-                          : isWin ? 'Windows' : 'Linux'}
+                        {connectedServer.os_pretty_name || connectedServer.os_name ||
+                          (connectedServer.distro
+                            ? connectedServer.distro.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                            : isWin ? 'Windows' : 'Linux')}
                       </span>
                     </div>
+
+                    {/* Version */}
+                    {connectedServer.os_version && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: '#6b7280' }}>Version</span>
+                        <span style={{ fontSize: 11, color: '#9ca3af' }}>{connectedServer.os_version}</span>
+                      </div>
+                    )}
+
+                    {/* Kernel */}
+                    {connectedServer.kernel_version && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: '#6b7280' }}>Kernel</span>
+                        <span style={{ fontSize: 11, color: '#9ca3af', fontFamily: 'monospace', textAlign: 'right', maxWidth: 160, wordBreak: 'break-all' }}>{connectedServer.kernel_version}</span>
+                      </div>
+                    )}
 
                     {/* User */}
                     {activeTab?.selectedUser && (
@@ -964,13 +1059,6 @@ export default function Terminal() {
                       </div>
                     )}
 
-                    {/* SSH Key */}
-                    {activeTab?.usedKey && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: 11, color: '#6b7280' }}>Key</span>
-                        <span style={{ fontSize: 11, color: activeTab.usedKey.startsWith('⚠') ? '#fbbf24' : '#4ade80', fontFamily: 'monospace', maxWidth: 160, textAlign: 'right', wordBreak: 'break-all' }}>{activeTab.usedKey}</span>
-                      </div>
-                    )}
 
                     {/* Session time */}
                     {activeTab && activeTab.sessionSeconds > 0 && (

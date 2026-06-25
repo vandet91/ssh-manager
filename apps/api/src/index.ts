@@ -35,6 +35,7 @@ import psexecRoutes from './modules/psexec/psexec.routes'
 import dbConnectorRoutes from './modules/db-connector/db-connector.routes'
 import dbAnalysisRoutes from './modules/db-connector/db-analysis.routes'
 import diagramRoutes from './modules/diagrams/diagrams.routes'
+import distroArtRoutes from './modules/distro-art/distro-art.routes'
 import networkProfileRoutes from './modules/servers/network-profile.routes'
 import snmpProfileRoutes from './modules/servers/snmp-profiles.routes'
 import networkPingRoutes from './modules/servers/network-ping.routes'
@@ -158,6 +159,7 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(dbConnectorRoutes)
   await fastify.register(dbAnalysisRoutes)
   await fastify.register(diagramRoutes)
+  await fastify.register(distroArtRoutes)
   await fastify.register(networkProfileRoutes)
   await fastify.register(snmpProfileRoutes)
   await fastify.register(networkPingRoutes)
