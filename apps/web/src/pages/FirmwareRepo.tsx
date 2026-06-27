@@ -619,90 +619,238 @@ function OsHealthTab({ servers }: { servers: Server[] }) {
 
 // ── TFTP Guide Tab ────────────────────────────────────────────────────────────
 
+const VENDOR_GUIDES: {
+  vendor: string
+  icon: string
+  color: string
+  entries: { model: string; notes: string; cmd: (ip: string) => string }[]
+}[] = [
+  {
+    vendor: 'Cisco', icon: '🔵', color: '#60a5fa',
+    entries: [
+      {
+        model: 'IOS / IOS-XE (ISR, Catalyst 2960/3750/9xxx)',
+        notes: 'Copies firmware to flash then reloads. Replace filename with your .bin.',
+        cmd: ip => `copy tftp://${ip}/firmware/cisco/isr4321/isr4321-universalk9.17.06.06.SPA.bin flash:\nverify flash:isr4321-universalk9.17.06.06.SPA.bin\nboot system flash:isr4321-universalk9.17.06.06.SPA.bin\nwrite memory\nreload`,
+      },
+      {
+        model: 'IOS-XR (ASR 9000, NCS)',
+        notes: 'Installs a package from TFTP. Adjust pkg name accordingly.',
+        cmd: ip => `install add source tftp://${ip}/firmware/cisco/asr9k/ asr9k-mini-x64-7.7.1.iso\ninstall activate pkg asr9k-mini-x64-7.7.1\ninstall commit`,
+      },
+      {
+        model: 'NX-OS (Nexus 5k/7k/9k)',
+        notes: 'Copy image to bootflash then set as boot variable.',
+        cmd: ip => `copy tftp://${ip}/firmware/cisco/nexus9k/nxos64-cs.10.3.1.F.bin bootflash:\nboot nxos bootflash:nxos64-cs.10.3.1.F.bin\ncopy running-config startup-config\nreload`,
+      },
+    ],
+  },
+  {
+    vendor: 'MikroTik', icon: '🟤', color: '#fb923c',
+    entries: [
+      {
+        model: 'RouterOS (all RB series)',
+        notes: '/tool fetch downloads the package to the router root; update install applies it on next reboot.',
+        cmd: ip => `/tool fetch address=${ip} src-path=/firmware/mikrotik/rb750gr3/routeros-7.11.2-mipsbe.npk dst-path=/routeros-7.11.2-mipsbe.npk\n/system package update install`,
+      },
+      {
+        model: 'RouterOS — upgrade via URL (v7.1+)',
+        notes: 'Alternative: use the full URL form which avoids specifying address separately.',
+        cmd: ip => `/tool fetch url="tftp://${ip}/firmware/mikrotik/rb750gr3/routeros-7.11.2-mipsbe.npk" dst-path=/routeros-7.11.2-mipsbe.npk\n/system reboot`,
+      },
+    ],
+  },
+  {
+    vendor: 'Fortinet FortiGate', icon: '🔴', color: '#f87171',
+    entries: [
+      {
+        model: 'FortiGate (all models, FortiOS 6.x / 7.x)',
+        notes: 'Format: execute restore image tftp <filename> <tftp-server-ip>. File must be a valid .out image for your model.',
+        cmd: ip => `execute restore image tftp FGT_60E-v7.2.5.F-build1517-FORTINET.out ${ip}`,
+      },
+      {
+        model: 'FortiSwitch',
+        notes: 'Uses the same restore image command pattern.',
+        cmd: ip => `execute restore image tftp FS_108E-v7.2.5-build0453-FORTINET.out ${ip}`,
+      },
+    ],
+  },
+  {
+    vendor: 'Juniper', icon: '🟢', color: '#34d399',
+    entries: [
+      {
+        model: 'Junos (EX, SRX, MX, QFX)',
+        notes: 'request system software add fetches and installs. reboot is required after.',
+        cmd: ip => `request system software add tftp://${ip}/firmware/juniper/ex2300/junos-arm-32-20.4R3-S6.2.tgz\nrequest system reboot`,
+      },
+      {
+        model: 'Junos — package validate first (recommended)',
+        notes: 'Validate before installing to catch model/version mismatches.',
+        cmd: ip => `request system software validate tftp://${ip}/firmware/juniper/srx300/junos-srxsme-21.4R1.12.tgz\nrequest system software add tftp://${ip}/firmware/juniper/srx300/junos-srxsme-21.4R1.12.tgz\nrequest system reboot`,
+      },
+    ],
+  },
+  {
+    vendor: 'Ubiquiti', icon: '⚪', color: '#94a3b8',
+    entries: [
+      {
+        model: 'AirOS (NanoStation, Rocket, Bullet)',
+        notes: 'SSH to device then run the upgrade command with the TFTP URL.',
+        cmd: ip => `upgrade tftp://${ip}/firmware/ubiquiti/nanostation-m5/XM.v6.3.12.32834.200508.1754.bin`,
+      },
+      {
+        model: 'UniFi Access Points (AirOS-based, legacy)',
+        notes: 'upgrade command works on UniFi APs running AirOS firmware via SSH.',
+        cmd: ip => `upgrade tftp://${ip}/firmware/ubiquiti/unifi-ap-ac-pro/BZ.mt7621_5.43.36.12539.bin`,
+      },
+      {
+        model: 'EdgeRouter (EdgeOS)',
+        notes: 'EdgeOS uses add system image, not upgrade. After add, reboot to apply.',
+        cmd: ip => `add system image tftp://${ip}/firmware/ubiquiti/edgerouter-4/ER-e200.v2.0.9.5344684.tar\nreboot`,
+      },
+    ],
+  },
+  {
+    vendor: 'HPE Aruba', icon: '🟠', color: '#fb923c',
+    entries: [
+      {
+        model: 'ArubaOS Switch (2530, 2930, 3810, 5400)',
+        notes: 'Copy to secondary flash, then set boot-source and reboot.',
+        cmd: ip => `copy tftp flash ${ip} /firmware/aruba/2930f/WC_16_10_0011.swi secondary\nboot set-default flash secondary\nreload`,
+      },
+      {
+        model: 'HP Comware-based (A-series / V1910 / 5120)',
+        notes: 'Comware uses a different syntax: tftp get then boot-loader.',
+        cmd: ip => `tftp ${ip} get /firmware/aruba/v1910/V1910-CMW520-R1514.bin\nboot-loader file flash:/V1910-CMW520-R1514.bin main\nreboot`,
+      },
+    ],
+  },
+  {
+    vendor: 'Huawei', icon: '🔶', color: '#fbbf24',
+    entries: [
+      {
+        model: 'VRP (CloudEngine, AR, S-series switches)',
+        notes: 'tftp downloads to flash, startup system-software sets the boot image.',
+        cmd: ip => `tftp ${ip} get /firmware/huawei/s5735/S5735-L-V200R022C00SPC500.cc\nstartup system-software flash:/S5735-L-V200R022C00SPC500.cc\nreboot`,
+      },
+    ],
+  },
+  {
+    vendor: 'H3C / HP FlexNetwork', icon: '🟡', color: '#facc15',
+    entries: [
+      {
+        model: 'Comware 7 (S5130, S6520, MSR)',
+        notes: 'tftp get downloads the image; boot-loader applies it on next reboot.',
+        cmd: ip => `tftp ${ip} get /firmware/h3c/s5130/s5130ei-cmw710-r3506p04.ipe\nboot-loader file flash:/s5130ei-cmw710-r3506p04.ipe main\nreboot`,
+      },
+    ],
+  },
+  {
+    vendor: 'Palo Alto', icon: '🟣', color: '#a78bfa',
+    entries: [
+      {
+        model: 'PAN-OS (PA-series, VM-Series)',
+        notes: 'Palo Alto does not support TFTP for upgrades. Use SCP or the web UI.',
+        cmd: _ip => `# Palo Alto does not support TFTP firmware upgrades.\n# Use SCP instead:\nscp import software from admin@<linux-host>:/path/to/PanOS_800-10.1.11.tgz\n\n# Or via web UI: Device → Software → Download & Install`,
+      },
+    ],
+  },
+  {
+    vendor: 'pfSense / OPNsense', icon: '🔷', color: '#38bdf8',
+    entries: [
+      {
+        model: 'pfSense / OPNsense (FreeBSD-based)',
+        notes: 'These firewalls do not support TFTP upgrades. Use their built-in web updater.',
+        cmd: _ip => `# pfSense: System → Update → System Update (web UI)\n# OPNsense: System → Firmware → Updates (web UI)\n\n# For offline upgrade, download the .img.gz or .iso from netgate.com / opnsense.org\n# and upload via: Diagnostics → Command Prompt → or SCP to /tmp/`,
+      },
+    ],
+  },
+]
+
 function TftpGuideTab() {
   const serverIp = window.location.hostname
+  const [openVendor, setOpenVendor] = useState<string | null>('Cisco')
+  const [copied, setCopied] = useState<string | null>(null)
 
-  const code = (s: string) => (
-    <div style={{ fontFamily: 'monospace', fontSize: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-med)', borderRadius: 6, padding: '8px 12px', margin: '6px 0 12px', whiteSpace: 'pre', overflowX: 'auto', color: 'var(--text-secondary)' }}>
-      {s}
-    </div>
-  )
-
-  const section = (title: string, desc: string, children: React.ReactNode) => (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{title}</div>
-      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>{desc}</div>
-      {children}
-    </div>
-  )
+  const copyCmd = (key: string, text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(key)
+      setTimeout(() => setCopied(null), 1800)
+    })
+  }
 
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
         <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>TFTP Server Guide</h2>
         <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-          TFTP server runs at <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{serverIp}:69</strong> (UDP). Firmware goes to <code>firmware/</code>, device-pushed configs go to <code>configs/</code>.
+          TFTP server address: <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{serverIp}</strong> port <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>69/UDP</strong>.
+          Replace filenames in the commands below with your actual firmware filename from the Firmware Library tab.
         </p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-        {/* Left — Pull firmware to device */}
-        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-med)', borderRadius: 10, padding: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14, color: '#60a5fa' }}>📥 Download Firmware to Device</div>
-
-          {section('Cisco IOS / IOS-XE', 'Copy firmware from TFTP to flash:', code(
-            `copy tftp://[${serverIp}]/firmware/cisco/isr4321/17.3.6_isr4321.bin flash:`
-          ))}
-
-          {section('MikroTik RouterOS', 'Upload package via TFTP:', code(
-            `/tool fetch address=${serverIp} src-path=firmware/mikrotik/rb750gr3/routeros-7.x.npk dst-path=/\n/system package update install`
-          ))}
-
-          {section('Fortinet FortiGate', 'Execute firmware upgrade via TFTP:', code(
-            `execute restore image tftp routeros.out ${serverIp}`
-          ))}
-
-          {section('Ubiquiti / UniFi', 'SSH then upgrade via TFTP URL:', code(
-            `upgrade tftp://${serverIp}/firmware/ubiquiti/ap-ac-pro/6.6.55.bin`
-          ))}
-
-          {section('HPE Aruba Switch', 'Copy firmware to secondary flash:', code(
-            `copy tftp flash ${serverIp} firmware/aruba/2930f/WC_16_10_0011.swi secondary`
-          ))}
+      {/* Info bar */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+        <div style={{ padding: '12px 16px', background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 8, fontSize: 12, lineHeight: 1.7 }}>
+          <strong style={{ color: '#34d399' }}>📋 Config Backups</strong> are pulled by SSH Manager directly — no device commands needed.
+          Go to <strong>Config Backups</strong> tab → select device → <strong>Pull Backup</strong>.
         </div>
-
-        {/* Right — Config backup */}
-        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-med)', borderRadius: 10, padding: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: '#34d399' }}>📋 Config Backup</div>
-          <div style={{ fontSize: 12, padding: '10px 14px', background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 8, marginBottom: 16, lineHeight: 1.6 }}>
-            <strong>TFTP write is disabled.</strong> Config backups are pulled by SSH Manager directly — no commands needed on the device. Go to <strong>Config Backups</strong> tab → select a device → click <strong>Pull Backup</strong>.
-          </div>
-
-          {section('Why SSH pull instead of TFTP push?', 'Security and simplicity:', <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.8 }}>
-            <li>TFTP has no authentication — anyone on the network can read pushed configs</li>
-            <li>Config files contain sensitive data (passwords, PSKs, secrets)</li>
-            <li>SSH pull uses your existing management keys — no extra device config needed</li>
-            <li>Configs are stored server-side and only accessible via authenticated API</li>
-          </ul>)}
-
-          {section('If a device must push its own backup (advanced):', 'Use SCP or SFTP to the SSH Manager host instead:', code(
-            `# From device (if SCP-capable)\nscp running-config.cfg admin@${serverIp}:/path/to/backup/`
-          ))}
+        <div style={{ padding: '12px 16px', background: 'var(--bg-surface)', border: '1px solid var(--border-med)', borderRadius: 8, fontSize: 12, lineHeight: 1.7 }}>
+          <strong>📁 TFTP root path:</strong><br />
+          <code style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>firmware/&lt;vendor&gt;/&lt;model&gt;/&lt;file&gt;</code><br />
+          e.g. <code style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>firmware/cisco/isr4321/isr4321-universalk9.17.06.06.SPA.bin</code>
         </div>
       </div>
 
-      <div style={{ marginTop: 20, padding: 14, background: 'var(--bg-surface)', border: '1px solid var(--border-med)', borderRadius: 10, fontSize: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>📁 File Layout on TFTP Server</div>
-        <pre style={{ margin: 0, color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>
-{`/tftp-root/
-  firmware/
-    <vendor>/<model>/
-      <version>_<filename>.bin     ← uploaded via Firmware Library tab
-  configs/
-    <server-id>/
-      2026-06-21T12-00-00.cfg      ← SSH-pulled by SSH Manager
-      2026-06-22T02-00-00.cfg      ← or device-pushed via TFTP PUT`}
-        </pre>
+      {/* Vendor accordion */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {VENDOR_GUIDES.map(vg => {
+          const open = openVendor === vg.vendor
+          return (
+            <div key={vg.vendor} style={{ border: `1px solid ${open ? vg.color + '44' : 'var(--border-med)'}`, borderRadius: 10, overflow: 'hidden', background: 'var(--bg-surface)', transition: 'border-color 0.15s' }}>
+              {/* Header */}
+              <button onClick={() => setOpenVendor(open ? null : vg.vendor)}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: open ? `${vg.color}10` : 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+                <span style={{ fontSize: 18 }}>{vg.icon}</span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: open ? vg.color : 'var(--text-primary)' }}>{vg.vendor}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{vg.entries.length} model{vg.entries.length !== 1 ? 's' : ''}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 4 }}>{open ? '▲' : '▼'}</span>
+              </button>
+
+              {/* Body */}
+              {open && (
+                <div style={{ borderTop: `1px solid ${vg.color}33`, padding: 16, display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  {vg.entries.map((entry, ei) => {
+                    const cmdText = entry.cmd(serverIp)
+                    const copyKey = `${vg.vendor}-${ei}`
+                    return (
+                      <div key={ei}>
+                        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 2, color: 'var(--text-primary)' }}>{entry.model}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>{entry.notes}</div>
+                        <div style={{ position: 'relative' }}>
+                          <div style={{ fontFamily: 'monospace', fontSize: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-med)', borderRadius: 6, padding: '8px 40px 8px 12px', whiteSpace: 'pre', overflowX: 'auto', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                            {cmdText}
+                          </div>
+                          <button onClick={() => copyCmd(copyKey, cmdText)}
+                            style={{ position: 'absolute', top: 6, right: 6, padding: '3px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border-med)', background: copied === copyKey ? 'rgba(52,211,153,0.15)' : 'var(--bg-panel)', color: copied === copyKey ? '#34d399' : 'var(--text-muted)', cursor: 'pointer' }}>
+                            {copied === copyKey ? '✓ Copied' : 'Copy'}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Footer note */}
+      <div style={{ marginTop: 16, padding: '10px 14px', background: 'var(--bg-surface)', border: '1px solid var(--border-med)', borderRadius: 8, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.7 }}>
+        <strong style={{ color: 'var(--text-secondary)' }}>Note:</strong> Always verify the firmware filename matches the exact file uploaded in the Firmware Library tab.
+        Replace <code style={{ fontFamily: 'monospace' }}>&lt;model&gt;</code> subdirectory paths to match your vendor/model names as entered during upload.
+        TFTP has no authentication — ensure firewall rules restrict port 69/UDP to trusted management VLANs only.
       </div>
     </div>
   )

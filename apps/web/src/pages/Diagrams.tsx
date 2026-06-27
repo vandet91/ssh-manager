@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   mdiRouter, mdiSwitch, mdiServer, mdiServerNetwork,
@@ -221,37 +221,94 @@ function drawNode(ctx: CanvasRenderingContext2D, n: DiagramNode, isSelected: boo
   ctx.restore()
 }
 
+// Returns the point on the border of node `from` in the direction of node `to`
+function getEdgePt(from: DiagramNode, to: DiagramNode) {
+  const dx = to.x - from.x, dy = to.y - from.y
+  if (dx === 0 && dy === 0) return { x: from.x, y: from.y }
+  const hw = from.w / 2, hh = from.h / 2
+  const t = Math.min(hw / Math.abs(dx || 1e-9), hh / Math.abs(dy || 1e-9))
+  return { x: from.x + dx * t, y: from.y + dy * t }
+}
+
 function drawEdge(ctx: CanvasRenderingContext2D, e: DiagramEdge, nodes: DiagramNode[], isSelected: boolean) {
   const a = nodes.find(n => n.id === e.from), b = nodes.find(n => n.id === e.to)
   if (!a || !b) return
   const ct = CONN_TYPES.find(c => c.type === e.type) || CONN_TYPES[0]
+  const p1 = getEdgePt(a, b), p2 = getEdgePt(b, a)
+
+  // Bezier control points: tangents follow each node's exit direction
+  const tension = Math.min(Math.hypot(p2.x - p1.x, p2.y - p1.y) * 0.45, 120)
+  const a1Dx = p1.x - a.x, a1Dy = p1.y - a.y, a1D = Math.hypot(a1Dx, a1Dy) || 1
+  const b2Dx = p2.x - b.x, b2Dy = p2.y - b.y, b2D = Math.hypot(b2Dx, b2Dy) || 1
+  const cp1x = p1.x + (a1Dx / a1D) * tension, cp1y = p1.y + (a1Dy / a1D) * tension
+  const cp2x = p2.x + (b2Dx / b2D) * tension, cp2y = p2.y + (b2Dy / b2D) * tension
+
   ctx.save()
-  ctx.strokeStyle = ct.color
-  ctx.lineWidth = isSelected ? 2.5 : 1.5
+  ctx.strokeStyle = isSelected ? '#fff' : ct.color
+  ctx.lineWidth = isSelected ? 2.5 : 1.8
   ctx.setLineDash(ct.dash)
-  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
+  ctx.shadowColor = isSelected ? ct.color : 'transparent'
+  ctx.shadowBlur = isSelected ? 6 : 0
+  ctx.beginPath()
+  ctx.moveTo(p1.x, p1.y)
+  ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
+  ctx.stroke()
   ctx.setLineDash([])
-  // speed/label
+  ctx.shadowBlur = 0
+
+  // Arrowheads
+  const arrowStyle = e.arrows ?? 'forward'
+  const arrowColor = isSelected ? '#fff' : ct.color
+  const as = 9
+
+  function drawArrow(tx: number, ty: number, angle: number) {
+    ctx.save()
+    ctx.fillStyle = arrowColor
+    ctx.translate(tx, ty)
+    ctx.rotate(angle)
+    ctx.beginPath()
+    ctx.moveTo(0, 0)
+    ctx.lineTo(-as, -as * 0.42)
+    ctx.lineTo(-as, as * 0.42)
+    ctx.closePath()
+    ctx.fill()
+    ctx.restore()
+  }
+
+  if (arrowStyle === 'forward' || arrowStyle === 'both') {
+    drawArrow(p2.x, p2.y, Math.atan2(p2.y - cp2y, p2.x - cp2x))
+  }
+  if (arrowStyle === 'both') {
+    drawArrow(p1.x, p1.y, Math.atan2(p1.y - cp1y, p1.x - cp1x))
+  }
+
+  // Label
   if (e.label) {
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
-    ctx.font = '10px Segoe UI, sans-serif'; ctx.textAlign = 'center'
+    const lx = (p1.x + p2.x) / 2, ly = (p1.y + p2.y) / 2
+    ctx.font = '10px Segoe UI, sans-serif'
+    ctx.textAlign = 'center'
+    const tw = ctx.measureText(e.label).width
     ctx.fillStyle = '#0d1117'
-    ctx.fillRect(mx - 26, my - 8, 52, 14)
+    ctx.fillRect(lx - tw / 2 - 4, ly - 9, tw + 8, 14)
     ctx.fillStyle = ct.color
-    ctx.fillText(e.label, mx, my + 2)
+    ctx.fillText(e.label, lx, ly + 1)
   }
   ctx.restore()
 }
 
 interface GridOptions { bg: string; lineColor: string; size: number; show: boolean }
 
-function drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number, opts: GridOptions) {
+function drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number, opts: GridOptions, panX = 0, panY = 0, scale = 1) {
   ctx.fillStyle = opts.bg
   ctx.fillRect(0, 0, W, H)
   if (!opts.show || opts.size < 4) return
+  const step = opts.size * scale
+  if (step < 4) return
+  const ox = ((panX % step) + step) % step
+  const oy = ((panY % step) + step) % step
   ctx.save(); ctx.strokeStyle = opts.lineColor; ctx.lineWidth = 1
-  for (let x = 0; x < W; x += opts.size) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke() }
-  for (let y = 0; y < H; y += opts.size) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke() }
+  for (let x = ox - step; x < W + step; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke() }
+  for (let y = oy - step; y < H + step; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke() }
   ctx.restore()
 }
 
@@ -299,6 +356,20 @@ export default function Diagrams() {
   const [connectFrom, setConnectFrom] = useState<DiagramNode | null>(null)
   const draggingRef = useRef<DiagramNode | null>(null)
   const dragOffRef = useRef({ x: 0, y: 0 })
+  const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
+  const multiSelectedRef = useRef<Set<string>>(new Set())
+  const multiDragOffsetsRef = useRef<Map<string, { ox: number; oy: number }>>(new Map())
+  const nodesRef = useRef<DiagramNode[]>([])
+  useEffect(() => { nodesRef.current = nodes }, [nodes])
+  const [canvasCursor, setCanvasCursor] = useState<string>('default')
+
+  // Pan & zoom
+  const panRef = useRef({ x: 0, y: 0 })
+  const scaleRef = useRef(1)
+  const [displayScale, setDisplayScale] = useState(1)   // for toolbar display only
+  const isPanningRef = useRef(false)
+  const panStartRef = useRef({ mx: 0, my: 0, px: 0, py: 0 })
+  const spaceDownRef = useRef(false)
 
   const [servers, setServers] = useState<Server[]>([])
   const [serverSearch, setServerSearch] = useState('')
@@ -333,17 +404,57 @@ export default function Diagrams() {
     const canvas = canvasRef.current, wrap = wrapRef.current
     if (!canvas || !wrap) return
     const W = wrap.clientWidth, H = wrap.clientHeight
-    canvas.width = W; canvas.height = H
+    if (canvas.width !== W) canvas.width = W
+    if (canvas.height !== H) canvas.height = H
     const ctx = canvas.getContext('2d')!
+    const { x: px, y: py } = panRef.current
+    const sc = scaleRef.current
     ctx.clearRect(0, 0, W, H)
-    drawGrid(ctx, W, H, { bg: canvasBg, lineColor: gridColor, size: gridSize, show: showGrid })
-    nodes.filter(n => ZONE_TYPES.has(n.type) || n.isZone).forEach(n => drawNode(ctx, n, selected?.id === n.id, connectFrom?.id === n.id))
+    drawGrid(ctx, W, H, { bg: canvasBg, lineColor: gridColor, size: gridSize, show: showGrid }, px, py, sc)
+    ctx.save()
+    ctx.translate(px, py)
+    ctx.scale(sc, sc)
+    nodes.filter(n => ZONE_TYPES.has(n.type) || n.isZone).forEach(n => drawNode(ctx, n, selected?.id === n.id || multiSelectedRef.current.has(n.id), connectFrom?.id === n.id))
     edges.forEach(e => drawEdge(ctx, e, nodes, selectedEdge?.id === e.id))
-    nodes.filter(n => !ZONE_TYPES.has(n.type) && !n.isZone).forEach(n => drawNode(ctx, n, selected?.id === n.id, connectFrom?.id === n.id))
-  }, [nodes, edges, selected, selectedEdge, connectFrom, canvasBg, gridColor, gridSize, showGrid])
+    nodes.filter(n => !ZONE_TYPES.has(n.type) && !n.isZone).forEach(n => drawNode(ctx, n, selected?.id === n.id || multiSelectedRef.current.has(n.id), connectFrom?.id === n.id))
+    ctx.restore()
+  }, [nodes, edges, selected, selectedEdge, connectFrom, multiSelected, canvasBg, gridColor, gridSize, showGrid])
 
-  useEffect(() => { draw() }, [draw])
-  useEffect(() => { const h = () => draw(); window.addEventListener('resize', h); return () => window.removeEventListener('resize', h) }, [draw])
+  // Keep a ref so pan/zoom handlers always call the latest draw (avoids stale closures)
+  const drawRef = useRef(draw)
+  useEffect(() => { drawRef.current = draw }, [draw])
+
+  // Redraw after every render so the canvas is always in sync with React state
+  // Use draw directly (not drawRef) — drawRef is updated in useEffect which runs after useLayoutEffect
+  useLayoutEffect(() => { draw() })
+
+  useEffect(() => {
+    const wrap = wrapRef.current; if (!wrap) return
+    const ro = new ResizeObserver(() => requestAnimationFrame(() => drawRef.current()))
+    ro.observe(wrap)
+    return () => ro.disconnect()
+  }, [])
+
+  // Non-passive wheel listener — React's synthetic onWheel is passive and cannot preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const handler = (e: WheelEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const r = canvas.getBoundingClientRect()
+      const sx = e.clientX - r.left, sy = e.clientY - r.top
+      const oldSc = scaleRef.current
+      const newSc = Math.min(4, Math.max(0.15, oldSc * (e.deltaY > 0 ? 0.92 : 1.085)))
+      const ratio = newSc / oldSc
+      panRef.current = { x: sx - (sx - panRef.current.x) * ratio, y: sy - (sy - panRef.current.y) * ratio }
+      scaleRef.current = newSc
+      setDisplayScale(newSc)
+      drawRef.current()
+    }
+    canvas.addEventListener('wheel', handler, { passive: false })
+    return () => canvas.removeEventListener('wheel', handler)
+  }, [])
 
   // ── Diagram CRUD ──────────────────────────────────────────────────────────
 
@@ -366,7 +477,11 @@ export default function Diagrams() {
   async function saveDiagram() {
     if (!activeDiagram) return
     setSaving(true)
-    try { await api.patch(`/diagrams/${activeDiagram.id}`, { name: diagramName, data: { nodes, edges } }); setDirty(false); loadList() }
+    try {
+      await api.patch(`/diagrams/${activeDiagram.id}`, { name: diagramName, data: { nodes, edges } })
+      setDirty(false)
+      setDiagrams(prev => prev.map(d => d.id === activeDiagram.id ? { ...d, name: diagramName } : d))
+    }
     finally { setSaving(false) }
   }
 
@@ -403,10 +518,11 @@ export default function Diagrams() {
   }
 
   function deleteSelected() {
-    if (selected) {
-      setEdges(prev => prev.filter(e => e.from !== selected.id && e.to !== selected.id))
-      setNodes(prev => prev.filter(n => n.id !== selected.id))
-      setSelected(null); setDirty(true)
+    const ids = new Set([...multiSelectedRef.current, ...(selected ? [selected.id] : [])])
+    if (ids.size > 0) {
+      setEdges(prev => prev.filter(e => !ids.has(e.from) && !ids.has(e.to)))
+      setNodes(prev => prev.filter(n => !ids.has(n.id)))
+      setSelected(null); setMultiSelected(new Set()); multiSelectedRef.current = new Set(); setDirty(true)
     } else if (selectedEdge) {
       setEdges(prev => prev.filter(e => e.id !== selectedEdge.id))
       setSelectedEdge(null); setDirty(true)
@@ -415,9 +531,89 @@ export default function Diagrams() {
 
   // ── Canvas events ─────────────────────────────────────────────────────────
 
-  function onMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+  // ── Canvas coordinate helpers ─────────────────────────────────────────────
+
+  function canvasPt(clientX: number, clientY: number) {
     const r = canvasRef.current!.getBoundingClientRect()
-    const x = e.clientX - r.left, y = e.clientY - r.top
+    return {
+      x: (clientX - r.left - panRef.current.x) / scaleRef.current,
+      y: (clientY - r.top  - panRef.current.y) / scaleRef.current,
+    }
+  }
+
+  function applyZoom(delta: number, cx: number, cy: number) {
+    const canvas = canvasRef.current; if (!canvas) return
+    const r = canvas.getBoundingClientRect()
+    const sx = cx - r.left, sy = cy - r.top
+    const oldSc = scaleRef.current
+    const newSc = Math.min(4, Math.max(0.15, oldSc * (delta > 0 ? 0.92 : 1.085)))
+    const ratio = newSc / oldSc
+    panRef.current = { x: sx - (sx - panRef.current.x) * ratio, y: sy - (sy - panRef.current.y) * ratio }
+    scaleRef.current = newSc
+    setDisplayScale(newSc)
+    drawRef.current()
+  }
+
+  function fitToScreen() {
+    if (nodes.length === 0) { panRef.current = { x: 0, y: 0 }; scaleRef.current = 1; setDisplayScale(1); drawRef.current(); return }
+    const wrap = wrapRef.current!
+    const W = wrap.clientWidth, H = wrap.clientHeight
+    const xs = nodes.flatMap(n => [n.x - n.w / 2, n.x + n.w / 2])
+    const ys = nodes.flatMap(n => [n.y - n.h / 2, n.y + n.h / 2])
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys)
+    const pad = 60
+    const sc = Math.min(4, Math.max(0.15, Math.min((W - pad * 2) / (maxX - minX || 1), (H - pad * 2) / (maxY - minY || 1))))
+    panRef.current = { x: W / 2 - ((minX + maxX) / 2) * sc, y: H / 2 - ((minY + maxY) / 2) * sc }
+    scaleRef.current = sc; setDisplayScale(sc); drawRef.current()
+  }
+
+  function startPan(clientX: number, clientY: number) {
+    isPanningRef.current = true
+    panStartRef.current = { mx: clientX, my: clientY, px: panRef.current.x, py: panRef.current.y }
+    setCanvasCursor('grabbing')
+    const onMove = (ev: MouseEvent) => {
+      panRef.current = { x: panStartRef.current.px + (ev.clientX - panStartRef.current.mx), y: panStartRef.current.py + (ev.clientY - panStartRef.current.my) }
+      drawRef.current()
+    }
+    const onUp = () => {
+      isPanningRef.current = false
+      setCanvasCursor('default')
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  function startDrag() {
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return
+      const { x, y } = canvasPt(ev.clientX, ev.clientY)
+      const offsets = multiDragOffsetsRef.current
+      if (offsets.size > 1) {
+        setNodes(prev => prev.map(n => { const off = offsets.get(n.id); return off ? { ...n, x: x - off.ox, y: y - off.oy } : n }))
+      } else {
+        const id = draggingRef.current!.id
+        setNodes(prev => prev.map(n => n.id === id ? { ...n, x: x - dragOffRef.current.x, y: y - dragOffRef.current.y } : n))
+      }
+      setDirty(true)
+    }
+    const onUp = () => {
+      draggingRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  function onMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+    e.preventDefault() // prevent browser scroll-to-focus on canvas click
+    if (e.button === 1 || (e.button === 0 && spaceDownRef.current)) {
+      startPan(e.clientX, e.clientY); return
+    }
+    if (e.button !== 0) return
+    const { x, y } = canvasPt(e.clientX, e.clientY)
     const hit = hitTest(x, y)
     if (connecting) {
       if (hit) {
@@ -431,26 +627,45 @@ export default function Diagrams() {
       return
     }
     if (hit) {
-      setSelected(hit); setSelectedEdge(null)
-      draggingRef.current = hit
-      dragOffRef.current = { x: x - hit.x, y: y - hit.y }
-      setRightTab('props')
+      if (e.ctrlKey || e.metaKey) {
+        setMultiSelected(prev => {
+          const next = new Set(prev)
+          if (next.has(hit.id)) next.delete(hit.id); else next.add(hit.id)
+          multiSelectedRef.current = next
+          return next
+        })
+        setSelected(hit); setSelectedEdge(null)
+      } else {
+        const inMulti = multiSelectedRef.current.has(hit.id) && multiSelectedRef.current.size > 1
+        if (!inMulti) {
+          const s = new Set([hit.id]); setMultiSelected(s); multiSelectedRef.current = s
+        }
+        setSelected(hit); setSelectedEdge(null)
+        draggingRef.current = hit
+        dragOffRef.current = { x: x - hit.x, y: y - hit.y }
+        const ids = inMulti ? [...multiSelectedRef.current] : [hit.id]
+        const offsets = new Map<string, { ox: number; oy: number }>()
+        ids.forEach(id => { const n = nodesRef.current.find(nd => nd.id === id); if (n) offsets.set(id, { ox: x - n.x, oy: y - n.y }) })
+        multiDragOffsetsRef.current = offsets
+        setRightTab('props')
+        startDrag()
+      }
     } else {
-      setSelected(null); setSelectedEdge(null)
+      if (!e.ctrlKey && !e.metaKey) {
+        setSelected(null); setSelectedEdge(null)
+        setMultiSelected(new Set()); multiSelectedRef.current = new Set()
+      }
+      startPan(e.clientX, e.clientY)
     }
   }
 
   function onMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
-    if (!draggingRef.current) return
-    const r = canvasRef.current!.getBoundingClientRect()
-    const id = draggingRef.current.id
-    const x = e.clientX - r.left - dragOffRef.current.x
-    const y = e.clientY - r.top - dragOffRef.current.y
-    setNodes(prev => prev.map(n => n.id === id ? { ...n, x, y } : n))
-    setDirty(true)
+    if (isPanningRef.current || draggingRef.current) return
+    const { x, y } = canvasPt(e.clientX, e.clientY)
+    const hit = hitTest(x, y)
+    setCanvasCursor(connecting ? 'crosshair' : hit ? 'pointer' : 'grab')
   }
 
-  function onMouseUp() { draggingRef.current = null }
 
   function onCanvasDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
@@ -458,8 +673,8 @@ export default function Diagrams() {
     const serverId = e.dataTransfer.getData('server-id')
     const serverName = e.dataTransfer.getData('server-name')
     if (!type && !serverId) return
-    const r = wrapRef.current!.getBoundingClientRect()
-    addNode(serverId ? 'server' : type, e.clientX - r.left, e.clientY - r.top, serverId || undefined, serverName || undefined)
+    const { x, y } = canvasPt(e.clientX, e.clientY)
+    addNode(serverId ? 'server' : type, x, y, serverId || undefined, serverName || undefined)
   }
 
   // ── Keyboard ──────────────────────────────────────────────────────────────
@@ -473,20 +688,60 @@ export default function Diagrams() {
       if (e.key === 'Escape') { setConnecting(false); setConnectFrom(null) }
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveDiagram() }
     }
+    function onKeyUp(e: KeyboardEvent) { if (e.key === ' ') spaceDownRef.current = false }
+    function onSpace(e: KeyboardEvent) { if (e.key === ' ') { e.preventDefault(); spaceDownRef.current = true } }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onSpace)
+    window.addEventListener('keyup', onKeyUp)
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keydown', onSpace); window.removeEventListener('keyup', onKeyUp) }
   }, [activeDiagram, selected, selectedEdge, nodes, edges, diagramName])
 
   // ── Export ────────────────────────────────────────────────────────────────
 
   function exportPNG() {
-    const a = document.createElement('a'); a.download = `${diagramName || 'diagram'}.png`
-    a.href = canvasRef.current!.toDataURL(); a.click()
+    const canvas = canvasRef.current; if (!canvas) return
+    // Save current view
+    const savedPan = { ...panRef.current }
+    const savedScale = scaleRef.current
+    // Fit all nodes into view for export
+    fitToScreen()
+    // Capture after fit (fitToScreen draws synchronously via drawRef)
+    canvas.toBlob(blob => {
+      if (!blob) return
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.download = `${diagramName || 'diagram'}.png`; a.href = url
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      // Restore previous view
+      panRef.current = savedPan; scaleRef.current = savedScale
+      setDisplayScale(savedScale); drawRef.current()
+    }, 'image/png')
   }
+  function exportPDF() {
+    const canvas = canvasRef.current; if (!canvas) return
+    const savedPan = { ...panRef.current }
+    const savedScale = scaleRef.current
+    fitToScreen()
+    canvas.toBlob(blob => {
+      if (!blob) return
+      const url = URL.createObjectURL(blob)
+      const win = window.open('', '_blank')
+      if (win) {
+        win.document.write(`<!DOCTYPE html><html><head><title>${diagramName || 'Diagram'}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0d1117;display:flex;align-items:center;justify-content:center;min-height:100vh}img{max-width:100%;height:auto}@media print{body{background:#fff}img{width:100%;height:auto;page-break-inside:avoid}}</style></head><body><img src="${url}"/><script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`)
+        win.document.close()
+      }
+      panRef.current = savedPan; scaleRef.current = savedScale
+      setDisplayScale(savedScale); drawRef.current()
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+    }, 'image/png')
+  }
+
   function exportJSON() {
     const blob = new Blob([JSON.stringify({ nodes, edges }, null, 2)], { type: 'application/json' })
-    const a = document.createElement('a'); a.download = `${diagramName || 'diagram'}.json`
-    a.href = URL.createObjectURL(blob); a.click()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.download = `${diagramName || 'diagram'}.json`; a.href = url
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   // ── Palette filtering ─────────────────────────────────────────────────────
@@ -509,7 +764,7 @@ export default function Diagrams() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', gap: 0 }}>
+    <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', gap: 0 }}>
 
       {/* ── Diagram list sidebar ── */}
       <div style={{ width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-panel)', borderRight: '1px solid var(--border-med)' }}>
@@ -566,25 +821,36 @@ export default function Diagrams() {
             <button style={connecting ? { ...btn, borderColor: '#f0883e', color: '#f0883e', background: '#f0883e20' } : btn}
               onClick={() => { setConnecting(v => !v); setConnectFrom(null) }}>🔗 Connect</button>
             <button style={btn} onClick={() => { setSelected(null); setSelectedEdge(null); setConnecting(false); setConnectFrom(null) }}>✕ Deselect</button>
+            <div style={{ width: 1, height: 22, background: 'var(--border)' }} />
+            {/* Zoom controls */}
+            <button style={btn} onClick={() => applyZoom(1, (wrapRef.current?.clientWidth ?? 400) / 2, (wrapRef.current?.clientHeight ?? 300) / 2)}>−</button>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 38, textAlign: 'center' }}>{Math.round(displayScale * 100)}%</span>
+            <button style={btn} onClick={() => applyZoom(-1, (wrapRef.current?.clientWidth ?? 400) / 2, (wrapRef.current?.clientHeight ?? 300) / 2)}>+</button>
+            <button style={btn} onClick={fitToScreen} title="Fit all nodes to screen">⊡ Fit</button>
             <div style={{ flex: 1 }} />
             <button style={btnPri} onClick={saveDiagram} disabled={saving}>{saving ? 'Saving…' : '💾 Save'}</button>
             <button style={btn} onClick={exportPNG}>⬇ PNG</button>
             <button style={btn} onClick={exportJSON}>⬇ JSON</button>
-            <button style={btn} onClick={() => window.print()}>🖨 PDF</button>
+            <button style={btn} onClick={exportPDF}>🖨 PDF</button>
           </div>
 
           <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
             {/* ── Canvas ── */}
-            <div ref={wrapRef} style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: connecting ? 'crosshair' : 'default' }}
+            <div ref={wrapRef}
+              style={{ flex: 1, position: 'relative', overflow: 'hidden', cursor: canvasCursor }}
               onDragOver={e => e.preventDefault()} onDrop={onCanvasDrop}>
-              <canvas ref={canvasRef} onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
+              <canvas ref={canvasRef} onMouseDown={onMouseDown} onMouseMove={onMouseMove}
+                onContextMenu={e => e.preventDefault()}
                 style={{ display: 'block', position: 'absolute', top: 0, left: 0 }} />
               {connecting && (
                 <div style={{ position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', background: '#f0883e15', border: '1px solid #f0883e', borderRadius: 6, padding: '4px 14px', fontSize: 12, color: '#f0883e', pointerEvents: 'none' }}>
                   {connectFrom ? `Click target to connect from "${connectFrom.label}"` : 'Click source device'}
                 </div>
               )}
+              <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', fontSize: 10, color: 'rgba(255,255,255,0.2)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+                Scroll to zoom · Space+drag or middle-click to pan
+              </div>
             </div>
 
             {/* ── Right panel ── */}
@@ -737,8 +1003,15 @@ export default function Diagrams() {
                                       style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 9, padding: '1px 2px', borderRadius: 4 }}>
                                       {CONN_TYPES.map(c => <option key={c.type} value={c.type}>{c.label}</option>)}
                                     </select>
+                                    <select value={e.arrows ?? 'forward'} onChange={ev => { setEdges(p => p.map(ed => ed.id === e.id ? { ...ed, arrows: ev.target.value as any } : ed)); setDirty(true) }}
+                                      title="Arrow style"
+                                      style={{ background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 9, padding: '1px 2px', borderRadius: 4 }}>
+                                      <option value="none">──</option>
+                                      <option value="forward">──▶</option>
+                                      <option value="both">◀──▶</option>
+                                    </select>
                                     <input value={e.label || ''} placeholder="label" onChange={ev => { setEdges(p => p.map(ed => ed.id === e.id ? { ...ed, label: ev.target.value } : ed)); setDirty(true) }}
-                                      style={{ width: 44, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 9, padding: '1px 3px', borderRadius: 4 }} />
+                                      style={{ width: 36, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 9, padding: '1px 3px', borderRadius: 4 }} />
                                     <button onClick={() => { setEdges(p => p.filter(ed => ed.id !== e.id)); setDirty(true) }} style={{ background: 'none', border: 'none', color: '#f85149', cursor: 'pointer', fontSize: 12, padding: 0 }}>✕</button>
                                   </div>
                                 )

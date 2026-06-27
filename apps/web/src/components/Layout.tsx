@@ -9,28 +9,42 @@ import RemoteDesktopPage from '../pages/RemoteDesktopPage'
 const PERSISTENT_ROUTES = ['/terminal', '/remote-desktop']
 
 // adminOnly: visible to admin only; operatorOk: visible to both admin and operator
-const nav: { to: string; label: string; icon: string; adminOnly?: boolean }[] = [
-  { to: '/dashboard',       label: 'Dashboard',         icon: '▣' },
-  { to: '/servers',         label: 'Servers',           icon: '◫' },
-  { to: '/keys',            label: 'Keys',              icon: '⚷' },
-  { to: '/assignments',     label: 'Assignments',       icon: '⊞',  adminOnly: true },
-  { to: '/network-devices', label: 'Network Devices',   icon: '🌐' },
-  { to: '/share',           label: 'Share',             icon: '🔗',  adminOnly: true },
-  { to: '/commands',        label: 'Commands',          icon: '📚', adminOnly: true },
-  { to: '/vault',           label: 'Vault',             icon: '🔐' },
-  { to: '/domain',          label: 'Domain',            icon: '🏢' },
-  { to: '/psexec',          label: 'Remote Exec',       icon: '⚡', adminOnly: true },
-  { to: '/db-connector',    label: 'DB Connector',      icon: '🗄' },
-  { to: '/diagrams',        label: 'Diagrams',          icon: '📐' },
-  { to: '/firmware-repo',   label: 'Firmware & Backup', icon: '💾' },
-  { to: '/network-scan',    label: 'Network Scanner',   icon: '🔍' },
-  { to: '/terminal',        label: 'Terminal',          icon: '⌨' },
-  { to: '/remote-desktop',  label: 'Remote Desktop',    icon: '🖥' },
-  { to: '/logs',            label: 'Logs',              icon: '≡',  adminOnly: true },
-  { to: '/migration',       label: 'Migration',         icon: '⇄',  adminOnly: true },
-  { to: '/filemanager',     label: 'File Manager',      icon: '⊟' },
-  { to: '/users',           label: 'Users',             icon: '◉',  adminOnly: true },
-  { to: '/settings',        label: 'Settings',          icon: '⚙',  adminOnly: true },
+const nav: { to: string; label: string; icon: string; adminOnly?: boolean; group?: string }[] = [
+  // ── Overview
+  { to: '/dashboard',       label: 'Dashboard',         icon: '▣',  group: 'Overview' },
+
+  // ── Access
+  { to: '/terminal',        label: 'Terminal',          icon: '⌨',  group: 'Access' },
+  { to: '/remote-desktop',  label: 'Remote Desktop',    icon: '🖥',  group: 'Access' },
+  { to: '/filemanager',     label: 'File Manager',      icon: '⊟',  group: 'Access' },
+  { to: '/psexec',          label: 'Remote Exec',       icon: '⚡',  group: 'Access',  adminOnly: true },
+
+  // ── Infrastructure
+  { to: '/servers',         label: 'Servers',           icon: '◫',  group: 'Infrastructure' },
+  { to: '/network-devices', label: 'Network Devices',   icon: '🌐',  group: 'Infrastructure' },
+  { to: '/domain',          label: 'Domain',            icon: '🏢',  group: 'Infrastructure' },
+
+  // ── Security & Keys
+  { to: '/keys',            label: 'Keys',              icon: '⚷',  group: 'Security' },
+  { to: '/vault',           label: 'Vault',             icon: '🔐',  group: 'Security' },
+  { to: '/security',        label: 'Security',          icon: '🛡',  group: 'Security', adminOnly: true },
+  { to: '/assignments',     label: 'Assignments',       icon: '⊞',  group: 'Security', adminOnly: true },
+
+  // ── Tools
+  { to: '/db-connector',    label: 'DB Connector',      icon: '🗄',  group: 'Tools' },
+  { to: '/network-scan',    label: 'Network Scanner',   icon: '🔍',  group: 'Tools' },
+  { to: '/diagrams',        label: 'Diagrams',          icon: '📐',  group: 'Tools' },
+  { to: '/docs',            label: 'Documentation',     icon: '📖',  group: 'Tools' },
+  { to: '/tasks',           label: 'Tasks',             icon: '📋',  group: 'Tools' },
+  { to: '/commands',        label: 'Commands',          icon: '⌘',   group: 'Tools',   adminOnly: true },
+  { to: '/share',           label: 'Share',             icon: '🔗',  group: 'Tools',   adminOnly: true },
+  { to: '/firmware-repo',   label: 'Firmware & Backup', icon: '💾',  group: 'Tools' },
+
+  // ── Admin
+  { to: '/users',           label: 'Users',             icon: '◉',  group: 'Admin', adminOnly: true },
+  { to: '/logs',            label: 'Logs',              icon: '≡',  group: 'Admin', adminOnly: true },
+  { to: '/migration',       label: 'Migration',         icon: '⇄',  group: 'Admin', adminOnly: true },
+  { to: '/settings',        label: 'Settings',          icon: '⚙',  group: 'Admin', adminOnly: true },
 ]
 
 interface Props {
@@ -59,7 +73,7 @@ export default function Layout({ user, onLogout, themeName, setThemeName, themeM
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-body)' }}>
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--bg-body)' }}>
 
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
       <aside style={{
@@ -149,31 +163,49 @@ export default function Layout({ user, onLogout, themeName, setThemeName, themeM
         </div>
 
         {/* Nav */}
-        <nav style={{ flex: 1, padding: '8px', display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto' }}>
-          {visibleNav.map(({ to, label, icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              style={({ isActive }) => ({
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '7px 12px',
-                borderRadius: 6,
-                fontSize: 13,
-                fontWeight: isActive ? 500 : 400,
-                textDecoration: 'none',
-                transition: 'background 0.1s',
-                background: isActive ? 'var(--sidebar-active-bg)' : 'transparent',
-                borderLeft: isActive ? `3px solid var(--sidebar-active-border)` : '3px solid transparent',
-                paddingLeft: isActive ? 9 : 12,
-                color: isActive ? 'var(--sidebar-active-text)' : 'var(--sidebar-text)',
-              })}
-            >
-              <span style={{ width: 16, textAlign: 'center', fontSize: 12, flexShrink: 0 }}>{icon}</span>
-              <span>{label}</span>
-            </NavLink>
-          ))}
+        <nav style={{ flex: 1, padding: '8px', display: 'flex', flexDirection: 'column', gap: 1, overflowY: 'auto' }}>
+          {(() => {
+            const items: React.ReactNode[] = []
+            let lastGroup = ''
+            for (const { to, label, icon, group } of visibleNav) {
+              if (group && group !== lastGroup) {
+                if (lastGroup) items.push(<div key={`sep-${group}`} style={{ height: 1, background: 'var(--sidebar-border)', margin: '5px 4px 4px' }} />)
+                items.push(
+                  <p key={`grp-${group}`} style={{
+                    fontSize: 10, fontWeight: 600, letterSpacing: '0.08em',
+                    textTransform: 'uppercase', color: 'var(--sidebar-text)',
+                    opacity: 0.4, padding: '4px 12px 2px', margin: 0,
+                  }}>{group}</p>
+                )
+                lastGroup = group
+              }
+              items.push(
+                <NavLink
+                  key={to}
+                  to={to}
+                  style={({ isActive }) => ({
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '7px 12px',
+                    borderRadius: 6,
+                    fontSize: 13,
+                    fontWeight: isActive ? 500 : 400,
+                    textDecoration: 'none',
+                    transition: 'background 0.1s',
+                    background: isActive ? 'var(--sidebar-active-bg)' : 'transparent',
+                    borderLeft: isActive ? `3px solid var(--sidebar-active-border)` : '3px solid transparent',
+                    paddingLeft: isActive ? 9 : 12,
+                    color: isActive ? 'var(--sidebar-active-text)' : 'var(--sidebar-text)',
+                  })}
+                >
+                  <span style={{ width: 16, textAlign: 'center', fontSize: 12, flexShrink: 0 }}>{icon}</span>
+                  <span>{label}</span>
+                </NavLink>
+              )
+            }
+            return items
+          })()}
         </nav>
 
         {/* User footer */}

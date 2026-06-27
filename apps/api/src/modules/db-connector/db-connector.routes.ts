@@ -11,6 +11,7 @@ export type DbType = 'postgresql' | 'mysql' | 'sqlite' | 'mongodb' | 'mssql'
 export interface DbConnection {
   id: string
   server_id: string | null
+  vault_id: string | null
   name: string
   db_type: DbType
   host: string
@@ -24,6 +25,8 @@ export interface DbConnection {
   created_by: string | null
   created_at: Date
   updated_at: Date
+  // Runtime-only: resolved plain-text password (from vault or password_enc)
+  password_plain?: string
 }
 
 const DEFAULT_PORTS: Record<DbType, number> = {
@@ -35,18 +38,35 @@ const DEFAULT_PORTS: Record<DbType, number> = {
 }
 
 const ConnBody = z.object({
-  server_id:     z.string().uuid().nullable().optional(),
-  name:          z.string().min(1).max(128),
-  db_type:       z.enum(['postgresql', 'mysql', 'sqlite', 'mongodb', 'mssql']),
-  host:          z.string().min(1).max(256).default('127.0.0.1'),
-  port:          z.number().int().min(0).max(65535).optional(),
-  database_name: z.string().max(256).default(''),
-  db_user:       z.string().max(128).optional(),
-  password:      z.string().optional(),
+  server_id:      z.string().uuid().nullable().optional(),
+  vault_id:       z.string().uuid().nullable().optional(),
+  name:           z.string().min(1).max(128),
+  db_type:        z.enum(['postgresql', 'mysql', 'sqlite', 'mongodb', 'mssql']),
+  host:           z.string().min(1).max(256).default('127.0.0.1'),
+  port:           z.number().int().min(0).max(65535).optional(),
+  database_name:  z.string().max(256).default(''),
+  db_user:        z.string().max(128).optional(),
+  password:       z.string().optional(),
   use_ssh_tunnel: z.boolean().default(false),
-  ssl_enabled:   z.boolean().default(false),
-  notes:         z.string().max(2000).optional(),
+  ssl_enabled:    z.boolean().default(false),
+  notes:          z.string().max(2000).optional(),
 })
+
+async function withResolvedPassword(conn: DbConnection): Promise<DbConnection> {
+  const vaultKey = getVaultKey()
+  if (conn.vault_id) {
+    const vaultEntry = await (db as any)
+      .selectFrom('vault_entries')
+      .select(['password_enc'])
+      .where('id', '=', conn.vault_id)
+      .executeTakeFirst()
+    if (vaultEntry?.password_enc)
+      return { ...conn, password_plain: decryptSecret(vaultEntry.password_enc, vaultKey) }
+  }
+  if (conn.password_enc)
+    return { ...conn, password_plain: decryptSecret(conn.password_enc, vaultKey) }
+  return conn
+}
 
 export function applyTunnelOverride(conn: DbConnection, override?: boolean): DbConnection {
   if (override === undefined || override === null) return conn
@@ -74,11 +94,13 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     const qb = (db as any)
       .selectFrom('db_connections as c')
       .leftJoin('servers as s', 's.id', 'c.server_id')
+      .leftJoin('vault_entries as v', 'v.id', 'c.vault_id')
       .select([
-        'c.id', 'c.server_id', 'c.name', 'c.db_type', 'c.host', 'c.port',
+        'c.id', 'c.server_id', 'c.vault_id', 'c.name', 'c.db_type', 'c.host', 'c.port',
         'c.database_name', 'c.db_user', 'c.use_ssh_tunnel', 'c.ssl_enabled',
         'c.notes', 'c.owner_id', 'c.is_shared', 'c.created_at', 'c.updated_at',
         's.name as server_name', 's.hostname as server_hostname',
+        'v.title as vault_title',
       ])
       .orderBy('c.created_at', 'desc')
     return { connections: await qb.execute() }
@@ -111,7 +133,8 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     const port = body.port ?? DEFAULT_PORTS[body.db_type]
 
     const row = await (db as any).insertInto('db_connections').values({
-      server_id: serverId, name: body.name, db_type: body.db_type,
+      server_id: serverId, vault_id: body.vault_id ?? null,
+      name: body.name, db_type: body.db_type,
       host: body.host, port, database_name: body.database_name,
       db_user: body.db_user ?? null, password_enc,
       use_ssh_tunnel: body.use_ssh_tunnel, ssl_enabled: body.ssl_enabled,
@@ -138,6 +161,7 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     const vaultKey = getVaultKey()
     const updates: any = { updated_at: new Date() }
     if (body.server_id !== undefined) updates.server_id = body.server_id
+    if (body.vault_id !== undefined) updates.vault_id = body.vault_id ?? null
     if (body.name !== undefined) updates.name = body.name
     if (body.db_type !== undefined) updates.db_type = body.db_type
     if (body.host !== undefined) updates.host = body.host
@@ -169,7 +193,7 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     const { use_ssh_tunnel } = z.object({ use_ssh_tunnel: z.boolean().optional() }).parse(req.body ?? {})
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
     if (!connRaw) return reply.code(404).send({ error: 'Connection not found' })
-    const conn = applyTunnelOverride(connRaw, use_ssh_tunnel)
+    const conn = applyTunnelOverride(await withResolvedPassword(connRaw), use_ssh_tunnel)
 
     try {
       const testSql: Record<DbType, string> = {
@@ -198,7 +222,7 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
 
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
     if (!connRaw) return reply.code(404).send({ error: 'Connection not found' })
-    const conn = applyTunnelOverride(connRaw, use_ssh_tunnel)
+    const conn = applyTunnelOverride(await withResolvedPassword(connRaw), use_ssh_tunnel)
 
     let result: any = null
     let queryError: string | null = null
@@ -238,7 +262,8 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     const { tunnel } = z.object({ tunnel: z.string().optional() }).parse(req.query)
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
     if (!connRaw) return reply.code(404).send({ error: 'Connection not found' })
-    const conn = tunnel !== undefined ? applyTunnelOverride(connRaw, tunnel === 'true') : connRaw
+    const resolved = await withResolvedPassword(connRaw)
+    const conn = tunnel !== undefined ? applyTunnelOverride(resolved, tunnel === 'true') : resolved
 
     try {
       return await getSchema(conn)
@@ -252,7 +277,8 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
     const { tunnel } = z.object({ tunnel: z.string().optional() }).parse(req.query)
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
     if (!connRaw) return reply.code(404).send({ error: 'Connection not found' })
-    const conn = tunnel !== undefined ? applyTunnelOverride(connRaw, tunnel === 'true') : connRaw
+    const resolved2 = await withResolvedPassword(connRaw)
+    const conn = tunnel !== undefined ? applyTunnelOverride(resolved2, tunnel === 'true') : resolved2
 
     try {
       return await getTableColumns(conn, table)
@@ -274,7 +300,7 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
 
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
     if (!connRaw) return reply.code(404).send({ error: 'Connection not found' })
-    const conn = applyTunnelOverride(connRaw, use_ssh_tunnel)
+    const conn = applyTunnelOverride(await withResolvedPassword(connRaw), use_ssh_tunnel)
 
     try {
       const whereStr = where_clause ? ` WHERE ${where_clause}` : ''
@@ -340,12 +366,12 @@ export default async function dbConnectorRoutes(fastify: FastifyInstance): Promi
 
     const connRaw = await (db as any).selectFrom('db_connections').selectAll().where('id', '=', id).executeTakeFirst() as DbConnection
     if (!connRaw) return reply.code(404).send({ error: 'Connection not found' })
-    const conn = applyTunnelOverride(connRaw, use_ssh_tunnel)
+    const conn = applyTunnelOverride(await withResolvedPassword(connRaw), use_ssh_tunnel)
 
     const { withServerSsh } = await import('../../utils/server-ssh')
     const { sshExec } = await import('../../utils/ssh')
 
-    const password = conn.password_enc ? decryptSecret(conn.password_enc, getVaultKey()) : ''
+    const password = conn.password_plain ?? (conn.password_enc ? decryptSecret(conn.password_enc, getVaultKey()) : '')
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     const defaultPath = `/tmp/${conn.database_name || 'backup'}_${ts}`
 

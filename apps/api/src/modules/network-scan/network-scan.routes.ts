@@ -105,7 +105,7 @@ const SMART_APPLIANCE_DEFINITIVE_PORTS = new Set([9999, 6668, 6666, 4455, 55443,
 
 // ── CIDR/range parser ─────────────────────────────────────────────────────────
 
-function parseTargets(input: string): string[] {
+function parseSingleTarget(input: string): string[] {
   input = input.trim()
 
   if (input.includes('/')) {
@@ -151,6 +151,17 @@ function parseTargets(input: string): string[] {
   }
 
   return [input]
+}
+
+function parseTargets(input: string): string[] {
+  // Split on whitespace or commas, parse each token individually, flatten
+  const tokens = input.trim().split(/[\s,]+/).filter(Boolean)
+  if (tokens.length > 1) {
+    const all: string[] = []
+    for (const token of tokens) all.push(...parseSingleTarget(token))
+    return all
+  }
+  return parseSingleTarget(input)
 }
 
 // ── Concurrency semaphore ─────────────────────────────────────────────────────

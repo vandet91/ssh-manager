@@ -200,7 +200,7 @@ function AddModal({ host, onClose, onDone }: { host: ScanHost; onClose: () => vo
 
 // ── Host row ─────────────────────────────────────────────────────────────────
 
-function HostRow({ host, onAdd }: { host: ScanHost; onAdd: () => void }) {
+function HostRow({ host, onAdd, knownServer }: { host: ScanHost; onAdd: () => void; knownServer?: { name: string } }) {
   const [expanded, setExpanded] = useState(false)
   const criticalCount = host.open_ports.filter(p => p.risk === 'critical' || p.risk === 'high').length
 
@@ -246,10 +246,16 @@ function HostRow({ host, onAdd }: { host: ScanHost; onAdd: () => void }) {
                 ⚠ {criticalCount} risk
               </span>
             )}
-            <button onClick={e => { e.stopPropagation(); onAdd() }}
-              style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-              + Add
-            </button>
+            {knownServer ? (
+              <span title={`Already in system as "${knownServer.name}"`} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: '1px solid rgba(59,130,246,0.4)', background: 'rgba(59,130,246,0.1)', color: '#60a5fa', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                ✓ {knownServer.name}
+              </span>
+            ) : (
+              <button onClick={e => { e.stopPropagation(); onAdd() }}
+                style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                + Add
+              </button>
+            )}
           </div>
         </td>
       </tr>
@@ -309,12 +315,35 @@ export default function NetworkScan() {
   const [aliveCount, setAliveCount] = useState(0)
   const [err, setErr]           = useState('')
   const [addHost, setAddHost]   = useState<ScanHost | null>(null)
-  const [history, setHistory]   = useState<any[]>([])
-  const [sortBy, setSortBy]     = useState<'ip' | 'ports' | 'risk'>('ip')
-  const esRef                   = useRef<EventSource | null>(null)
+  const [history, setHistory]       = useState<any[]>([])
+  const [sortBy, setSortBy]         = useState<'ip' | 'ports' | 'risk'>('ip')
+  const [knownIps, setKnownIps]     = useState<Record<string, string>>({})
+  const [systemServers, setSystemServers] = useState<{ id: string; name: string; hostname: string }[]>([])
+  const [serverSearch, setServerSearch]   = useState('')
+  const [showServerPicker, setShowServerPicker] = useState(false)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  const esRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
     api.get<any[]>('/network-scan').then(setHistory).catch(() => {})
+    api.get<{ id: string; name: string; hostname: string }[]>('/servers').then(list => {
+      // Deduplicate by hostname
+      const seen = new Set<string>()
+      const unique = list.filter(s => { const k = s.hostname?.split(':')[0]; return k && !seen.has(k) && seen.add(k) })
+      setSystemServers(unique)
+      const map: Record<string, string> = {}
+      for (const s of unique) { const h = s.hostname.split(':')[0]; map[h] = s.name }
+      setKnownIps(map)
+    }).catch(() => {})
+  }, [])
+
+  // Close picker when clicking outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setShowServerPicker(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
   }, [])
 
   const hostList = Object.values(hosts).sort((a, b) => {
@@ -402,11 +431,89 @@ export default function NetworkScan() {
           {/* Target */}
           <div style={{ flex: '1 1 280px' }}>
             <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>TARGET</label>
-            <input value={target} onChange={e => setTarget(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && !scanning && startScan()}
-              placeholder="192.168.1.0/24  ·  10.0.0.1-254  ·  192.168.1.100"
-              disabled={scanning}
-              style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13, boxSizing: 'border-box', fontFamily: 'monospace' }} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input value={target} onChange={e => setTarget(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !scanning && startScan()}
+                placeholder="192.168.1.0/24  ·  10.0.0.1-254  ·  192.168.1.100"
+                disabled={scanning}
+                style={{ flex: 1, padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'monospace' }} />
+              {/* Server picker */}
+              <div style={{ position: 'relative' }} ref={pickerRef}>
+                <button
+                  onClick={() => setShowServerPicker(v => !v)}
+                  disabled={scanning}
+                  title="Pick from your servers"
+                  style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: showServerPicker ? 'var(--bg-panel-alt)' : 'var(--input-bg)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', height: '100%' }}>
+                  🖥 My Servers
+                </button>
+                {showServerPicker && (
+                  <div style={{
+                    position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 100,
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border-med)',
+                    borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+                    width: 260, maxHeight: 320, display: 'flex', flexDirection: 'column',
+                  }}>
+                    <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-weak)' }}>
+                      <input
+                        autoFocus
+                        value={serverSearch}
+                        onChange={e => setServerSearch(e.target.value)}
+                        placeholder="Search servers…"
+                        style={{ width: '100%', padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text)', fontSize: 12 }}
+                      />
+                    </div>
+                    <div style={{ overflowY: 'auto', flex: 1 }}>
+                      {systemServers
+                        .filter(s => !serverSearch || s.name.toLowerCase().includes(serverSearch.toLowerCase()) || s.hostname.includes(serverSearch))
+                        .map(s => {
+                          const ip = s.hostname.split(':')[0]
+                          const already = target.split(/[\s,]+/).includes(ip)
+                          return (
+                            <div key={s.id}
+                              onClick={() => {
+                                if (already) {
+                                  setTarget(t => t.split(/[\s,]+/).filter(x => x && x !== ip).join(' '))
+                                } else {
+                                  setTarget(t => t.trim() ? `${t.trim()} ${ip}` : ip)
+                                }
+                              }}
+                              style={{
+                                padding: '8px 12px', cursor: 'pointer', display: 'flex',
+                                alignItems: 'center', justifyContent: 'space-between',
+                                background: already ? 'rgba(var(--accent) / 0.08)' : 'transparent',
+                                borderBottom: '1px solid var(--border-weak)',
+                              }}
+                              onMouseEnter={e => (e.currentTarget.style.background = already ? 'rgba(var(--accent) / 0.12)' : 'var(--bg-panel-alt)')}
+                              onMouseLeave={e => (e.currentTarget.style.background = already ? 'rgba(var(--accent) / 0.08)' : 'transparent')}
+                            >
+                              <div>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{s.name}</div>
+                                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{ip}</div>
+                              </div>
+                              {already && <span style={{ fontSize: 11, color: 'var(--accent-hex)', fontWeight: 700 }}>✓</span>}
+                            </div>
+                          )
+                        })}
+                      {systemServers.filter(s => !serverSearch || s.name.toLowerCase().includes(serverSearch.toLowerCase()) || s.hostname.includes(serverSearch)).length === 0 && (
+                        <div style={{ padding: 16, fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>No servers found</div>
+                      )}
+                    </div>
+                    <div style={{ padding: '8px 10px', borderTop: '1px solid var(--border-weak)', display: 'flex', gap: 6 }}>
+                      <button onClick={() => {
+                        const ips = systemServers.map(s => s.hostname.split(':')[0]).join(' ')
+                        setTarget(ips); setShowServerPicker(false)
+                      }} style={{ flex: 1, padding: '5px', borderRadius: 5, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer' }}>
+                        All
+                      </button>
+                      <button onClick={() => setShowServerPicker(false)}
+                        style={{ flex: 1, padding: '5px', borderRadius: 5, border: '1px solid var(--accent-hex)', background: 'var(--accent-hex)', color: '#fff', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Mode selector */}
@@ -538,7 +645,16 @@ export default function NetworkScan() {
             </thead>
             <tbody>
               {hostList.map(h => (
-                <HostRow key={h.ip} host={h} onAdd={() => setAddHost(h)} />
+                <HostRow key={h.ip} host={h} onAdd={() => setAddHost(h)}
+                  knownServer={
+                    knownIps[h.ip]
+                      ? { name: knownIps[h.ip] }
+                      : h.hostname && knownIps[h.hostname.split('.')[0]]
+                        ? { name: knownIps[h.hostname.split('.')[0]] }
+                        : h.hostname && knownIps[h.hostname]
+                          ? { name: knownIps[h.hostname] }
+                          : undefined
+                  } />
               ))}
             </tbody>
           </table>

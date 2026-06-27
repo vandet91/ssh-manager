@@ -321,6 +321,59 @@ export interface DistroArtTable {
   updated_at: ColumnType<Date, never, Date>
 }
 
+export interface TaskDefinitionTable {
+  id: Generated<string>
+  title: string
+  description: string | null
+  trigger_type: Opt<string>
+  run_at: Date | null
+  cron_expr: string | null
+  after_task_id: string | null
+  priority: Opt<string>
+  is_active: Opt<boolean>
+  notify_telegram: Opt<boolean>
+  notify_email: Opt<boolean>
+  notify_email_to: string | null
+  created_by: string | null
+  created_at: ColumnType<Date, never, never>
+  updated_at: Opt<Date>
+}
+
+export interface TaskStepTable {
+  id: Generated<string>
+  task_id: string
+  step_order: Opt<number>
+  step_type: string
+  label: string | null
+  config: Opt<unknown>
+  delay_before_s: Opt<number>
+  created_at: ColumnType<Date, never, never>
+}
+
+export interface TaskRunTable {
+  id: Generated<string>
+  task_id: string
+  triggered_by: Opt<string>
+  status: Opt<string>
+  started_at: Date | null
+  completed_at: Date | null
+  summary: string | null
+  created_at: ColumnType<Date, never, never>
+}
+
+export interface TaskRunLogTable {
+  id: Generated<string>
+  run_id: string
+  step_id: string | null
+  target_type: string | null
+  target_id: string | null
+  target_label: string | null
+  status: Opt<string>
+  output: string | null
+  started_at: Date | null
+  completed_at: Date | null
+}
+
 export interface Database {
   users: UserTable
   distro_art: DistroArtTable
@@ -340,6 +393,10 @@ export interface Database {
   share_pins: SharePinTable
   firmware_files: FirmwareFileTable
   config_backups: ConfigBackupTable
+  task_definitions: TaskDefinitionTable
+  task_steps: TaskStepTable
+  task_runs: TaskRunTable
+  task_run_logs: TaskRunLogTable
 }
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })

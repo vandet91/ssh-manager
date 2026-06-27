@@ -147,6 +147,198 @@
   --card-header-bg:#f0f0f0;
 }
 
+/* ── Modern Light ────────────────────────────────────────────────────────── */
+[data-theme="modern-light"] {
+  --g950: 246 248 250;
+  --g900: 255 255 255;
+  --g800: 234 238 242;
+  --g700: 216 222 228;
+  --g600: 175 184 193;
+  --g500: 145 155 164;
+  --g400: 101 110 118;
+  --g300:  87  96 105;
+  --g200:  57  67  76;
+  --g100:  36  41  47;
+  --g50:   13  17  23;
+
+  --accent:      9 105 218;
+  --accent-lite: 54 142 255;
+
+  --bg-canvas:    #f6f8fa;
+  --bg-body:      #ffffff;
+  --bg-elevated:  #ffffff;
+  --bg-panel:     #f6f8fa;
+  --bg-panel-alt: #eaeef2;
+  --border-weak:  #d0d7de;
+  --border-med:   #d0d7de;
+  --border-strong:#8c959f;
+  --text-primary:  #1f2328;
+  --text-secondary:#57606a;
+  --text-muted:    #848d97;
+  --text-heading:  #1f2328;
+  --accent-hex:    #0969da;
+  --accent-lite-hex:#218bff;
+  --success: #1a7f37;
+  --warning: #9a6700;
+  --error:   #cf222e;
+
+  --sidebar-bg:            #161b22;
+  --sidebar-border:        #30363d;
+  --sidebar-active-bg:     rgba(9,105,218,0.15);
+  --sidebar-active-border: #0969da;
+  --sidebar-text:          #8b949e;
+  --sidebar-active-text:   #e6edf3;
+
+  --input-bg:          #ffffff;
+  --input-border:      #d0d7de;
+  --input-text:        #1f2328;
+  --input-placeholder: #848d97;
+
+  --btn-bg:    #1a7f37;
+  --btn-hover: #196c2e;
+  --btn-text:  #ffffff;
+  --btn-border:rgba(31,136,61,0.4);
+
+  --btn-accent-bg:    #0969da;
+  --btn-accent-hover: #0860ca;
+  --btn-accent-text:  #ffffff;
+  --btn-accent-border:rgba(9,105,218,0.4);
+
+  --modal-bg:      #ffffff;
+  --modal-border:  #d0d7de;
+  --card-bg:       #ffffff;
+  --card-border:   #d0d7de;
+  --card-header-bg:#f6f8fa;
+}
+
+/* ── Proxmox Dark ────────────────────────────────────────────────────────── */
+[data-theme="proxmox-dark"] {
+  --g950:  17  20  30;
+  --g900:  22  27  40;
+  --g800:  30  37  55;
+  --g700:  38  47  68;
+  --g600:  52  63  88;
+  --g500:  65  78 108;
+  --g400: 100 115 145;
+  --g300: 140 155 185;
+  --g200: 180 192 214;
+  --g100: 210 218 232;
+  --g50:  235 240 250;
+
+  --accent:      224 125  46;
+  --accent-lite: 240 155  80;
+
+  --bg-canvas:    #11141e;
+  --bg-body:      #161b28;
+  --bg-elevated:  #1e2537;
+  --bg-panel:     #1e2537;
+  --bg-panel-alt: #252f44;
+  --border-weak:  #2a3650;
+  --border-med:   #333f58;
+  --border-strong:#445270;
+  --text-primary:  #d2dae8;
+  --text-secondary:#8c9bb8;
+  --text-muted:    #606e8a;
+  --text-heading:  #ebf0fa;
+  --accent-hex:    #e07d2e;
+  --accent-lite-hex:#f09b50;
+  --success: #3dba5d;
+  --warning: #d4a017;
+  --error:   #e05555;
+
+  --sidebar-bg:            #151a24;
+  --sidebar-border:        #1e2530;
+  --sidebar-active-bg:     rgba(224,125,46,0.2);
+  --sidebar-active-border: #e07d2e;
+  --sidebar-text:          #8090a8;
+  --sidebar-active-text:   #ffffff;
+
+  --input-bg:          #161b28;
+  --input-border:      #333f58;
+  --input-text:        #d2dae8;
+  --input-placeholder: #606e8a;
+
+  --btn-bg:    #e07d2e;
+  --btn-hover: #c96e25;
+  --btn-text:  #ffffff;
+  --btn-border:rgba(224,125,46,0.5);
+
+  --btn-accent-bg:    #e07d2e;
+  --btn-accent-hover: #c96e25;
+  --btn-accent-text:  #ffffff;
+  --btn-accent-border:rgba(224,125,46,0.4);
+
+  --modal-bg:      #1e2537;
+  --modal-border:  #333f58;
+  --card-bg:       #1e2537;
+  --card-border:   #333f58;
+  --card-header-bg:#252f44;
+}
+
+/* ── Modern Dark (alias — same as :root) ─────────────────────────────────── */
+[data-theme="modern-dark"] {
+  --g950:   1   4   9;
+  --g900:  13  17  23;
+  --g800:  22  27  34;
+  --g700:  33  38  45;
+  --g600:  48  54  61;
+  --g500:  52  60  68;
+  --g400: 110 118 129;
+  --g300: 139 148 158;
+  --g200: 176 184 193;
+  --g100: 201 209 217;
+  --g50:  230 237 243;
+
+  --accent:      31 111 235;
+  --accent-lite: 88 166 255;
+
+  --bg-canvas:    #010409;
+  --bg-body:      #0d1117;
+  --bg-elevated:  #161b22;
+  --bg-panel:     #161b22;
+  --bg-panel-alt: #21262d;
+  --border-weak:  #21262d;
+  --border-med:   #30363d;
+  --border-strong:#484f58;
+  --text-primary:  #e6edf3;
+  --text-secondary:#8b949e;
+  --text-muted:    #6e7681;
+  --text-heading:  #f0f6fc;
+  --accent-hex:    #58a6ff;
+  --accent-lite-hex:#79c0ff;
+  --success: #3fb950;
+  --warning: #d29922;
+  --error:   #f85149;
+
+  --sidebar-bg:            #161b22;
+  --sidebar-border:        #30363d;
+  --sidebar-active-bg:     rgba(31,111,235,0.15);
+  --sidebar-active-border: #1f6feb;
+  --sidebar-text:          #8b949e;
+  --sidebar-active-text:   #e6edf3;
+
+  --input-bg:          #0d1117;
+  --input-border:      #30363d;
+  --input-text:        #c9d1d9;
+  --input-placeholder: #6e7681;
+
+  --btn-bg:    #238636;
+  --btn-hover: #2ea043;
+  --btn-text:  #ffffff;
+  --btn-border:rgba(35,134,54,0.5);
+
+  --btn-accent-bg:    #1f6feb;
+  --btn-accent-hover: #388bfd;
+  --btn-accent-text:  #ffffff;
+  --btn-accent-border:rgba(31,111,235,0.4);
+
+  --modal-bg:      #161b22;
+  --modal-border:  #30363d;
+  --card-bg:       #161b22;
+  --card-border:   #30363d;
+  --card-header-bg:#21262d;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    BASE
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -186,25 +378,86 @@
   input::placeholder, textarea::placeholder { color: var(--input-placeholder); }
   option { background: var(--bg-elevated); color: var(--input-text); }
 
-  /* ── Proxmox: flip hardcoded "text-white/gray-*" to dark text ──────────── */
-  [data-theme="proxmox-light"] .text-white,
-  [data-theme="proxmox-light"] .text-gray-50  { color: var(--text-heading)   !important; }
-  [data-theme="proxmox-light"] .text-gray-100 { color: var(--text-primary)   !important; }
-  [data-theme="proxmox-light"] .text-gray-200,
-  [data-theme="proxmox-light"] .text-gray-300 { color: var(--text-secondary) !important; }
-
-  /* ── Proxmox: gray panel surfaces ──────────────────────────────────────── */
-  [data-theme="proxmox-light"] .bg-gray-800 {
-    background-color: var(--bg-panel-alt) !important;
-    border: 1px solid var(--border-weak);
+  /* ══════════════════════════════════════════════════════════════════════════
+     LIGHT THEME OVERRIDES — force all hardcoded dark Tailwind classes to light
+     Applies to both modern-light and proxmox-light
+     ══════════════════════════════════════════════════════════════════════════ */
+  [data-theme="modern-light"],
+  [data-theme="proxmox-light"] {
+    color-scheme: light;
   }
-  [data-theme="proxmox-light"] .bg-gray-900 { background-color: var(--bg-panel) !important; }
 
-  /* ── Proxmox: borders & dividers ───────────────────────────────────────── */
+  /* Text colours */
+  [data-theme="modern-light"] .text-white,
+  [data-theme="modern-light"] .text-gray-50,
+  [data-theme="modern-light"] .text-gray-100,
+  [data-theme="proxmox-light"] .text-white,
+  [data-theme="proxmox-light"] .text-gray-50,
+  [data-theme="proxmox-light"] .text-gray-100 { color: var(--text-heading) !important; }
+
+  [data-theme="modern-light"] .text-gray-200,
+  [data-theme="modern-light"] .text-gray-300,
+  [data-theme="proxmox-light"] .text-gray-200,
+  [data-theme="proxmox-light"] .text-gray-300 { color: var(--text-primary) !important; }
+
+  [data-theme="modern-light"] .text-gray-400,
+  [data-theme="modern-light"] .text-gray-500,
+  [data-theme="proxmox-light"] .text-gray-400,
+  [data-theme="proxmox-light"] .text-gray-500 { color: var(--text-secondary) !important; }
+
+  [data-theme="modern-light"] .text-gray-600,
+  [data-theme="proxmox-light"] .text-gray-600 { color: var(--text-muted) !important; }
+
+  /* Background surfaces */
+  [data-theme="modern-light"] .bg-gray-950,
+  [data-theme="proxmox-light"] .bg-gray-950 { background-color: var(--bg-canvas)    !important; }
+
+  [data-theme="modern-light"] .bg-gray-900,
+  [data-theme="proxmox-light"] .bg-gray-900 { background-color: var(--bg-body)      !important; }
+
+  [data-theme="modern-light"] .bg-gray-800,
+  [data-theme="proxmox-light"] .bg-gray-800 { background-color: var(--bg-panel)     !important; }
+
+  [data-theme="modern-light"] .bg-gray-750,
+  [data-theme="modern-light"] .bg-gray-700,
+  [data-theme="proxmox-light"] .bg-gray-750,
+  [data-theme="proxmox-light"] .bg-gray-700 { background-color: var(--bg-panel-alt) !important; }
+
+  [data-theme="modern-light"] .bg-gray-600,
+  [data-theme="proxmox-light"] .bg-gray-600 { background-color: var(--bg-elevated)  !important; }
+
+  /* Borders */
+  [data-theme="modern-light"] .border-gray-900,
+  [data-theme="modern-light"] .border-gray-800,
+  [data-theme="modern-light"] .border-gray-700,
+  [data-theme="modern-light"] .border-gray-600,
+  [data-theme="proxmox-light"] .border-gray-900,
+  [data-theme="proxmox-light"] .border-gray-800,
+  [data-theme="proxmox-light"] .border-gray-700,
+  [data-theme="proxmox-light"] .border-gray-600 { border-color: var(--border-med) !important; }
+
+  /* Dividers */
+  [data-theme="modern-light"] .divide-gray-900 > * + *,
+  [data-theme="modern-light"] .divide-gray-800 > * + *,
+  [data-theme="modern-light"] .divide-gray-700 > * + *,
+  [data-theme="proxmox-light"] .divide-gray-900 > * + *,
   [data-theme="proxmox-light"] .divide-gray-800 > * + *,
   [data-theme="proxmox-light"] .divide-gray-700 > * + * { border-color: var(--border-med) !important; }
-  [data-theme="proxmox-light"] .border-gray-700,
-  [data-theme="proxmox-light"] .border-gray-800 { border-color: var(--border-med) !important; }
+
+  /* Ring / outline */
+  [data-theme="modern-light"] .ring-gray-700,
+  [data-theme="modern-light"] .ring-gray-800,
+  [data-theme="proxmox-light"] .ring-gray-700,
+  [data-theme="proxmox-light"] .ring-gray-800 { --tw-ring-color: var(--border-med) !important; }
+
+  /* Hover states on rows/items */
+  [data-theme="modern-light"] .hover\:bg-gray-800:hover,
+  [data-theme="modern-light"] .hover\:bg-gray-700:hover,
+  [data-theme="proxmox-light"] .hover\:bg-gray-800:hover,
+  [data-theme="proxmox-light"] .hover\:bg-gray-700:hover { background-color: var(--bg-panel-alt) !important; }
+
+  [data-theme="modern-light"] .hover\:bg-gray-900:hover,
+  [data-theme="proxmox-light"] .hover\:bg-gray-900:hover { background-color: var(--bg-panel) !important; }
 
   /* ══════════════════════════════════════════════════════════════════════════
      BUTTON VISIBILITY
@@ -236,13 +489,24 @@
     background-color: var(--border-med) !important;
   }
 
-  /* Proxmox: all button text must be readable (no white-on-light) */
-  [data-theme=proxmox-light] button, [data-theme=proxmox-dark] button { color: var(--text-primary); }
+  /* Light themes: all button text must be readable (no white-on-light) */
+  [data-theme="modern-light"] button,
+  [data-theme="proxmox-light"] button { color: var(--text-primary); }
+
+  [data-theme="modern-light"] button.text-white,
+  [data-theme="modern-light"] button.text-gray-300,
+  [data-theme="modern-light"] button.text-gray-400,
   [data-theme="proxmox-light"] button.text-white,
   [data-theme="proxmox-light"] button.text-gray-300,
   [data-theme="proxmox-light"] button.text-gray-400 { color: var(--text-primary) !important; }
+
+  [data-theme="modern-light"] button.bg-indigo-600,
+  [data-theme="modern-light"] button.bg-indigo-500,
   [data-theme="proxmox-light"] button.bg-indigo-600,
   [data-theme="proxmox-light"] button.bg-indigo-500 { color: var(--btn-accent-text) !important; }
+
+  [data-theme="modern-light"] button.bg-gray-700,
+  [data-theme="modern-light"] button.bg-gray-800,
   [data-theme="proxmox-light"] button.bg-gray-700,
   [data-theme="proxmox-light"] button.bg-gray-800 {
     background-color: var(--bg-panel-alt) !important;
@@ -334,7 +598,8 @@
   .cyber-table tbody tr:hover td { background: rgba(var(--accent) / 0.05); }
 
   /* Proxmox only: no scanlines */
-  [data-theme="proxmox-light"] .scanlines::after, [data-theme="modern-light"] .scanlines::after { display: none; }
+  [data-theme="modern-light"] .scanlines::after,
+  [data-theme="proxmox-light"] .scanlines::after { display: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

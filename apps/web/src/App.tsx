@@ -30,6 +30,9 @@ import DbConnector from './pages/DbConnector'
 import Diagrams from './pages/Diagrams'
 import FirmwareRepo from './pages/FirmwareRepo'
 import NetworkScan from './pages/NetworkScan'
+import Security from './pages/Security'
+import Documentation from './pages/Documentation'
+import Tasks from './pages/Tasks'
 
 export type ThemeName = 'modern' | 'proxmox'
 export type ThemeMode = 'dark' | 'light'
@@ -114,6 +117,9 @@ function AppRoutes({ user, setUser, themeName, setThemeName, themeMode, setTheme
           <Route path="/diagrams"       element={<Diagrams />} />
           <Route path="/firmware-repo"  element={<FirmwareRepo />} />
           <Route path="/network-scan"   element={<NetworkScan />} />
+          <Route path="/security"       element={<Security />} />
+          <Route path="/docs"           element={<Documentation />} />
+          <Route path="/tasks"          element={<Tasks />} />
           <Route path="/logs"           element={<Logs />} />
           <Route path="/activity"       element={<MyActivity />} />
           <Route path="/migration"      element={<Migration />} />

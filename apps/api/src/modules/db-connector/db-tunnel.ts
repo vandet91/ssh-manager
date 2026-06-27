@@ -25,8 +25,9 @@ export function openTunnelStream(
   })
 }
 
-/** Decrypt the password stored in a db_connection row */
+/** Get the password for a connection — prefers vault-resolved password_plain over password_enc */
 export function decryptDbPassword(conn: DbConnection): string | undefined {
+  if (conn.password_plain !== undefined) return conn.password_plain || undefined
   if (!conn.password_enc) return undefined
   return decryptSecret(conn.password_enc, getVaultKey())
 }

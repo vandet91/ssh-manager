@@ -15,6 +15,7 @@ export type CheckCategory =
   | 'audit'
   | 'firewall'
   | 'updates'
+  | 'services'
 
 export interface BenchmarkCheck {
   id: string
@@ -517,52 +518,148 @@ async function checkAudit(client: Client): Promise<BenchmarkCheck[]> {
 async function checkFirewall(client: Client): Promise<BenchmarkCheck[]> {
   const results: BenchmarkCheck[] = []
 
-  // ufw
-  const ufwStatus = await exec(client, 'ufw status 2>/dev/null | head -3')
-  if (ufwStatus.includes('Status: active') || ufwStatus.includes('active')) {
-    results.push(check(
-      'fw-ufw', 'firewall',
-      'Firewall is active (ufw)',
-      'A host-based firewall limits exposure to unwanted network traffic.',
-      'pass',
-      'ufw: active',
-      'Firewall active',
-      '', // already passing
-      'CIS 3.5.1',
-    ))
-    return results
-  }
-
-  // firewalld
+  // Detect active firewall and check default-deny policy
+  const ufwStatus = await exec(client, 'ufw status verbose 2>/dev/null | head -10')
   const fwdStatus = await exec(client, 'firewall-cmd --state 2>/dev/null')
-  if (fwdStatus.includes('running')) {
-    results.push(check(
-      'fw-firewalld', 'firewall',
-      'Firewall is active (firewalld)',
-      'A host-based firewall limits exposure to unwanted network traffic.',
-      'pass',
-      'firewalld: running',
-      'Firewall active',
-      '',
-      'CIS 3.5.1',
-    ))
-    return results
-  }
+  const iptablesInput = await exec(client, 'iptables -L INPUT --line-numbers 2>/dev/null | grep -v "^Chain\\|^num\\|^$"')
 
-  // iptables fallback
-  const iptablesRules = await exec(client, 'iptables -L INPUT --line-numbers 2>/dev/null | grep -v "^Chain\\|^num\\|^$" | wc -l')
-  const ruleCount = parseInt(iptablesRules, 10) || 0
-  const hasIptables = ruleCount > 1  // >1 because there's usually an "ACCEPT all" default
+  const ufwActive = ufwStatus.includes('Status: active')
+  const fwdActive = fwdStatus.includes('running')
+  const iptablesCount = iptablesInput.split('\n').filter(Boolean).length
 
+  // Firewall active check
   results.push(check(
-    'fw-iptables', 'firewall',
+    'fw-active', 'firewall',
     'Host-based firewall is active',
     'ufw, firewalld, or iptables rules must restrict inbound network traffic.',
-    hasIptables ? 'warn' : 'fail',
-    hasIptables ? `iptables: ${ruleCount} INPUT rule(s)` : 'No firewall detected',
+    ufwActive || fwdActive ? 'pass' : iptablesCount > 1 ? 'warn' : 'fail',
+    ufwActive ? 'ufw: active' : fwdActive ? 'firewalld: running' : iptablesCount > 1 ? `iptables: ${iptablesCount} INPUT rule(s)` : 'No firewall detected',
     'ufw or firewalld active',
     'Enable ufw: apt install ufw && ufw default deny incoming && ufw allow ssh && ufw enable\nOr: systemctl enable --now firewalld && firewall-cmd --set-default-zone=drop',
     'CIS 3.5.1',
+  ))
+
+  // Default-deny policy check
+  const ufwDefaultDeny = ufwStatus.includes('Default: deny') || ufwStatus.includes('Default: reject')
+  const fwdDefaultDeny = fwdActive
+    ? (await exec(client, 'firewall-cmd --get-default-zone 2>/dev/null')).trim() === 'drop'
+    : false
+  const iptablesDefaultDrop = iptablesInput.includes('policy DROP')
+  const defaultDeny = ufwDefaultDeny || fwdDefaultDeny || iptablesDefaultDrop
+  const fwDetected = ufwActive || fwdActive || iptablesCount > 1
+
+  results.push(check(
+    'fw-default-deny', 'firewall',
+    'Default firewall policy is deny/drop',
+    'Firewall default policy should deny all incoming traffic; only explicitly allowed ports pass.',
+    !fwDetected ? 'skip' : defaultDeny ? 'pass' : 'fail',
+    !fwDetected ? 'No firewall detected' : ufwActive ? (ufwDefaultDeny ? 'Default: deny' : 'Default: allow') : fwdActive ? `Default zone: ${fwdDefaultDeny ? 'drop' : 'not drop'}` : `iptables INPUT policy: ${iptablesDefaultDrop ? 'DROP' : 'ACCEPT'}`,
+    'Default: deny (incoming)',
+    'Set default deny:\n  ufw default deny incoming\nOr for iptables:\n  iptables -P INPUT DROP\n  iptables -P FORWARD DROP',
+    'CIS 3.5.2',
+  ))
+
+  // SSH rate limiting
+  const ufwRateLimit = ufwStatus.includes('LIMIT') || (await exec(client, 'ufw status 2>/dev/null | grep -i "limit"')).trim().length > 0
+  const fail2banActive = (await exec(client, 'systemctl is-active fail2ban 2>/dev/null')).trim() === 'active'
+
+  results.push(check(
+    'fw-ssh-ratelimit', 'firewall',
+    'SSH brute-force protection (rate limit or fail2ban)',
+    'Repeated SSH login attempts should be rate-limited or blocked by fail2ban.',
+    ufwRateLimit || fail2banActive ? 'pass' : 'warn',
+    ufwRateLimit ? 'ufw SSH rate limit active' : fail2banActive ? 'fail2ban active' : 'No rate limiting detected',
+    'ufw limit ssh  OR  fail2ban active',
+    'Option 1 — ufw rate limit:\n  ufw limit ssh\nOption 2 — install fail2ban:\n  apt install fail2ban && systemctl enable --now fail2ban',
+    'CIS 5.2.20',
+  ))
+
+  return results
+}
+
+// ── Services & attack surface ─────────────────────────────────────────────────
+
+async function checkServices(client: Client): Promise<BenchmarkCheck[]> {
+  const results: BenchmarkCheck[] = []
+
+  // Dangerous legacy services
+  const dangerousServices = [
+    { name: 'telnet', pkg: 'telnet-server', desc: 'Telnet sends credentials in cleartext.' },
+    { name: 'rsh', pkg: 'rsh-server', desc: 'rsh/rlogin send credentials in cleartext.' },
+    { name: 'tftp', pkg: 'tftpd', desc: 'TFTP has no authentication.' },
+    { name: 'finger', pkg: 'finger', desc: 'finger leaks user account information.' },
+  ]
+  for (const svc of dangerousServices) {
+    const installed = await exec(client, `dpkg -l ${svc.pkg} 2>/dev/null | grep "^ii" | head -1 || rpm -q ${svc.pkg} 2>/dev/null | grep -v "not installed" | head -1`)
+    const running = await exec(client, `systemctl is-active ${svc.name} 2>/dev/null || ss -tlnp 2>/dev/null | grep ${svc.name} | head -1`)
+    const active = installed.trim() !== '' || running.trim() === 'active'
+    results.push(check(
+      `svc-${svc.name}`, 'services',
+      `${svc.name} service not installed/running`,
+      svc.desc,
+      active ? 'fail' : 'pass',
+      active ? `${svc.name}: installed/running` : `${svc.name}: not found`,
+      'Not installed',
+      `Remove: apt purge ${svc.pkg}  (Debian)\n       yum remove ${svc.pkg}  (RHEL)`,
+      'CIS 2.1',
+    ))
+  }
+
+  // Unnecessary services (warn only — may be needed on some systems)
+  const unnecessaryServices = [
+    { id: 'avahi', label: 'avahi-daemon (mDNS)', desc: 'avahi-daemon provides mDNS/DNS-SD — not needed on servers, increases attack surface.' },
+    { id: 'cups', label: 'CUPS (printing)', desc: 'CUPS printing service is rarely needed on servers.' },
+  ]
+  for (const svc of unnecessaryServices) {
+    const running = await exec(client, `systemctl is-active ${svc.id} 2>/dev/null`)
+    const isActive = running.trim() === 'active'
+    results.push(check(
+      `svc-${svc.id}`, 'services',
+      `${svc.label} not running`,
+      svc.desc,
+      isActive ? 'warn' : 'pass',
+      isActive ? `${svc.id}: active` : `${svc.id}: inactive/not found`,
+      'Disabled or not installed',
+      `Disable: systemctl disable --now ${svc.id}\nRemove: apt purge ${svc.id}`,
+      'CIS 2.2',
+    ))
+  }
+
+  // Open ports listening on all interfaces (0.0.0.0 / ::)
+  const openPorts = await exec(client, 'ss -tlnp 2>/dev/null | grep -E "^LISTEN.*0\\.0\\.0\\.0:|^LISTEN.*\\*:" | awk \'{print $4, $6}\' | head -20')
+  const portLines = openPorts.split('\n').filter(Boolean)
+
+  // Common safe ports — everything else is a warning
+  const safePorts = new Set(['22', '80', '443', '8080', '8443'])
+  const suspectPorts = portLines.filter((line) => {
+    const portMatch = line.match(/:(\d+)\b/)
+    if (!portMatch) return false
+    return !safePorts.has(portMatch[1])
+  })
+
+  results.push(check(
+    'svc-open-ports', 'services',
+    'Unexpected ports listening on all interfaces',
+    'Services bound to 0.0.0.0 are reachable from any network interface. Review each open port.',
+    suspectPorts.length === 0 ? 'pass' : 'warn',
+    portLines.length === 0 ? 'No open ports found' : portLines.join(', '),
+    'Only expected ports (22, 80, 443)',
+    'Review listening services: ss -tlnp\nBind services to 127.0.0.1 if only needed locally.\nDisable unused: systemctl disable --now <service>',
+    'CIS 2.4',
+  ))
+
+  // NFS / RPC exposed
+  const nfsRunning = await exec(client, 'systemctl is-active nfs-server 2>/dev/null || systemctl is-active nfs 2>/dev/null')
+  const nfsActive = nfsRunning.trim() === 'active'
+  results.push(check(
+    'svc-nfs', 'services',
+    'NFS server not running (unless required)',
+    'NFS can expose file systems to the network and should not run unless explicitly needed.',
+    nfsActive ? 'warn' : 'pass',
+    nfsActive ? 'nfs-server: active' : 'nfs-server: inactive',
+    'Disabled',
+    'Disable NFS: systemctl disable --now nfs-server\nRemove: apt purge nfs-kernel-server',
+    'CIS 2.2.7',
   ))
 
   return results
@@ -626,7 +723,7 @@ async function checkUpdates(client: Client): Promise<BenchmarkCheck[]> {
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function runBenchmark(client: Client): Promise<BenchmarkResult> {
-  const [sshChecks, pwChecks, acctChecks, permChecks, kernelChecks, auditChecks, fwChecks, updateChecks] = await Promise.all([
+  const [sshChecks, pwChecks, acctChecks, permChecks, kernelChecks, auditChecks, fwChecks, updateChecks, svcChecks] = await Promise.all([
     checkSsh(client),
     checkPasswordPolicy(client),
     checkAccounts(client),
@@ -635,6 +732,7 @@ export async function runBenchmark(client: Client): Promise<BenchmarkResult> {
     checkAudit(client),
     checkFirewall(client),
     checkUpdates(client),
+    checkServices(client),
   ])
 
   const checks: BenchmarkCheck[] = [
@@ -646,6 +744,7 @@ export async function runBenchmark(client: Client): Promise<BenchmarkResult> {
     ...auditChecks,
     ...fwChecks,
     ...updateChecks,
+    ...svcChecks,
   ]
 
   const total = checks.length

@@ -2,6 +2,11 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useEditor, EditorContent, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react'
 import type { NodeViewProps } from '@tiptap/react'
+import { Extension } from '@tiptap/core'
+import { Plugin, PluginKey } from '@tiptap/pm/state'
+import type { Transaction, EditorState } from '@tiptap/pm/state'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
+import type { Node as PmNode } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
 import TiptapImage from '@tiptap/extension-image'
 import Link from '@tiptap/extension-link'
@@ -23,6 +28,63 @@ import { marked } from 'marked'
 import { api, docsApi, Doc, DocType, Server } from '../api/client'
 
 const lowlight = createLowlight(all)
+
+// ── Find & Replace extension ───────────────────────────────────────────────────
+
+const searchKey = new PluginKey<{ term: string; idx: number; matches: { from: number; to: number }[] }>('docSearch')
+
+function buildMatches(doc: Parameters<typeof DecorationSet.create>[0], term: string) {
+  const matches: { from: number; to: number }[] = []
+  if (!term) return matches
+  const lower = term.toLowerCase()
+  doc.descendants((node: PmNode, pos: number) => {
+    if (!node.isText || !node.text) return
+    const text = node.text.toLowerCase()
+    let i = text.indexOf(lower)
+    while (i !== -1) {
+      matches.push({ from: pos + i, to: pos + i + term.length })
+      i = text.indexOf(lower, i + 1)
+    }
+  })
+  return matches
+}
+
+const SearchExtension = Extension.create({
+  name: 'docSearch',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: searchKey,
+        state: {
+          init: () => ({ term: '', idx: 0, matches: [] as { from: number; to: number }[] }),
+          apply(tr: Transaction, prev: { term: string; idx: number; matches: { from: number; to: number }[] }) {
+            const meta = tr.getMeta(searchKey)
+            if (meta !== undefined) return meta
+            if (tr.docChanged && prev.term) {
+              const matches = buildMatches(tr.doc, prev.term)
+              return { ...prev, matches, idx: Math.min(prev.idx, Math.max(0, matches.length - 1)) }
+            }
+            return prev
+          },
+        },
+        props: {
+          decorations(state: EditorState) {
+            const { term, idx, matches } = searchKey.getState(state)!
+            if (!term || !matches.length) return DecorationSet.empty
+            const decos = matches.map((m: { from: number; to: number }, i: number) =>
+              Decoration.inline(m.from, m.to, {
+                style: i === idx
+                  ? 'background:#f59e0b;color:#000;border-radius:2px;'
+                  : 'background:#fef08a;color:#1a1a1a;border-radius:2px;',
+              })
+            )
+            return DecorationSet.create(state.doc, decos)
+          },
+        },
+      }),
+    ]
+  },
+})
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -548,6 +610,12 @@ export default function Documentation() {
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<string>('all')
+  const [showFind, setShowFind]   = useState(false)
+  const [findTerm, setFindTerm]   = useState('')
+  const [replaceTerm, setReplaceTerm] = useState('')
+  const [findCount, setFindCount] = useState(0)
+  const [findIdx, setFindIdx]     = useState(0)
+  const findInputRef = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
@@ -558,6 +626,30 @@ export default function Documentation() {
     setToast({ msg, ok })
     setTimeout(() => setToast(null), 3000)
   }
+
+  // Block browser tab close / refresh when dirty
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty) { e.preventDefault(); e.returnValue = '' }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [dirty])
+
+  // Block in-app navigation (BrowserRouter uses history.pushState)
+  useEffect(() => {
+    if (!dirty) return
+    const orig = history.pushState.bind(history)
+    history.pushState = (...args: Parameters<typeof history.pushState>) => {
+      if (window.confirm('You have unsaved changes. Leave without saving?')) {
+        history.pushState = orig
+        orig(...args)
+      }
+    }
+    return () => { history.pushState = orig }
+  }, [dirty])
+
+  // ── Find helpers ─────────────────────────────────────────────────────────────
 
   // ── Load list ────────────────────────────────────────────────────────────────
 
@@ -585,6 +677,7 @@ export default function Documentation() {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ codeBlock: false }),
+      SearchExtension,
       Underline,
       TextStyle,
       Color,
@@ -603,10 +696,10 @@ export default function Documentation() {
     content: '',
     onUpdate: () => setDirty(true),
     editorProps: {
-      handlePaste(_view, event) {
+      handlePaste(_view: unknown, event: ClipboardEvent) {
         const items = event.clipboardData?.items
         if (!items) return false
-        for (const item of Array.from(items)) {
+        for (const item of Array.from(items) as DataTransferItem[]) {
           if (item.type.startsWith('image/')) {
             event.preventDefault()
             const file = item.getAsFile()
@@ -621,6 +714,79 @@ export default function Documentation() {
       },
     },
   })
+
+  // ── Find helpers (after editor is declared) ───────────────────────────────────
+
+  const applySearch = useCallback((term: string, newIdx?: number) => {
+    if (!editor) return
+    const matches = buildMatches(editor.state.doc, term)
+    const idx = newIdx !== undefined ? newIdx : 0
+    editor.view.dispatch(editor.state.tr.setMeta(searchKey, { term, idx, matches }))
+    setFindCount(matches.length)
+    setFindIdx(idx)
+  }, [editor])
+
+  const findNext = useCallback(() => {
+    if (!editor) return
+    const st = searchKey.getState(editor.state)!
+    if (!st.matches.length) return
+    const next = (st.idx + 1) % st.matches.length
+    editor.view.dispatch(editor.state.tr.setMeta(searchKey, { ...st, idx: next }))
+    setFindIdx(next)
+    editor.commands.setTextSelection({ from: st.matches[next].from, to: st.matches[next].to })
+  }, [editor])
+
+  const findPrev = useCallback(() => {
+    if (!editor) return
+    const st = searchKey.getState(editor.state)!
+    if (!st.matches.length) return
+    const prev = (st.idx - 1 + st.matches.length) % st.matches.length
+    editor.view.dispatch(editor.state.tr.setMeta(searchKey, { ...st, idx: prev }))
+    setFindIdx(prev)
+    editor.commands.setTextSelection({ from: st.matches[prev].from, to: st.matches[prev].to })
+  }, [editor])
+
+  const clearSearch = useCallback(() => {
+    if (!editor) return
+    editor.view.dispatch(editor.state.tr.setMeta(searchKey, { term: '', idx: 0, matches: [] }))
+    setFindTerm(''); setFindCount(0); setFindIdx(0); setShowFind(false)
+  }, [editor])
+
+  const replaceOne = useCallback(() => {
+    if (!editor) return
+    const st = searchKey.getState(editor.state)!
+    if (!st.matches.length) return
+    const m = st.matches[st.idx]
+    editor.chain().focus().setTextSelection({ from: m.from, to: m.to }).insertContent(replaceTerm).run()
+    applySearch(findTerm)
+  }, [editor, replaceTerm, findTerm, applySearch])
+
+  const replaceAll = useCallback(() => {
+    if (!editor) return
+    const st = searchKey.getState(editor.state)!
+    if (!st.matches.length) return
+    const chain = editor.chain().focus()
+    ;[...st.matches].reverse().forEach((m) => {
+      chain.setTextSelection({ from: m.from, to: m.to }).insertContent(replaceTerm)
+    })
+    chain.run()
+    applySearch(findTerm)
+    showToast(`Replaced ${st.matches.length} occurrence${st.matches.length !== 1 ? 's' : ''}`)
+  }, [editor, replaceTerm, findTerm, applySearch])
+
+  // Ctrl+F / Cmd+F to open find bar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f' && selectedId) {
+        e.preventDefault()
+        setShowFind(true)
+        setTimeout(() => findInputRef.current?.focus(), 50)
+      }
+      if (e.key === 'Escape' && showFind) clearSearch()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectedId, showFind, clearSearch])
 
   // ── Select a doc ─────────────────────────────────────────────────────────────
 
@@ -870,7 +1036,7 @@ export default function Documentation() {
     // Table support — TurndownService doesn't handle tables by default
     td.addRule('table', {
       filter: 'table',
-      replacement: (_content, node) => {
+      replacement: (_content: string, node: HTMLElement) => {
         const rows = Array.from((node as Element).querySelectorAll('tr'))
         if (!rows.length) return ''
         const lines: string[] = []
@@ -887,13 +1053,13 @@ export default function Documentation() {
       },
     })
     // Suppress individual th/td rules so the table rule handles everything
-    td.addRule('tableCell', { filter: ['th', 'td'], replacement: (c) => c })
-    td.addRule('tableRow',  { filter: 'tr',          replacement: (c) => c })
+    td.addRule('tableCell', { filter: ['th', 'td'], replacement: (c: string) => c })
+    td.addRule('tableRow',  { filter: 'tr',          replacement: (c: string) => c })
 
     // Task list checkboxes
     td.addRule('taskItem', {
-      filter: (node) => node.nodeName === 'LI' && node.closest('ul[data-type="taskList"]') !== null,
-      replacement: (_content, node) => {
+      filter: (node: HTMLElement) => node.nodeName === 'LI' && node.closest('ul[data-type="taskList"]') !== null,
+      replacement: (_content: string, node: HTMLElement) => {
         const checked = (node as Element).querySelector('input[type="checkbox"]')?.hasAttribute('checked')
         const text = (node.textContent ?? '').trim()
         return `\n- [${checked ? 'x' : ' '}] ${text}`
@@ -1207,7 +1373,81 @@ export default function Documentation() {
               }}>🔗</Btn>
               <Btn title="Insert image" onClick={() => imageRef.current?.click()}>🖼</Btn>
               <Btn title="Text color" onClick={() => colorRef.current?.click()}>🎨</Btn>
+              <Sep />
+              <Btn title="Find & Replace (Ctrl+F)" active={showFind} onClick={() => {
+                setShowFind(!showFind)
+                if (!showFind) setTimeout(() => findInputRef.current?.focus(), 50)
+                else clearSearch()
+              }}>🔍</Btn>
             </div>
+
+            {/* Find & Replace bar */}
+            {showFind && (
+              <div style={{
+                padding: '7px 14px', borderBottom: '1px solid var(--border-weak)',
+                background: 'var(--bg-card)', display: 'flex', alignItems: 'center',
+                gap: 6, flexShrink: 0, flexWrap: 'wrap',
+              }}>
+                {/* Find input */}
+                <input
+                  ref={findInputRef}
+                  value={findTerm}
+                  onChange={(e) => { setFindTerm(e.target.value); applySearch(e.target.value) }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.shiftKey ? findPrev() : findNext() }
+                    if (e.key === 'Escape') clearSearch()
+                  }}
+                  placeholder="Find…"
+                  style={{
+                    padding: '4px 8px', borderRadius: 5, border: '1px solid var(--border-med)',
+                    background: 'var(--bg-input)', color: 'var(--text-primary)', fontSize: 12,
+                    width: 180, outline: 'none',
+                    boxShadow: findTerm && findCount === 0 ? '0 0 0 1px #ef4444' : undefined,
+                  }}
+                />
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 60 }}>
+                  {findTerm ? (findCount === 0 ? 'No matches' : `${findIdx + 1} / ${findCount}`) : ''}
+                </span>
+                <button onMouseDown={(e) => { e.preventDefault(); findPrev() }}
+                  title="Previous (Shift+Enter)" disabled={findCount === 0}
+                  style={{ padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-input)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer' }}>
+                  ↑
+                </button>
+                <button onMouseDown={(e) => { e.preventDefault(); findNext() }}
+                  title="Next (Enter)" disabled={findCount === 0}
+                  style={{ padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-input)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer' }}>
+                  ↓
+                </button>
+                <span style={{ width: 1, height: 18, background: 'var(--border-med)', margin: '0 2px' }} />
+                {/* Replace input */}
+                <input
+                  value={replaceTerm}
+                  onChange={(e) => setReplaceTerm(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') replaceOne() }}
+                  placeholder="Replace with…"
+                  style={{
+                    padding: '4px 8px', borderRadius: 5, border: '1px solid var(--border-med)',
+                    background: 'var(--bg-input)', color: 'var(--text-primary)', fontSize: 12,
+                    width: 160, outline: 'none',
+                  }}
+                />
+                <button onMouseDown={(e) => { e.preventDefault(); replaceOne() }}
+                  disabled={findCount === 0}
+                  style={{ padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-input)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer' }}>
+                  Replace
+                </button>
+                <button onMouseDown={(e) => { e.preventDefault(); replaceAll() }}
+                  disabled={findCount === 0}
+                  style={{ padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-input)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer' }}>
+                  Replace All
+                </button>
+                <button onMouseDown={(e) => { e.preventDefault(); clearSearch() }}
+                  title="Close (Esc)"
+                  style={{ marginLeft: 'auto', padding: '3px 8px', borderRadius: 5, border: 'none', background: 'none', color: 'var(--text-muted)', fontSize: 16, cursor: 'pointer', lineHeight: 1 }}>
+                  ×
+                </button>
+              </div>
+            )}
 
             {/* Editor content */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px 32px' }}>

@@ -19,11 +19,15 @@ export default function Login({ onLogin }: Props) {
   const [mfaError, setMfaError] = useState('')
   const [loading, setLoading] = useState(false)
   const [bgUrl, setBgUrl] = useState<string | null>(null)
+  const [logoUrl, setLogoUrl] = useState<string | null>(null)
 
   useEffect(() => {
     const t = Date.now()
     fetch(`/api/settings/login-bg?t=${t}`).then(r => {
       if (r.ok && r.status !== 204) setBgUrl(`/api/settings/login-bg?t=${t}`)
+    }).catch(() => {})
+    fetch(`/api/settings/login-logo?t=${t}`).then(r => {
+      if (r.ok && r.status !== 204) setLogoUrl(`/api/settings/login-logo?t=${t}`)
     }).catch(() => {})
   }, [])
 
@@ -128,11 +132,16 @@ export default function Login({ onLogin }: Props) {
           <div style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             width: 52, height: 52, borderRadius: 14,
-            background: 'rgba(99,102,241,0.85)',
-            backdropFilter: 'blur(8px)',
+            background: logoUrl ? 'transparent' : 'rgba(99,102,241,0.85)',
+            backdropFilter: logoUrl ? 'none' : 'blur(8px)',
             marginBottom: 14, fontSize: 24,
-            boxShadow: '0 4px 20px rgba(99,102,241,0.4)',
-          }}>⌨</div>
+            boxShadow: logoUrl ? 'none' : '0 4px 20px rgba(99,102,241,0.4)',
+          }}>
+            {logoUrl
+              ? <img src={logoUrl} alt="logo" style={{ width: 52, height: 52, objectFit: 'contain', borderRadius: 14 }} />
+              : '⌨'
+            }
+          </div>
           <h1 style={{ margin: '0 0 4px', fontSize: 24, fontWeight: 700, color: '#fff', textShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
             SSH Manager
           </h1>

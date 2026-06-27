@@ -514,7 +514,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
             authorized_keys: authorizedKeys,
             virt: virtInfo,
           }
-      }, (info) => { usedKeyInfo = info })
+      }, (info) => { usedKeyInfo = info }, 5000)
       return { ...result, active_key_id: usedKeyInfo.keyId, active_key_name: usedKeyInfo.keyName, active_key_is_fallback: usedKeyInfo.isFallback }
     } catch (err: unknown) {
       return reply.code(500).send({ error: 'Failed to gather server info', details: (err as Error).message })

@@ -15,11 +15,13 @@ function toSeverity(chk: BenchmarkCheck): 'ok' | 'low' | 'medium' | 'high' | 'cr
   const criticalIds = new Set([
     'ssh-permit-root', 'ssh-password-auth', 'ssh-empty-passwords', 'ssh-protocol',
     'acct-uid0', 'pw-lockout',
+    'svc-telnet', 'svc-rsh', 'svc-tftp',
   ])
   const highIds = new Set([
     'ssh-max-auth-tries', 'pw-complexity', 'pw-max-age',
     'acct-empty-passwords', 'perm-shadow', 'perm-gshadow', 'perm-sudoers',
-    'perm-world-writable', 'kernel-aslr', 'fw-iptables', 'fw-ufw', 'fw-firewalld',
+    'perm-world-writable', 'kernel-aslr',
+    'fw-active', 'fw-default-deny', 'fw-ssh-ratelimit',
   ])
 
   if (chk.status === 'fail') {

@@ -544,6 +544,7 @@ export type DiagramEdge = {
   to: string
   type: 'lan' | 'uplink' | 'fiber' | 'mgmt' | 'vpn'
   label: string
+  arrows?: 'none' | 'forward' | 'both'
 }
 
 export type DiagramData = {
@@ -606,4 +607,71 @@ export const distroArtApi = {
   generate: (distro: string, style?: string) =>
     api.post<{ art_lines: string[]; color: string }>('/distro-art/generate', { distro, style }),
 }
+
+// ── Documentation ─────────────────────────────────────────────────────────────
+
+export type DocType = 'setup' | 'configuration' | 'troubleshooting' | 'script' | 'runbook' | 'sop' | 'reference' | 'network'
+
+export type Doc = {
+  id: string
+  title: string
+  doc_type: DocType
+  tags: string[]
+  content?: string
+  server_id: string | null
+  server_name?: string | null
+  is_pinned: boolean
+  creator_name?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export const docsApi = {
+  list: (params?: { search?: string; doc_type?: string; tag?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.search)   qs.set('search',   params.search)
+    if (params?.doc_type) qs.set('doc_type', params.doc_type)
+    if (params?.tag)      qs.set('tag',      params.tag)
+    const q = qs.toString()
+    return api.get<Doc[]>(`/docs${q ? `?${q}` : ''}`)
+  },
+  get: (id: string) => api.get<Doc>(`/docs/${id}`),
+  create: (body: Partial<Doc>) => api.post<Doc>('/docs', body),
+  update: (id: string, body: Partial<Doc>) => api.patch<Doc>(`/docs/${id}`, body),
+  remove: (id: string) => api.delete(`/docs/${id}`),
+  uploadImage: async (file: File): Promise<{ id: string; url: string }> => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch('/api/docs/images', {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    })
+    if (!res.ok) throw new Error('Image upload failed')
+    return res.json()
+  },
+  importDocx: async (file: File): Promise<{ html: string; warnings: string[] }> => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch('/api/docs/import/docx', {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    })
+    if (!res.ok) throw new Error('Import failed')
+    return res.json()
+  },
+  importPdf: async (file: File): Promise<{ html: string; pages: number }> => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch('/api/docs/import/pdf', {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    })
+    if (!res.ok) throw new Error('Import failed')
+    return res.json()
+  },
+}
+
 

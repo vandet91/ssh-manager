@@ -889,7 +889,18 @@ export default function Servers() {
       {/* overflow-x:auto lets the table scroll on narrow screens without
           breaking the outer layout; min-width keeps columns stable */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl" style={{ overflowX: 'auto' }}>
-        <table className="w-full text-xs" style={{ minWidth: 900, tableLayout: 'auto', borderCollapse: 'collapse' }}>
+        <table className="w-full text-xs" style={{ minWidth: 960, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <colgroup>
+            <col style={{ width: 160 }} /> {/* Name */}
+            <col style={{ width: 80 }}  /> {/* OS */}
+            <col style={{ width: 110 }} /> {/* Host Platform */}
+            <col style={{ width: 160 }} /> {/* Hostname */}
+            <col style={{ width: 75 }}  /> {/* Env */}
+            <col style={{ width: 100 }} /> {/* Status */}
+            <col style={{ width: 85 }}  /> {/* Added */}
+            <col style={{ width: 105 }} /> {/* Last Connected */}
+            <col />                        {/* Actions — fills remaining */}
+          </colgroup>
           <thead className="bg-gray-800/50">
             <tr className="text-left text-gray-500 text-xs uppercase tracking-wide font-medium" style={{ borderBottom: '1px solid var(--border-med)' }}>
               <th className="px-3 py-2">Name</th>
@@ -926,7 +937,7 @@ export default function Servers() {
                   <HostBadge type={s.host_type} detail={s.host_type_detail} />
                 </td>
                 <td className="px-3 py-2 text-gray-300 font-mono text-xs" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.hostname}:{s.ssh_port}</td>
-                <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}><Badge label={s.environment} /></td>
+                <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}><Badge label={({'production':'PROD','staging':'STG','development':'DEV','other':'OTHER'} as Record<string,string>)[s.environment] ?? s.environment} /></td>
                 <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
                   {s.os_type === 'windows'
                     ? s.windows_rdp_ready
@@ -1277,15 +1288,24 @@ export default function Servers() {
             </div>
           )}
           {infoError && (
-            <div className="space-y-3">
-              <p className="text-red-400 text-sm">{infoError}</p>
-              {/* Show cached OS info if available */}
-              {(infoServer?.os_name || infoServer?.os_pretty_name) && (
-                <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4 space-y-2">
-                  <p className="text-xs text-yellow-400 font-medium mb-3">⚠ Server offline — showing last known info</p>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                    <span className="text-gray-400">OS</span>
-                    <span className="text-gray-200">{infoServer.os_pretty_name || infoServer.os_name}</span>
+            <div className="space-y-4">
+              {/* Offline banner */}
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-900/30 border border-red-800/50">
+                <span className="text-red-400">⚠</span>
+                <span className="text-red-400 text-sm font-medium">Server offline — cannot connect via SSH</span>
+              </div>
+
+              {/* Cached OS info */}
+              {(infoServer?.os_name || infoServer?.os_pretty_name || infoServer?.hostname) && (
+                <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4">
+                  <p className="text-xs text-yellow-400 font-semibold uppercase tracking-wider mb-3">Last Known System Info</p>
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                    <span className="text-gray-400">Hostname</span>
+                    <span className="text-gray-200 font-mono">{infoServer.hostname}</span>
+                    {(infoServer.os_pretty_name || infoServer.os_name) && <>
+                      <span className="text-gray-400">OS</span>
+                      <span className="text-gray-200">{infoServer.os_pretty_name || infoServer.os_name}</span>
+                    </>}
                     {infoServer.os_version && <>
                       <span className="text-gray-400">Version</span>
                       <span className="text-gray-200">{infoServer.os_version}</span>
@@ -1294,10 +1314,35 @@ export default function Servers() {
                       <span className="text-gray-400">Kernel</span>
                       <span className="text-gray-200 font-mono">{infoServer.kernel_version}</span>
                     </>}
+                    <span className="text-gray-400">Environment</span>
+                    <span className="text-gray-200">{infoServer.environment || '—'}</span>
                     {infoServer.last_seen_at && <>
                       <span className="text-gray-400">Last seen</span>
-                      <span className="text-gray-200">{new Date(infoServer.last_seen_at).toLocaleString()}</span>
+                      <span className="text-yellow-300">{new Date(infoServer.last_seen_at).toLocaleString()}</span>
                     </>}
+                    {infoServer.last_connected_at && <>
+                      <span className="text-gray-400">Last connected</span>
+                      <span className="text-gray-200">{new Date(infoServer.last_connected_at).toLocaleString()}</span>
+                    </>}
+                  </div>
+                </div>
+              )}
+
+              {/* Credentials still accessible from DB */}
+              {credentials.length > 0 && (
+                <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4">
+                  <p className="text-xs text-yellow-400 font-semibold uppercase tracking-wider mb-3">🔑 Stored Credentials ({credentials.filter(c => !c.is_archived).length})</p>
+                  <div className="space-y-2">
+                    {credentials.filter(c => !c.is_archived).map(cred => (
+                      <div key={cred.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-gray-900/60 border border-gray-700/50 text-sm">
+                        <div>
+                          <span className="text-gray-200 font-medium">{cred.label}</span>
+                          {cred.linux_user && <span className="ml-2 text-gray-400 font-mono text-xs">{cred.linux_user}</span>}
+                          {cred.service_name && <span className="ml-2 text-gray-400 text-xs">{cred.service_name}</span>}
+                        </div>
+                        <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400">{cred.category}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

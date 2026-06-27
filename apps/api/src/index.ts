@@ -42,9 +42,12 @@ import networkPingRoutes from './modules/servers/network-ping.routes'
 import firmwareRepoRoutes from './modules/firmware-repo/firmware-repo.routes'
 import configBackupRoutes from './modules/config-backup/config-backup.routes'
 import networkScanRoutes from './modules/network-scan/network-scan.routes'
+import docsRoutes from './modules/docs/docs.routes'
 import radiusRoutes from './modules/radius/radius.routes'
+import tasksRoutes from './modules/tasks/tasks.routes'
 import { startTelegramBot } from './modules/telegram/telegram.service'
 import { startRotationWorker, scheduleRotations } from './jobs/rotation.worker'
+import { startTasksWorker } from './jobs/tasks.worker'
 import { FileMigrationProvider, Migrator } from 'kysely'
 import * as path from 'path'
 import * as fs from 'fs/promises'
@@ -167,6 +170,8 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(firmwareRepoRoutes)
   await fastify.register(configBackupRoutes)
   await fastify.register(networkScanRoutes)
+  await fastify.register(docsRoutes)
+  await fastify.register(tasksRoutes)
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
@@ -183,6 +188,9 @@ async function main(): Promise<void> {
   // Start Telegram bot (polls independently; re-reads settings dynamically)
   const stopTelegram = startTelegramBot()
 
+  // Start task scheduler
+  const stopTasksWorker = startTasksWorker()
+
   // Start BullMQ workers
   const { worker: rotWorker, queue: rotQueue } = startRotationWorker()
 
@@ -194,6 +202,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     fastify.log.info('Shutting down...')
     stopTelegram()
+    stopTasksWorker()
     clearInterval(rotationInterval)
     await rotWorker.close()
     await rotQueue.close()

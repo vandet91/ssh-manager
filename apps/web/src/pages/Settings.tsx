@@ -1151,8 +1151,9 @@ export default function Settings() {
         </div>
 
         {/* ── Login Background ──────────────────────────────────────────────── */}
-        <div style={{ marginTop: 32 }}>
+        <div style={{ marginTop: 24 }}>
           <LoginBgSection />
+          <LoginLogoSection />
         </div>
 
         {/* ── Distro Art ────────────────────────────────────────────────────── */}
@@ -1256,6 +1257,101 @@ function LoginBgSection() {
               {uploading ? 'Uploading…' : 'Upload'}
             </button>
             {hasImage && (
+              <button onClick={remove}
+                style={{
+                  padding: '7px 16px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
+                  background: 'rgba(242,73,92,0.12)', border: '1px solid rgba(242,73,92,0.35)',
+                  color: '#f2495c',
+                }}>
+                Remove
+              </button>
+            )}
+          </div>
+          {msg && <p style={{ marginTop: 10, fontSize: 13, color: msg.includes('failed') || msg.includes('Max') ? '#f2495c' : 'var(--text-muted)' }}>{msg}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Login Logo Section ────────────────────────────────────────────────────────
+
+function LoginLogoSection() {
+  const [preview, setPreview] = useState<string | null>(null)
+  const [hasLogo, setHasLogo] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [msg, setMsg] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    fetch('/api/settings/login-logo').then(r => {
+      if (r.ok && r.status !== 204) {
+        setHasLogo(true)
+        setPreview(`/api/settings/login-logo?t=${Date.now()}`)
+      }
+    }).catch(() => {})
+  }, [])
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setPreview(URL.createObjectURL(file))
+  }
+
+  const upload = async () => {
+    const file = fileRef.current?.files?.[0]
+    if (!file) return
+    setUploading(true); setMsg('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const r = await fetch('/api/settings/login-logo', { method: 'POST', body: form, credentials: 'include' })
+      if (!r.ok) throw new Error((await r.json()).error ?? 'Upload failed')
+      setHasLogo(true)
+      setMsg('Logo updated.')
+    } catch (e: any) { setMsg(e.message) }
+    setUploading(false)
+  }
+
+  const remove = async () => {
+    if (!confirm('Remove login logo?')) return
+    await fetch('/api/settings/login-logo', { method: 'DELETE', credentials: 'include' })
+    setHasLogo(false); setPreview(null); setMsg('Logo removed.')
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-med)', borderRadius: 10, padding: 24, marginBottom: 24 }}>
+      <h3 style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 600, color: 'var(--text-heading)' }}>🏷 Login Page Logo</h3>
+      <p style={{ margin: '0 0 20px', fontSize: 13, color: 'var(--text-muted)' }}>
+        Upload a logo to replace the default icon on the login page. Recommended: square PNG or SVG with transparency. Max 2 MB.
+      </p>
+
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        {/* Preview */}
+        <div style={{
+          width: 96, height: 96, borderRadius: 16, overflow: 'hidden', flexShrink: 0,
+          border: '1px solid var(--border-med)', background: 'var(--bg-canvas)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {preview ? (
+            <img src={preview} alt="logo preview" style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 8, boxSizing: 'border-box' }} />
+          ) : (
+            <span style={{ fontSize: 36, opacity: 0.2 }}>⌨</span>
+          )}
+        </div>
+
+        {/* Controls */}
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/svg+xml"
+            onChange={handleFile}
+            style={{ display: 'block', marginBottom: 12, fontSize: 13, color: 'var(--text-primary)' }} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={upload} disabled={uploading || !fileRef.current?.files?.length}
+              className="btn-primary" style={{ padding: '7px 16px', fontSize: 13 }}>
+              {uploading ? 'Uploading…' : 'Upload'}
+            </button>
+            {hasLogo && (
               <button onClick={remove}
                 style={{
                   padding: '7px 16px', fontSize: 13, borderRadius: 6, cursor: 'pointer',

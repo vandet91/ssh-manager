@@ -31,6 +31,8 @@ interface DbConnection {
   server_id: string | null
   server_name?: string
   server_hostname?: string
+  vault_id: string | null
+  vault_title?: string | null
   name: string
   db_type: DbType
   host: string
@@ -43,6 +45,7 @@ interface DbConnection {
   created_at: string
 }
 
+interface VaultEntry { id: string; title: string; username: string | null; url: string | null; linked_server_id: string | null }
 interface Server { id: string; name: string; hostname: string; os_type?: string | null }
 
 interface QueryResult {
@@ -156,6 +159,9 @@ export default function DbConnector() {
   const [showForm, setShowForm] = useState(false)
   const [editConn, setEditConn] = useState<DbConnection | null>(null)
   const [formServerId, setFormServerId] = useState('')
+  const [formVaultId, setFormVaultId] = useState<string>('')
+  const [formVaultTitle, setFormVaultTitle] = useState<string>('')
+  const [vaultEntries, setVaultEntries] = useState<VaultEntry[]>([])
   const [form, setForm] = useState({
     name: '', db_type: 'postgresql' as DbType, host: '127.0.0.1', port: 5432,
     database_name: '', db_user: '', password: '', use_ssh_tunnel: false,
@@ -221,6 +227,9 @@ export default function DbConnector() {
       .catch(() => {})
       .finally(() => setConnectionsLoading(false))
     api.get<Server[]>('/servers').then(all => setServers(all.filter(s => s.os_type === 'linux' || s.os_type === 'windows'))).catch(() => {})
+    api.get<VaultEntry[]>('/vault?type=database&limit=200')
+      .then(rows => setVaultEntries(rows))
+      .catch(() => {})
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -230,6 +239,8 @@ export default function DbConnector() {
   function openCreate() {
     setEditConn(null)
     setFormServerId('')
+    setFormVaultId('')
+    setFormVaultTitle('')
     setForm({ name: '', db_type: 'postgresql', host: '127.0.0.1', port: 5432, database_name: '', db_user: '', password: '', use_ssh_tunnel: true, ssl_enabled: false, notes: '' })
     setFormError('')
     setShowForm(true)
@@ -238,19 +249,55 @@ export default function DbConnector() {
   function openEdit(c: DbConnection) {
     setEditConn(c)
     setFormServerId(c.server_id ?? '')
+    setFormVaultId(c.vault_id ?? '')
+    setFormVaultTitle(c.vault_title ?? '')
     setForm({ name: c.name, db_type: c.db_type, host: c.host, port: c.port, database_name: c.database_name, db_user: c.db_user ?? '', password: '', use_ssh_tunnel: c.use_ssh_tunnel, ssl_enabled: c.ssl_enabled, notes: c.notes ?? '' })
     setFormError('')
     setShowForm(true)
   }
 
+  function applyVaultEntry(v: VaultEntry) {
+    setFormVaultId(v.id)
+    setFormVaultTitle(v.title)
+    // Auto-fill username
+    if (v.username) setForm(f => ({ ...f, db_user: v.username ?? f.db_user, password: '' }))
+    // Parse host/port/db from url if it looks like a DB connection string
+    if (v.url) {
+      try {
+        const u = new URL(v.url)
+        if (u.hostname) setForm(f => ({ ...f, host: u.hostname }))
+        if (u.port) setForm(f => ({ ...f, port: parseInt(u.port, 10) }))
+        const dbName = u.pathname.replace(/^\//, '')
+        if (dbName) setForm(f => ({ ...f, database_name: dbName }))
+      } catch { /* not a valid URL, leave fields as-is */ }
+    }
+    // Auto-set SSH tunnel if vault entry is linked to a server
+    if (v.linked_server_id) {
+      setFormServerId(v.linked_server_id)
+      setForm(f => ({ ...f, use_ssh_tunnel: true }))
+    }
+  }
+
+  function clearVault() {
+    setFormVaultId('')
+    setFormVaultTitle('')
+  }
+
 
   async function saveForm(e: React.FormEvent) {
     e.preventDefault(); setFormError(''); setFormBusy(true)
+    const payload = {
+      ...form,
+      server_id: formServerId || null,
+      vault_id: formVaultId || null,
+      // Only send password if manually entered (vault-linked connections skip this)
+      password: (formVaultId && !form.password) ? undefined : form.password || undefined,
+    }
     try {
       if (editConn) {
-        await api.patch(`/db/connections/${editConn.id}`, { ...form, server_id: formServerId || null, password: form.password || undefined })
+        await api.patch(`/db/connections/${editConn.id}`, payload)
       } else {
-        await api.post('/db/connections', { ...form, server_id: formServerId || null })
+        await api.post('/db/connections', payload)
       }
       setShowForm(false); load()
     } catch (err: any) { setFormError(err.message) }
@@ -521,7 +568,10 @@ export default function DbConnector() {
                 <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', paddingLeft: 14 }}>
-                <div>{DB_LABELS[c.db_type]} · {c.database_name || '—'}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {DB_LABELS[c.db_type]} · {c.database_name || '—'}
+                  {c.vault_id && <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--accent-hex)20', color: 'var(--accent-hex)', fontWeight: 600 }}>🔐 vault</span>}
+                </div>
                 <div style={{ marginTop: 2 }}>{c.server_name ?? (c.server_id ? c.server_id.slice(0, 8) : 'Direct')}</div>
               </div>
               <div style={{ display: 'flex', gap: 4, marginTop: 6, paddingLeft: 14 }} onClick={e => e.stopPropagation()}>
@@ -994,6 +1044,35 @@ export default function DbConnector() {
             <form onSubmit={saveForm} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {formError && <div style={{ color: 'var(--error)', fontSize: 13 }}>{formError}</div>}
 
+              {/* ── Vault link ── */}
+              <div style={{ background: 'var(--bg-body)', border: '1px solid var(--border-med)', borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  🔐 Vault Credentials <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(optional — password pulled from vault at connect time)</span>
+                </div>
+                {formVaultId ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1, fontSize: 13, color: 'var(--accent-hex)', fontWeight: 600 }}>🔐 {formVaultTitle}</span>
+                    <button type="button" onClick={clearVault} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>✕ Remove</button>
+                  </div>
+                ) : (
+                  <select
+                    value=""
+                    onChange={e => {
+                      const v = vaultEntries.find(x => x.id === e.target.value)
+                      if (v) applyVaultEntry(v)
+                    }}
+                    className={inputCls}
+                  >
+                    <option value="">— Select vault entry to import credentials —</option>
+                    {vaultEntries.map(v => (
+                      <option key={v.id} value={v.id}>
+                        {v.title}{v.username ? ` (${v.username})` : ''}{v.linked_server_id ? ' 🔗 SSH' : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
               <label style={{ display: 'block' }}>
                 <span style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Server <span style={{ color: 'var(--text-muted)' }}>(optional — required for SSH tunnel)</span></span>
                 <select value={formServerId} onChange={e => setFormServerId(e.target.value)} className={inputCls}>
@@ -1044,9 +1123,23 @@ export default function DbConnector() {
                       placeholder={form.db_type === 'postgresql' ? 'postgres' : form.db_type === 'mssql' ? 'sa' : 'root'} className={inputCls} />
                   </label>
                   <label style={{ display: 'block' }}>
-                    <span style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{editConn ? 'Password (leave blank to keep)' : 'Password'}</span>
-                    <input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                      placeholder={editConn ? '••••••••' : ''} className={inputCls} />
+                    <span style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                      {formVaultId ? 'Override Password' : (editConn ? 'Password (leave blank to keep)' : 'Password')}
+                    </span>
+                    {formVaultId && !form.password ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 34 }}>
+                        <span style={{ fontSize: 12, color: 'var(--accent-hex)', padding: '4px 10px', background: 'var(--accent-hex)15', borderRadius: 6, border: '1px solid var(--accent-hex)40' }}>
+                          🔐 from vault
+                        </span>
+                        <button type="button" onClick={() => setForm(f => ({ ...f, password: ' ' }))}
+                          style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                          Override
+                        </button>
+                      </div>
+                    ) : (
+                      <input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                        placeholder={formVaultId ? 'Override vault password…' : (editConn ? '••••••••' : '')} className={inputCls} />
+                    )}
                   </label>
                 </div>
               )}
