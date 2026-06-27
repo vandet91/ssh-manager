@@ -114,7 +114,9 @@ export default async function networkProfileRoutes(fastify: FastifyInstance): Pr
       snmp_interfaces: server.snmp_interfaces ?? null,
 
       firmware_check_at: server.firmware_check_at ?? null,
-      firmware_check_result: server.firmware_check_result ?? null,
+      firmware_check_result: server.firmware_check_result
+        ? (() => { try { return JSON.parse(server.firmware_check_result as string) } catch { return null } })()
+        : null,
     }
   })
 
@@ -528,13 +530,17 @@ ${deviceInfo}`
                         !sysDescr.includes('small business') && !/^sg[23456]|^cbs[23]/.test(snmpModel)
     const isCiscoSmb  = sysDescr.includes('small business') || /^sg[23456]|^cbs[23]/.test(snmpModel)
 
+    let _sess: any = null
+    const POLL_TIMEOUT_MS = 60_000
+    let pollTimeoutHandle: ReturnType<typeof setTimeout> | null = null
+
     try {
       const snmp = await import('net-snmp')
 
       const sessionOpts: any = {
         port,
         retries: 1,
-        timeout: 6000,
+        timeout: 5000,
         transport: 'udp4',
         version: version === 'v1' ? snmp.Version1 : version === 'v3' ? snmp.Version3 : snmp.Version2c,
       }
@@ -549,6 +555,7 @@ ${deviceInfo}`
             privKey: v3PrivKey,
           }, sessionOpts)
         : snmp.createSession(server.hostname, community, sessionOpts)
+      _sess = sess
 
       // Walk a subtree â€” last OID component is the key (usually ifIndex or bridge port)
       const walkTable = (baseOid: string, isMac = false): Promise<Map<number, string>> =>
@@ -693,9 +700,32 @@ ${deviceInfo}`
           })
         })
 
-      // â”€â”€ Phase 1: IF-MIB (standard, all devices) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      const [ifDescr, ifSpeed, ifPhysAddr, ifAdminStatus, ifOperStatus, ifName, ifHighSpeed, ifAlias] =
+      // Fetch a single scalar OID
+      const getScalar = (oid: string): Promise<string> =>
+        new Promise((resolve) => {
+          sess.get([{ oid }], (err: any, vbs: any[]) => {
+            if (err || !vbs?.[0] || snmp.isVarbindError(vbs[0])) return resolve('')
+            const raw = vbs[0].value
+            resolve(Buffer.isBuffer(raw) ? raw.toString('utf8').replace(/\0/g, '').trim() : String(raw ?? ''))
+          })
+        })
+
+      // Overall timeout — closes the session to unblock any pending subtree walks
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        pollTimeoutHandle = setTimeout(() => {
+          try { sess.close() } catch {}
+          reject(new Error('SNMP poll timed out after 60s'))
+        }, POLL_TIMEOUT_MS)
+      })
+
+      const { ports, dot1qVlanStaticName, discoveredRadius, liveSysDescr: liveDesc, liveSysObjId: liveOid } = await Promise.race([
+        (async () => {
+
+      // â”€â”€ Phase 1: IF-MIB + live sysDescr/sysObjectID (standard, all devices) â”€â”€â”€â”€â”€
+      const [liveSysDescr, liveSysObjId, ifDescr, ifSpeed, ifPhysAddr, ifAdminStatus, ifOperStatus, ifName, ifHighSpeed, ifAlias] =
         await Promise.all([
+          getScalar('1.3.6.1.2.1.1.1.0'),          // sysDescr  (live, for vendor detection)
+          getScalar('1.3.6.1.2.1.1.2.0'),          // sysObjectID (OID prefix identifies vendor)
           walkTable('1.3.6.1.2.1.2.2.1.2'),        // ifDescr
           walkTable('1.3.6.1.2.1.2.2.1.5'),        // ifSpeed (bps)
           walkTable('1.3.6.1.2.1.2.2.1.6', true),  // ifPhysAddress â€” 6-byte MAC
@@ -706,17 +736,51 @@ ${deviceInfo}`
           walkTable('1.3.6.1.2.1.31.1.1.1.18'),    // ifAlias / description
         ])
 
+      // â”€â”€ Live vendor re-detection using sysDescr + sysObjectID â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // Overrides the stale DB-cached values; critical when Firmware AI was never run
+      const liveDescr = liveSysDescr.toLowerCase()
+      const liveOid   = liveSysObjId  // e.g. “1.3.6.1.4.1.9.1.516”
+      const isCiscoIosLive = (/cisco/i.test(liveDescr) && !/small/i.test(liveDescr) &&
+                              !liveOid.startsWith(‘1.3.6.1.4.1.9.6’)) ||
+                             liveOid.startsWith(‘1.3.6.1.4.1.9.1’)
+      const isCiscoSmbLive = (/cisco/i.test(liveDescr) && /small/i.test(liveDescr)) ||
+                             liveOid.startsWith(‘1.3.6.1.4.1.9.6’) ||
+                             /^sg[23456]|^cbs[23]/.test(snmpModel)
+      // Combine stale DB detection with live — live wins when available
+      const isCiscoIosFinal = liveSysDescr ? isCiscoIosLive : isCiscoIos
+      const isCiscoSmbFinal = liveSysDescr ? isCiscoSmbLive : isCiscoSmb
+      // Non-switch detection (unused in walk logic but available for future phases)
+      const _isRouterOrFw = /fortios|fortigate|vyos|openwrt/i.test(liveDescr) ||
+                            liveOid.startsWith(‘1.3.6.1.4.1.12356’)
+      const _isMikroTik   = /routeros|mikrotik/i.test(liveDescr) || liveOid.startsWith(‘1.3.6.1.4.1.14988’)
+      const _isAruba      = /arubaos|aruba/i.test(liveDescr) || liveOid.startsWith(‘1.3.6.1.4.1.14823’)
+
       // â”€â”€ Phase 2: Bridge MIB â€” bridge port â†’ ifIndex mapping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // CRITICAL: Q-BRIDGE bitmasks use bridge port numbers, not ifIndex.
       // dot1dBasePortIfIndex maps bridge port n â†’ ifIndex.
       // Without this, VLAN membership is matched to the wrong interface on most switches.
-      const bridgePortToIfIndex = await walkTable('1.3.6.1.2.1.17.1.4.1.2')
+      const bridgePortToIfIndex = await walkTable(‘1.3.6.1.2.1.17.1.4.1.2’)
         .catch(() => new Map<number, string>())
       // Build reverse map: ifIndex â†’ bridge port number
       const ifIndexToBridgePort = new Map<number, number>()
       for (const [bp, ifIdxStr] of bridgePortToIfIndex) {
         const ifIdx = parseInt(ifIdxStr, 10)
         if (!isNaN(ifIdx)) ifIndexToBridgePort.set(ifIdx, bp)
+      }
+
+      // Helper: bridge port â†’ ifIndex, with bp==ifIndex fallback for vendors that omit the mapping table
+      const bpToIfIdx = (bp: number): number => {
+        if (bridgePortToIfIndex.size > 0) {
+          const v = bridgePortToIfIndex.get(bp)
+          return v !== undefined ? parseInt(v, 10) : NaN
+        }
+        return bp  // many switches use bp == ifIndex
+      }
+      // Helper: ifIndex â†’ bridge port, same fallback
+      const ifIdxToBp = (ifIdx: number): number | undefined => {
+        if (ifIndexToBridgePort.size > 0) return ifIndexToBridgePort.get(ifIdx)
+        // If no explicit mapping but there is Q-BRIDGE data, assume bp == ifIndex
+        return undefined  // resolved after Phase 3 once we know if Q-BRIDGE responded
       }
 
       // â”€â”€ Phase 3: Q-BRIDGE-MIB (VLAN membership + names) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -726,16 +790,26 @@ ${deviceInfo}`
         // dot1qVlanStaticName: vlanId â†’ name configured on the switch
         walkTable('1.3.6.1.2.1.17.7.1.4.3.1.1').catch(() => new Map<number, string>()),
       ])
-      // Build ifIndex â†’ PVID using the bridge port mapping
+      // dot1qVlanStaticEgressPorts bitmask â€” bridge port is the bit position
+      const egressByVlan = await walkBitmask(`1.3.6.1.2.1.17.7.1.4.3.1.2`)
+        .catch(() => new Map<number, Buffer>())
+
+      // If dot1dBasePortIfIndex was empty but Q-BRIDGE responded, assume bp == ifIndex.
+      // This is standard behaviour on many switches (Aruba, some HP, some Cisco SMB).
+      const useBpEqualsIfIndex = bridgePortToIfIndex.size === 0 &&
+        (dot1qPvid.size > 0 || egressByVlan.size > 0)
+      const resolvedBpToIfIdx = (bp: number): number => {
+        if (useBpEqualsIfIndex) return bp
+        return bpToIfIdx(bp)
+      }
+
+      // Build ifIndex â†’ PVID using the bridge port mapping (with fallback)
       const ifIndexToPvid = new Map<number, number>()
       for (const [bp, pvid] of dot1qPvid) {
-        const ifIdx = parseInt(bridgePortToIfIndex.get(bp) ?? '', 10)
+        const ifIdx = resolvedBpToIfIdx(bp)
         if (!isNaN(ifIdx)) ifIndexToPvid.set(ifIdx, parseInt(pvid, 10) || 1)
       }
 
-      // dot1qVlanStaticEgressPorts bitmask â€” bridge port is the bit position
-      const egressByVlan = await walkBitmask('1.3.6.1.2.1.17.7.1.4.3.1.2')
-        .catch(() => new Map<number, Buffer>())
       // Count how many VLANs each bridge port appears in (>1 = trunk)
       const bridgePortVlanCount = new Map<number, number>()
       for (const bitmask of egressByVlan.values()) {
@@ -755,14 +829,14 @@ ${deviceInfo}`
       // Standard fallback: derive from VLAN count
       let ifIndexToMode = new Map<number, 'access' | 'trunk' | 'unknown'>()
 
-      if (isCiscoIos) {
+      if (isCiscoIosFinal) {
         // vlanTrunkPortDynamicStatus: 1=trunking, 2=notTrunking â€” keyed by ifIndex
         const trunkStatus = await walkTable('1.3.6.1.4.1.9.9.46.1.6.1.1.14')
           .catch(() => new Map<number, string>())
         for (const [idx, val] of trunkStatus) {
           ifIndexToMode.set(idx, val === '1' ? 'trunk' : 'access')
         }
-      } else if (isCiscoSmb) {
+      } else if (isCiscoSmbFinal) {
         // rlPortSwVlanMode: 1=general, 2=access, 3=trunk, 4=customer â€” keyed by ifIndex
         const smbMode = await walkTable('1.3.6.1.4.1.9.6.1.101.48.22.1.1')
           .catch(() => new Map<number, string>())
@@ -771,23 +845,27 @@ ${deviceInfo}`
           ifIndexToMode.set(idx, v === 3 ? 'trunk' : v === 1 ? 'trunk' : 'access')
         }
       }
-      // Fallback: use Q-BRIDGE VLAN count via bridge port mapping
-      if (ifIndexToMode.size === 0) {
-        for (const [ifIdx, bp] of ifIndexToBridgePort) {
+      // Fallback: derive mode from Q-BRIDGE VLAN count.
+      // Works for all standards-compliant switches (Aruba, HP, generic) regardless of vendor.
+      // Also handles bp==ifIndex case via resolvedBpToIfIdx.
+      if (ifIndexToMode.size === 0 && (bridgePortVlanCount.size > 0)) {
+        for (const [ifIdx] of ifDescr) {
+          const bp = useBpEqualsIfIndex ? ifIdx : ifIndexToBridgePort.get(ifIdx)
+          if (bp === undefined) continue
           const count = bridgePortVlanCount.get(bp) ?? 0
-          ifIndexToMode.set(ifIdx, count === 0 ? 'unknown' : count === 1 ? 'access' : 'trunk')
+          if (count > 0) ifIndexToMode.set(ifIdx, count === 1 ? 'access' : 'trunk')
         }
       }
 
       // â”€â”€ Phase 5: STP state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // dot1dStpPortState: 1=disabled,2=blocking,3=listening,4=learning,5=forwarding,6=broken
-      // Keyed by bridge port â€” map back to ifIndex
+      // Keyed by bridge port â€” map back to ifIndex using fallback
       const stpStateByBp = await walkTable('1.3.6.1.2.1.17.2.15.1.3')
         .catch(() => new Map<number, string>())
       const STP_STATES: Record<string, string> = { '1':'disabled','2':'blocking','3':'listening','4':'learning','5':'forwarding','6':'broken' }
       const ifIndexToStp = new Map<number, string>()
       for (const [bp, val] of stpStateByBp) {
-        const ifIdx = parseInt(bridgePortToIfIndex.get(bp) ?? '', 10)
+        const ifIdx = resolvedBpToIfIdx(bp)
         if (!isNaN(ifIdx)) ifIndexToStp.set(ifIdx, STP_STATES[val] ?? 'unknown')
       }
 
@@ -795,13 +873,13 @@ ${deviceInfo}`
       // Cisco IOS: stpxFastStartPortEnable (1=enable,2=disable) â€” keyed by ifIndex
       // Standard:  dot1dStpPortFastEnabled  (1=enable,2=disable) â€” keyed by bridge port
       const ifIndexToEdge = new Map<number, boolean>()
-      if (isCiscoIos) {
+      if (isCiscoIosFinal) {
         const pf = await walkTable('1.3.6.1.4.1.9.9.82.1.9.3.1.3').catch(() => new Map<number, string>())
         for (const [idx, val] of pf) ifIndexToEdge.set(idx, val === '1')
       } else {
         const pf = await walkTable('1.3.6.1.2.1.17.2.19.1.2').catch(() => new Map<number, string>())
         for (const [bp, val] of pf) {
-          const ifIdx = parseInt(bridgePortToIfIndex.get(bp) ?? '', 10)
+          const ifIdx = resolvedBpToIfIdx(bp)
           if (!isNaN(ifIdx)) ifIndexToEdge.set(ifIdx, val === '1')
         }
       }
@@ -836,7 +914,7 @@ ${deviceInfo}`
 
       // â”€â”€ Phase 9: CDP neighbors (Cisco IOS only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const ifIndexToCdp = new Map<number, { deviceId: string; ipAddr: string; portId: string; platform: string }>()
-      if (isCiscoIos) {
+      if (isCiscoIosFinal) {
         const cdpNeighbors = await walkCdp().catch(() => new Map())
         for (const [ifIdx, n] of cdpNeighbors) ifIndexToCdp.set(ifIdx, n)
       }
@@ -911,13 +989,22 @@ ${deviceInfo}`
         .sort((a, b) => a.index - b.index)
 
       sess.close()
+      return { ports, dot1qVlanStaticName, discoveredRadius, liveSysDescr, liveSysObjId }
+        })(),
+        timeoutPromise,
+      ])
+      if (pollTimeoutHandle) clearTimeout(pollTimeoutHandle)
 
       const now = new Date()
-      await db.updateTable('servers').set({
-        snmp_interfaces: JSON.stringify(ports),
-        snmp_last_fetched_at: now,
-        updated_at: now,
-      } as any).where('id', '=', id).execute()
+      const lastDataUpdate: any = { snmp_interfaces: JSON.stringify(ports), snmp_last_fetched_at: now, updated_at: now }
+      if (liveDesc) {
+        // Merge sysDescr/sysObjectID into snmp_last_data so Firmware AI has it without a separate scan
+        const existing = server.snmp_last_data
+          ? (typeof server.snmp_last_data === 'string' ? JSON.parse(server.snmp_last_data) : server.snmp_last_data) as Record<string, unknown>
+          : {}
+        lastDataUpdate.snmp_last_data = JSON.stringify({ ...existing, sysDescr: liveDesc, sysObjectID: liveOid })
+      }
+      await db.updateTable('servers').set(lastDataUpdate).where('id', '=', id).execute()
 
       // Upsert discovered VLANs
       if (dot1qVlanStaticName.size > 0) {
@@ -949,6 +1036,8 @@ ${deviceInfo}`
 
       return { ok: true, fetched_at: now.toISOString(), ports, vlans: storedVlans, discovered_radius: discoveredRadius }
     } catch (err: any) {
+      if (pollTimeoutHandle) clearTimeout(pollTimeoutHandle)
+      try { _sess?.close() } catch {}
       return reply.code(400).send({ error: `SNMP port walk failed: ${err.message ?? err}` })
     }
   })

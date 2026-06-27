@@ -53,8 +53,8 @@ async function fetchUpdates(token: string, offset: number): Promise<TgUpdate[]> 
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 
-interface TgGroupConfig { enabled: boolean; totp: boolean }
-interface TgCommands { servers: TgGroupConfig; status: TgGroupConfig; software: TgGroupConfig; linux_info: TgGroupConfig; linux_svc: TgGroupConfig; ad_read: TgGroupConfig; ad_write: TgGroupConfig }
+interface TgGroupConfig { enabled: boolean; totp: boolean; cmds?: Record<string, boolean> }
+interface TgCommands { servers: TgGroupConfig; status: TgGroupConfig; software: TgGroupConfig; linux_info: TgGroupConfig; linux_svc: TgGroupConfig; ad_read: TgGroupConfig; ad_write: TgGroupConfig; network: TgGroupConfig; tasks: TgGroupConfig }
 interface TgSettings { enabled: boolean; token: string; allowedChats: number[]; totpSecret: string; commands: TgCommands }
 
 const DEFAULT_COMMANDS: TgCommands = {
@@ -65,13 +65,22 @@ const DEFAULT_COMMANDS: TgCommands = {
   linux_svc:  { enabled: true,  totp: true  },
   ad_read:    { enabled: true,  totp: false },
   ad_write:   { enabled: true,  totp: true  },
+  network:    { enabled: true,  totp: false },
+  tasks:      { enabled: true,  totp: true  },
 }
 
 function normalizeGroup(val: unknown, def: TgGroupConfig): TgGroupConfig {
   if (val === null || val === undefined) return def
   if (typeof val === 'boolean') return { enabled: val, totp: def.totp }
   const v = val as Partial<TgGroupConfig>
-  return { enabled: v.enabled ?? def.enabled, totp: v.totp ?? def.totp }
+  return { enabled: v.enabled ?? def.enabled, totp: v.totp ?? def.totp, cmds: v.cmds }
+}
+
+function isCmdEnabled(settings: TgSettings, group: keyof TgCommands, cmd: string): boolean {
+  if (!isEnabled(settings, group)) return false
+  const cmds = settings.commands[group].cmds
+  if (!cmds) return true
+  return cmds[cmd] !== false
 }
 
 async function getSettings(): Promise<TgSettings> {
@@ -88,6 +97,8 @@ async function getSettings(): Promise<TgSettings> {
     linux_svc:  normalizeGroup(raw['linux_svc'],  DEFAULT_COMMANDS.linux_svc),
     ad_read:    normalizeGroup(raw['ad_read'],    DEFAULT_COMMANDS.ad_read),
     ad_write:   normalizeGroup(raw['ad_write'],   DEFAULT_COMMANDS.ad_write),
+    network:    normalizeGroup(raw['network'],    DEFAULT_COMMANDS.network),
+    tasks:      normalizeGroup(raw['tasks'],      DEFAULT_COMMANDS.tasks),
   }
   return {
     enabled: !!(m['telegram_enabled'] ?? false),
@@ -140,7 +151,7 @@ function escapeHtml(s: string): string {
 
 // ── TOTP challenges ────────────────────────────────────────────────────────────
 
-type ChallengeAction = 'start' | 'stop' | 'restart' | 'adunlock' | 'adenable' | 'addisable' | 'adreset' | 'pending'
+type ChallengeAction = 'start' | 'stop' | 'restart' | 'adunlock' | 'adenable' | 'addisable' | 'adreset' | 'runtask' | 'reboot' | 'rebootdevice' | 'pending'
 
 interface Challenge {
   action: ChallengeAction
@@ -154,6 +165,15 @@ interface Challenge {
   // generic pending (any command gated by TOTP)
   pendingCmd?: string
   pendingArgs?: string[]
+  // runtask
+  taskId?: string
+  taskName?: string
+  // reboot (linux server)
+  rebootServerId?: string
+  rebootServerName?: string
+  // rebootdevice (network device)
+  rebootDeviceId?: string
+  rebootDeviceName?: string
   who: string
   expiresAt: number
 }
@@ -224,12 +244,66 @@ async function executeCommand(token: string, chatId: number, settings: TgSetting
 
   switch (cmd) {
     case 'servers': {
-      const servers = await db.selectFrom('servers')
-        .select(['name','hostname','environment','last_connected_at'])
-        .where('is_active','=',true).orderBy('name').execute()
+      // Only servers and VMs
+      const servers = await (db as any).selectFrom('servers')
+        .select(['name','hostname','environment','device_category','os_type','ping_last_status','last_connected_at'])
+        .where('is_active','=',true)
+        .where('device_category','in',['server','vm'])
+        .orderBy('device_category').orderBy('name').execute()
       if (!servers.length) { await send(token, chatId, 'No servers.'); break }
-      const lines = servers.map((s) => `• <b>${s.name}</b> (${s.hostname}, ${s.environment})`).join('\n')
-      await send(token, chatId, `📋 <b>Servers</b>\n\n${lines}`, true)
+
+      const groups = new Map<string, typeof servers>()
+      for (const s of servers) {
+        const cat = s.device_category ?? 'server'
+        if (!groups.has(cat)) groups.set(cat, [])
+        groups.get(cat)!.push(s)
+      }
+      const catLabel: Record<string, string> = { server: '🖥 Servers', vm: '☁️ VMs' }
+      const sections: string[] = []
+      for (const [cat, list] of groups) {
+        const header = catLabel[cat] ?? `📁 ${cat}`
+        const lines = list.map((s: any) => {
+          const ping = s.ping_last_status === 'up' ? '🟢' : s.ping_last_status === 'down' ? '🔴' : '⚪'
+          const env = s.environment ? ` [${s.environment}]` : ''
+          const os = s.os_type ? ` — ${s.os_type}` : ''
+          return `${ping} <b>${s.name}</b> <code>${s.hostname}</code>${env}${os}`
+        })
+        sections.push(`<b>${header} (${list.length})</b>\n${lines.join('\n')}`)
+      }
+      await send(token, chatId, `📋 <b>Servers (${servers.length})</b>\n\n${sections.join('\n\n')}`, true)
+      break
+    }
+
+    case 'devices': {
+      // Network devices and other — optional filter arg e.g. /devices network
+      const filterCat = args[0]?.toLowerCase() ?? null
+      let query = (db as any).selectFrom('servers')
+        .select(['name','hostname','environment','device_category','ping_last_status','snmp_vendor','snmp_model','last_connected_at'])
+        .where('is_active','=',true)
+        .where('device_category','in',['network','other'])
+      if (filterCat) query = query.where('device_category','ilike',`%${filterCat}%`)
+      const servers = await query.orderBy('device_category').orderBy('name').execute()
+      if (!servers.length) { await send(token, chatId, filterCat ? `No devices in category: ${filterCat}` : 'No network devices.'); break }
+
+      const groups = new Map<string, typeof servers>()
+      for (const s of servers) {
+        const cat = s.device_category ?? 'other'
+        if (!groups.has(cat)) groups.set(cat, [])
+        groups.get(cat)!.push(s)
+      }
+      const catLabel: Record<string, string> = { network: '🌐 Network', other: '📦 Other' }
+      const sections: string[] = []
+      for (const [cat, list] of groups) {
+        const header = catLabel[cat] ?? `📁 ${cat}`
+        const lines = list.map((s: any) => {
+          const ping = s.ping_last_status === 'up' ? '🟢' : s.ping_last_status === 'down' ? '🔴' : '⚪'
+          const env = s.environment ? ` [${s.environment}]` : ''
+          const extra = s.snmp_vendor ? ` — ${s.snmp_vendor} ${s.snmp_model ?? ''}`.trim() : ''
+          return `${ping} <b>${s.name}</b> <code>${s.hostname}</code>${env}${extra}`
+        })
+        sections.push(`<b>${header} (${list.length})</b>\n${lines.join('\n')}`)
+      }
+      await send(token, chatId, `📋 <b>Network Devices (${servers.length})</b>\n\n${sections.join('\n\n')}`, true)
       break
     }
     case 'status': {
@@ -461,6 +535,227 @@ async function executeCommand(token: string, chatId: number, settings: TgSetting
       } catch (err) { await send(token, chatId, `❌ ${(err as Error).message}`) }
       break
     }
+
+    // ── New: Ping (from DB) ──────────────────────────────────────────────────
+    case 'ping': {
+      const name = args.join(' ')
+      const server = await (db as any).selectFrom('servers').selectAll()
+        .where('name', 'ilike', name).where('is_active', '=', true).executeTakeFirst()
+      if (!server) { await send(token, chatId, `❌ Server not found: ${name}`); break }
+      const status = server.ping_last_status ?? 'unknown'
+      const latency = server.ping_last_latency_ms != null ? `${server.ping_last_latency_ms} ms` : '—'
+      const checkedAt = server.ping_last_at ? new Date(server.ping_last_at).toLocaleString() : 'Never'
+      const icon = status === 'up' ? '🟢' : status === 'down' ? '🔴' : '⚪'
+      await send(token, chatId,
+        `${icon} <b>Ping: ${server.name}</b>\n\nStatus: <b>${status}</b>\nLatency: <b>${latency}</b>\nChecked: <code>${checkedAt}</code>`, true)
+      break
+    }
+
+    // ── New: Ping all ────────────────────────────────────────────────────────
+    case 'pingall': {
+      const servers = await (db as any).selectFrom('servers')
+        .select(['name', 'hostname', 'ping_last_status', 'ping_last_latency_ms', 'ping_last_at'])
+        .where('is_active', '=', true).orderBy('name').execute()
+      if (!servers.length) { await send(token, chatId, 'No servers.'); break }
+      const lines = servers.map((s: any) => {
+        const icon = s.ping_last_status === 'up' ? '🟢' : s.ping_last_status === 'down' ? '🔴' : '⚪'
+        const lat = s.ping_last_latency_ms != null ? ` ${s.ping_last_latency_ms}ms` : ''
+        return `${icon} <b>${s.name}</b>${lat}`
+      })
+      const up = servers.filter((s: any) => s.ping_last_status === 'up').length
+      const down = servers.filter((s: any) => s.ping_last_status === 'down').length
+      await send(token, chatId,
+        `📡 <b>Ping Status (${up}↑ ${down}↓)</b>\n\n${lines.join('\n')}`, true)
+      break
+    }
+
+    // ── New: Down servers ────────────────────────────────────────────────────
+    case 'down': {
+      const servers = await (db as any).selectFrom('servers')
+        .select(['name', 'hostname', 'ping_last_at'])
+        .where('is_active', '=', true)
+        .where('ping_last_status', '=', 'down')
+        .orderBy('name').execute()
+      if (!servers.length) { await send(token, chatId, '✅ All servers are up.'); break }
+      const lines = servers.map((s: any) => {
+        const since = s.ping_last_at ? new Date(s.ping_last_at).toLocaleString() : '?'
+        return `🔴 <b>${s.name}</b> (<code>${s.hostname}</code>) — down since <code>${since}</code>`
+      })
+      await send(token, chatId, `🔴 <b>Down servers (${servers.length})</b>\n\n${lines.join('\n')}`, true)
+      break
+    }
+
+    // ── New: Uptime ──────────────────────────────────────────────────────────
+    case 'uptime': {
+      const server = await (db as any).selectFrom('servers').selectAll()
+        .where('name', 'ilike', args.join(' ')).where('is_active', '=', true).executeTakeFirst()
+      if (!server) { await send(token, chatId, `❌ Server not found: ${args.join(' ')}`); break }
+      if (!server.management_key_id) { await send(token, chatId, '❌ Server not configured'); break }
+      try {
+        const out = await sshBot(server.id, async (client) =>
+          (await sshExec(client, `uptime -p 2>/dev/null || uptime; echo '---'; last reboot | head -3`)).stdout
+        ) as string
+        const [uptimePart, rebootPart] = out.split('---')
+        await send(token, chatId,
+          `⏱ <b>Uptime: ${server.name}</b>\n\n${uptimePart.trim()}\n\n<b>Last reboots:</b>\n<code>${(rebootPart ?? '').trim()}</code>`, true)
+      } catch (err) { await send(token, chatId, `❌ ${(err as Error).message}`) }
+      break
+    }
+
+    // ── New: Logs ────────────────────────────────────────────────────────────
+    case 'logs': {
+      if (args.length < 2) { await send(token, chatId, 'Usage: /logs &lt;service&gt; &lt;server&gt;', true); break }
+      const service = args[0]
+      const serverName = args.slice(1).join(' ')
+      const server = await (db as any).selectFrom('servers').selectAll()
+        .where('name', 'ilike', serverName).where('is_active', '=', true).executeTakeFirst()
+      if (!server) { await send(token, chatId, `❌ Server not found: ${serverName}`); break }
+      if (!server.management_key_id) { await send(token, chatId, '❌ Server not configured'); break }
+      try {
+        const out = await sshBot(server.id, async (client) =>
+          (await sshExec(client, `journalctl -u ${service} -n 20 --no-pager --output=short 2>&1`)).stdout
+        ) as string
+        const trimmed = out.trim().slice(0, 3500)
+        await send(token, chatId,
+          `📋 <b>Logs: ${service} @ ${server.name}</b>\n\n<code>${escapeHtml(trimmed)}</code>`, true)
+      } catch (err) { await send(token, chatId, `❌ ${(err as Error).message}`) }
+      break
+    }
+
+    // ── New: Netstat ─────────────────────────────────────────────────────────
+    case 'netstat': {
+      const server = await (db as any).selectFrom('servers').selectAll()
+        .where('name', 'ilike', args.join(' ')).where('is_active', '=', true).executeTakeFirst()
+      if (!server) { await send(token, chatId, `❌ Server not found: ${args.join(' ')}`); break }
+      if (!server.management_key_id) { await send(token, chatId, '❌ Server not configured'); break }
+      try {
+        const out = await sshBot(server.id, async (client) =>
+          (await sshExec(client, `ss -tlnp 2>/dev/null | awk 'NR>1{print $4, $6}' | head -30`)).stdout
+        ) as string
+        const rows = out.split('\n').filter(Boolean).map(l => {
+          const [addr, proc] = l.trim().split(/\s+/, 2)
+          const name = (proc ?? '').replace(/.*"([^"]+)".*/, '$1') || '—'
+          return `• <code>${(addr ?? '').padEnd(22)}</code>  ${escapeHtml(name)}`
+        })
+        await send(token, chatId,
+          `🌐 <b>Listening ports: ${server.name}</b>\n\n${rows.join('\n')}`, true)
+      } catch (err) { await send(token, chatId, `❌ ${(err as Error).message}`) }
+      break
+    }
+
+    // ── New: SNMP device summary ─────────────────────────────────────────────
+    case 'snmp': {
+      const name = args.join(' ')
+      const device = await (db as any).selectFrom('servers').selectAll()
+        .where('name', 'ilike', name).where('is_active', '=', true).executeTakeFirst()
+      if (!device) { await send(token, chatId, `❌ Device not found: ${name}`); break }
+      if (!device.snmp_enabled) { await send(token, chatId, `❌ SNMP not enabled on ${name}`); break }
+      const data = device.snmp_last_data as Record<string, any> | null
+      const ifaces = device.snmp_interfaces ? JSON.parse(typeof device.snmp_interfaces === 'string' ? device.snmp_interfaces : JSON.stringify(device.snmp_interfaces)) as any[] : []
+      const upCount = ifaces.filter(i => i.operStatus === 'up').length
+      const checkedAt = device.snmp_last_fetched_at ? new Date(device.snmp_last_fetched_at).toLocaleString() : 'Never'
+      await send(token, chatId,
+        `📡 <b>SNMP: ${device.name}</b>\n\n` +
+        `Vendor: <b>${device.snmp_vendor ?? '—'}</b>\n` +
+        `Model: <b>${device.snmp_model ?? '—'}</b>\n` +
+        `Firmware: <b>${device.snmp_firmware ?? '—'}</b>\n` +
+        `Serial: <b>${device.snmp_serial ?? '—'}</b>\n` +
+        `Hostname: <b>${device.snmp_hostname ?? '—'}</b>\n` +
+        `MAC: <code>${device.snmp_mac_address ?? '—'}</code>\n` +
+        `Interfaces: <b>${ifaces.length}</b> total, <b>${upCount}</b> up\n` +
+        (data?.sysDescr ? `sysDescr: <code>${escapeHtml(String(data.sysDescr).slice(0, 120))}</code>\n` : '') +
+        `\nLast polled: <code>${checkedAt}</code>`, true)
+      break
+    }
+
+    // ── New: Interface list ──────────────────────────────────────────────────
+    case 'interfaces': {
+      // Usage: /interfaces <device> [up|down|trunk|access]
+      const filterArg = ['up','down','trunk','access'].includes(args[args.length - 1]?.toLowerCase() ?? '')
+        ? args[args.length - 1].toLowerCase() : null
+      const nameParts = filterArg ? args.slice(0, -1) : args
+      const name = nameParts.join(' ')
+      const device = await (db as any).selectFrom('servers').selectAll()
+        .where('name', 'ilike', name).where('is_active', '=', true).executeTakeFirst()
+      if (!device) { await send(token, chatId, `❌ Device not found: ${name}`); break }
+      if (!device.snmp_interfaces) { await send(token, chatId, `❌ No SNMP interface data for ${name}. Run SNMP fetch first.`); break }
+      const raw = device.snmp_interfaces
+      const allIfaces = JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw)) as any[]
+      if (!allIfaces.length) { await send(token, chatId, 'No interfaces found.'); break }
+
+      // Apply filter
+      let ifaces = allIfaces
+      if (filterArg === 'up')     ifaces = allIfaces.filter(i => i.oper_up)
+      if (filterArg === 'down')   ifaces = allIfaces.filter(i => i.admin_up && !i.oper_up)
+      if (filterArg === 'trunk')  ifaces = allIfaces.filter(i => i.mode === 'trunk')
+      if (filterArg === 'access') ifaces = allIfaces.filter(i => i.mode === 'access')
+
+      if (!ifaces.length) { await send(token, chatId, `No interfaces matching filter: ${filterArg}`); break }
+
+      const formatSpeed = (mbps: number) => {
+        if (!mbps) return ''
+        if (mbps >= 1000) return ` ${mbps / 1000}G`
+        return ` ${mbps}M`
+      }
+      const stpIcon: Record<string, string> = {
+        forwarding: '✅', blocking: '🚫', listening: '👂', learning: '📖',
+        disabled: '⛔', broken: '💥',
+      }
+
+      const lines = ifaces.slice(0, 35).map((i: any) => {
+        const operIcon = i.oper_up ? '🟢' : (i.admin_up ? '🔴' : '⬛')
+        const portName = (i.name ?? `if${i.index}`).toString()
+        const speed = formatSpeed(i.speed_mbps)
+        const mode = i.mode && i.mode !== 'unknown' ? ` [${i.mode}]` : ''
+        const vlan = i.pvid ? ` V${i.pvid}` : ''
+        const stp = i.stp_state ? ` ${stpIcon[i.stp_state] ?? ''}${i.stp_state !== 'forwarding' ? i.stp_state : ''}` : ''
+        const edge = i.edge_port === true ? ' ⚡' : ''
+        const dot1x = i.dot1x ? ` 🔐${i.dot1x}` : ''
+        const neighbor = i.neighbor?.sys_name ? ` →${i.neighbor.sys_name}` : ''
+        const alias = i.alias ? ` <i>${escapeHtml(i.alias.slice(0, 20))}</i>` : ''
+        return `${operIcon} <code>${portName.padEnd(12)}</code>${speed}${mode}${vlan}${stp}${edge}${dot1x}${neighbor}${alias}`
+      })
+
+      const upCount   = allIfaces.filter((i: any) => i.oper_up).length
+      const downCount = allIfaces.filter((i: any) => i.admin_up && !i.oper_up).length
+      const disCount  = allIfaces.filter((i: any) => !i.admin_up).length
+      const trunkCount = allIfaces.filter((i: any) => i.mode === 'trunk').length
+      const filterNote = filterArg ? ` [filter: ${filterArg}]` : ''
+
+      const legend = `\n\n<i>🟢up 🔴down ⬛disabled | ⚡PortFast | 🔐802.1X | →neighbor</i>`
+      await send(token, chatId,
+        `🔌 <b>Interfaces: ${device.name}</b>${filterNote}\n` +
+        `🟢 ${upCount} up  🔴 ${downCount} down  ⬛ ${disCount} disabled  🔀 ${trunkCount} trunk\n\n` +
+        lines.join('\n') +
+        (ifaces.length > 35 ? `\n…and ${ifaces.length - 35} more (use /interfaces ${name} up|down|trunk|access to filter)` : '') +
+        legend, true)
+      break
+    }
+
+    // ── New: Tasks list ──────────────────────────────────────────────────────
+    case 'tasks': {
+      const tasks = await (db as any).selectFrom('task_definitions')
+        .select(['id', 'title', 'trigger_type', 'cron_expr', 'is_active', 'priority'])
+        .where('is_active', '=', true).orderBy('title').execute()
+      if (!tasks.length) { await send(token, chatId, 'No active tasks.'); break }
+      // Get last run for each task
+      const taskIds = tasks.map((t: any) => t.id)
+      const runs = await (db as any).selectFrom('task_runs')
+        .select(['task_id', 'status', 'completed_at'])
+        .where('task_id', 'in', taskIds)
+        .orderBy('created_at', 'desc')
+        .execute()
+      const lastRun = new Map<string, any>()
+      for (const r of runs) { if (!lastRun.has(r.task_id)) lastRun.set(r.task_id, r) }
+      const lines = tasks.map((t: any) => {
+        const run = lastRun.get(t.id)
+        const runIcon = !run ? '⚪' : run.status === 'completed' ? '✅' : run.status === 'failed' ? '❌' : run.status === 'running' ? '🔄' : '⏳'
+        const schedule = t.trigger_type === 'schedule' ? ` <code>${t.cron_expr}</code>` : ` (${t.trigger_type})`
+        return `${runIcon} <b>${escapeHtml(t.title)}</b>${schedule}`
+      })
+      await send(token, chatId, `📋 <b>Tasks (${tasks.length})</b>\n\n${lines.join('\n')}\n\n/runtask &lt;name&gt; to trigger`, true)
+      break
+    }
   }
 }
 
@@ -555,6 +850,141 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
       return
     }
 
+    // ── Reboot (Linux server) ──
+    if (ch.action === 'reboot') {
+      await send(token, chatId, `🔄 Rebooting <b>${escapeHtml(ch.rebootServerName!)}</b>…`, true)
+      try {
+        await sshBot(ch.rebootServerId!, async (client) => {
+          const { sshExec } = await import('../../utils/ssh')
+          await sshExec(client, `sudo reboot 2>&1 || true`)
+        })
+        await send(token, chatId, `✅ Reboot command sent to <b>${escapeHtml(ch.rebootServerName!)}</b>.`, true)
+      } catch (err) {
+        // SSH will drop during reboot — treat connection reset as success
+        const msg = (err as Error).message ?? ''
+        if (/connect|reset|closed|timeout/i.test(msg)) {
+          await send(token, chatId, `✅ Reboot command sent to <b>${escapeHtml(ch.rebootServerName!)}</b> (connection dropped — expected).`, true)
+        } else {
+          await send(token, chatId, `❌ Failed: ${msg}`)
+        }
+      }
+      return
+    }
+
+    // ── Reboot network device ──
+    if (ch.action === 'rebootdevice') {
+      const anyDb = db as any
+      await send(token, chatId, `🔄 Rebooting device <b>${escapeHtml(ch.rebootDeviceName!)}</b>…`, true)
+      const device = await anyDb.selectFrom('servers').selectAll().where('id', '=', ch.rebootDeviceId).executeTakeFirst()
+      if (!device) { await send(token, chatId, `❌ Device not found.`); return }
+
+      // Try HTTP action named "reboot" first
+      const httpAction = await anyDb.selectFrom('device_http_actions').selectAll()
+        .where('device_id', '=', device.id)
+        .where('name', 'ilike', '%reboot%')
+        .orderBy('sort_order', 'asc')
+        .executeTakeFirst()
+
+      if (httpAction && device.web_url) {
+        try {
+          const { decryptSecret, getVaultKey } = await import('../../utils/vault')
+          const vaultKey = getVaultKey()
+          const baseUrl = (device.web_url as string).replace(/\/$/, '')
+          const path = httpAction.url_path.startsWith('/') ? httpAction.url_path : `/${httpAction.url_path}`
+          const fullUrl = `${baseUrl}${path}`
+          const headers: Record<string, string> = {
+            'Content-Type': httpAction.content_type ?? 'application/json',
+            ...(typeof httpAction.headers === 'string' ? JSON.parse(httpAction.headers) : httpAction.headers ?? {}),
+          }
+          if (httpAction.auth_type === 'basic') {
+            let password = ''
+            if (httpAction.vault_id) {
+              const ve = await anyDb.selectFrom('vault_entries').select(['password_enc', 'username']).where('id', '=', httpAction.vault_id).executeTakeFirst()
+              if (ve?.password_enc) password = decryptSecret(ve.password_enc, vaultKey)
+              const user = httpAction.auth_username ?? ve?.username ?? ''
+              headers['Authorization'] = `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`
+            } else if (httpAction.auth_password_enc) {
+              password = decryptSecret(httpAction.auth_password_enc, vaultKey)
+              headers['Authorization'] = `Basic ${Buffer.from(`${httpAction.auth_username ?? ''}:${password}`).toString('base64')}`
+            }
+          } else if (httpAction.auth_type === 'bearer') {
+            let token2 = ''
+            if (httpAction.vault_id) {
+              const ve = await anyDb.selectFrom('vault_entries').select(['password_enc']).where('id', '=', httpAction.vault_id).executeTakeFirst()
+              if (ve?.password_enc) token2 = decryptSecret(ve.password_enc, vaultKey)
+            } else if (httpAction.auth_password_enc) {
+              token2 = decryptSecret(httpAction.auth_password_enc, vaultKey)
+            }
+            if (token2) headers['Authorization'] = `Bearer ${token2}`
+          } else if (httpAction.auth_type === 'vault' && httpAction.vault_id) {
+            const ve = await anyDb.selectFrom('vault_entries').select(['password_enc', 'username']).where('id', '=', httpAction.vault_id).executeTakeFirst()
+            if (ve) {
+              const password = ve.password_enc ? decryptSecret(ve.password_enc, vaultKey) : ''
+              headers['Authorization'] = `Basic ${Buffer.from(`${ve.username ?? ''}:${password}`).toString('base64')}`
+            }
+          }
+          const fetchRes = await fetch(fullUrl, {
+            method: httpAction.method,
+            headers,
+            body: ['GET', 'DELETE'].includes(httpAction.method) ? undefined : (httpAction.body ?? undefined),
+            signal: AbortSignal.timeout(httpAction.timeout_ms ?? 10000),
+            redirect: httpAction.follow_redirects ? 'follow' : 'manual',
+          } as RequestInit)
+          if (fetchRes.ok || fetchRes.status < 500) {
+            await send(token, chatId, `✅ Reboot command sent to <b>${escapeHtml(ch.rebootDeviceName!)}</b> via HTTP (${fetchRes.status}).`, true)
+          } else {
+            await send(token, chatId, `⚠️ HTTP reboot returned status ${fetchRes.status} for <b>${escapeHtml(ch.rebootDeviceName!)}</b>.`, true)
+          }
+        } catch (err) {
+          const msg = (err as Error).message ?? ''
+          if (/connect|reset|closed|timeout/i.test(msg)) {
+            await send(token, chatId, `✅ Reboot command sent to <b>${escapeHtml(ch.rebootDeviceName!)}</b> (connection dropped — expected).`, true)
+          } else {
+            await send(token, chatId, `❌ HTTP reboot failed: ${msg}`)
+          }
+        }
+        return
+      }
+
+      // SSH fallback
+      if (device.management_key_id) {
+        try {
+          await sshBot(device.id, async (client) => {
+            const { sshExec } = await import('../../utils/ssh')
+            await sshExec(client, `reboot 2>&1 || reload 2>&1 || true`)
+          })
+          await send(token, chatId, `✅ Reboot command sent to <b>${escapeHtml(ch.rebootDeviceName!)}</b> via SSH.`, true)
+        } catch (err) {
+          const msg = (err as Error).message ?? ''
+          if (/connect|reset|closed|timeout/i.test(msg)) {
+            await send(token, chatId, `✅ Reboot command sent to <b>${escapeHtml(ch.rebootDeviceName!)}</b> via SSH (connection dropped — expected).`, true)
+          } else {
+            await send(token, chatId, `❌ SSH reboot failed: ${msg}`)
+          }
+        }
+        return
+      }
+
+      await send(token, chatId, `❌ No HTTP action or SSH key configured for <b>${escapeHtml(ch.rebootDeviceName!)}</b>.`, true)
+      return
+    }
+
+    // ── Run task ──
+    if (ch.action === 'runtask') {
+      await send(token, chatId, `▶️ Triggering task <b>${escapeHtml(ch.taskName!)}</b>…`, true)
+      try {
+        const anyDb = db as any
+        const run = await anyDb.insertInto('task_runs').values({
+          task_id: ch.taskId,
+          triggered_by: 'telegram',
+          status: 'pending',
+          created_at: new Date(),
+        }).returningAll().executeTakeFirst()
+        await send(token, chatId, `✅ Task <b>${escapeHtml(ch.taskName!)}</b> queued (run ID: <code>${run.id.slice(0, 8)}</code>).`, true)
+      } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
+      return
+    }
+
     // ── Generic pending command ──
     if (ch.action === 'pending' && ch.pendingCmd) {
       await executeCommand(token, chatId, settings, ch.pendingCmd, ch.pendingArgs ?? [])
@@ -598,37 +1028,76 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
   switch (cmd) {
     case 'help':
     case 'start': {
+      // Build dynamic help — only show enabled commands
+      const c = (group: keyof TgCommands, name: string) => isCmdEnabled(settings, group, name)
+      const t = (group: keyof TgCommands) => needsTotp(settings, group) ? ' ⚠️' : ''
+
+      type Section = [string, string[]]
+      const sections: Section[] = [
+        ['── Servers ──', [
+          c('servers','servers')  ? `/servers — list all devices grouped by category` : '',
+          c('servers','devices')  ? `/devices [category] — detailed device list` : '',
+          c('status','status')    ? `/status &lt;server&gt; — connection info` : '',
+          c('software','software')? `/software &lt;server&gt; — installed software` : '',
+        ]],
+        ['── Linux Info ──', [
+          c('linux_info','disk')    ? `/disk &lt;server&gt; — disk usage` : '',
+          c('linux_info','memory')  ? `/memory &lt;server&gt; — RAM &amp; load average` : '',
+          c('linux_info','top')     ? `/top &lt;server&gt; — top CPU processes` : '',
+          c('linux_info','users')   ? `/users &lt;server&gt; — logged-in users` : '',
+          c('linux_info','uptime')  ? `/uptime &lt;server&gt; — uptime &amp; last reboots` : '',
+          c('linux_info','logs')    ? `/logs &lt;service&gt; &lt;server&gt; — last 20 log lines` : '',
+          c('linux_info','netstat') ? `/netstat &lt;server&gt; — listening ports` : '',
+        ]],
+        ['── Linux Services ──', [
+          c('linux_svc','restart') ? `/restart &lt;service&gt; &lt;server&gt;${t('linux_svc')}` : '',
+          c('linux_svc','stop')    ? `/stop &lt;service&gt; &lt;server&gt;${t('linux_svc')}` : '',
+          c('linux_svc','start')   ? `/start &lt;service&gt; &lt;server&gt;${t('linux_svc')}` : '',
+          c('linux_svc','reboot')  ? `/reboot &lt;server&gt;${t('linux_svc')} — reboot server` : '',
+        ]],
+        ['── Network / SNMP ──', [
+          c('network','ping')       ? `/ping &lt;server&gt; — ping status` : '',
+          c('network','pingall')    ? `/pingall — all servers ping status` : '',
+          c('network','down')       ? `/down — servers currently down` : '',
+          c('network','snmp')       ? `/snmp &lt;device&gt; — SNMP summary` : '',
+          c('network','interfaces')    ? `/interfaces &lt;device&gt; [up|down|trunk|access]` : '',
+          c('network','rebootdevice') ? `/rebootdevice &lt;device&gt; ⚠️ — reboot network device` : '',
+        ]],
+        ['── Tasks ──', [
+          c('tasks','tasks')   ? `/tasks — list active tasks` : '',
+          c('tasks','runtask') ? `/runtask &lt;name&gt;${t('tasks')} — trigger a task` : '',
+        ]],
+        ['── Active Directory ──', [
+          c('ad_read','aduser')     ? `/aduser &lt;username&gt; — user details` : '',
+          c('ad_read','adgroups')   ? `/adgroups &lt;username&gt; — user groups` : '',
+          c('ad_read','adgroup')    ? `/adgroup &lt;groupname&gt; — group members` : '',
+          c('ad_read','adlocked')   ? `/adlocked — locked-out accounts` : '',
+          c('ad_read','adexpired')  ? `/adexpired — expired passwords` : '',
+          c('ad_read','addisabled') ? `/addisabled — disabled accounts` : '',
+          c('ad_read','adhealth')   ? `/adhealth — domain health` : '',
+          c('ad_read','adpolicy')   ? `/adpolicy — password policy` : '',
+          c('ad_write','adunlock')  ? `/adunlock &lt;username&gt;${t('ad_write')} — unlock` : '',
+          c('ad_write','adenable')  ? `/adenable &lt;username&gt;${t('ad_write')} — enable` : '',
+          c('ad_write','addisable') ? `/addisable &lt;username&gt;${t('ad_write')} — disable` : '',
+          c('ad_write','adreset')   ? `/adreset &lt;username&gt; &lt;password&gt;${t('ad_write')} — reset pwd` : '',
+        ]],
+        ['── Utilities ──', [
+          `/totptest &lt;code&gt; — verify your TOTP code`,
+        ]],
+      ]
+
+      const body = sections
+        .map(([header, lines]) => {
+          const visible = lines.filter(Boolean)
+          return visible.length ? `<b>${header}</b>\n${visible.join('\n')}` : ''
+        })
+        .filter(Boolean)
+        .join('\n\n')
+
+      const hasTotp = (['linux_svc','ad_write','tasks'] as (keyof TgCommands)[]).some(g => needsTotp(settings, g))
       await send(token, chatId,
-        `🔐 <b>SSH Manager Bot</b>\n\n` +
-        `<b>── Servers ──</b>\n` +
-        `/servers — list all servers\n` +
-        `/status &lt;server&gt; — connection info\n` +
-        `/software &lt;server&gt; — installed software\n\n` +
-        `<b>── Linux Info ──</b>\n` +
-        `/disk &lt;server&gt; — disk usage\n` +
-        `/memory &lt;server&gt; — RAM &amp; load average\n` +
-        `/top &lt;server&gt; — top CPU processes\n` +
-        `/users &lt;server&gt; — logged-in users\n\n` +
-        `<b>── Linux Services ──</b>\n` +
-        `/restart &lt;service&gt; &lt;server&gt; ⚠️\n` +
-        `/stop &lt;service&gt; &lt;server&gt; ⚠️\n` +
-        `/start &lt;service&gt; &lt;server&gt; ⚠️\n\n` +
-        `<b>── Active Directory ──</b>\n` +
-        `/aduser &lt;username&gt; — user details\n` +
-        `/adgroups &lt;username&gt; — groups a user belongs to\n` +
-        `/adgroup &lt;groupname&gt; — members of a group\n` +
-        `/adlocked — all locked-out accounts\n` +
-        `/adexpired — expired password accounts\n` +
-        `/addisabled — disabled accounts\n` +
-        `/adhealth — domain health summary\n` +
-        `/adpolicy — password policy\n` +
-        `/adunlock &lt;username&gt; ⚠️ — unlock account\n` +
-        `/adenable &lt;username&gt; ⚠️ — enable account\n` +
-        `/addisable &lt;username&gt; ⚠️ — disable account\n` +
-        `/adreset &lt;username&gt; &lt;password&gt; ⚠️ — reset password\n\n` +
-        `⚠️ = requires TOTP confirmation\n\n` +
-        `<b>── Utilities ──</b>\n` +
-        `/totptest &lt;code&gt; — verify your TOTP code is working`, true)
+        `🔐 <b>SSH Manager Bot</b>\n\n${body}` +
+        (hasTotp ? `\n\n⚠️ = requires TOTP confirmation` : ''), true)
       break
     }
 
@@ -668,14 +1137,21 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'servers': {
-      if (!isEnabled(settings, 'servers')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'servers', 'servers')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (needsTotp(settings, 'servers')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'devices': {
+      if (!isCmdEnabled(settings, 'servers', 'devices')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (needsTotp(settings, 'servers')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
       break
     }
 
     case 'status': {
-      if (!isEnabled(settings, 'status')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'status', 'status')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /status &lt;server&gt;', true); break }
       if (needsTotp(settings, 'status')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -683,7 +1159,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'software': {
-      if (!isEnabled(settings, 'software')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'software', 'software')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /software &lt;server&gt;', true); break }
       if (needsTotp(settings, 'software')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -691,7 +1167,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'disk': {
-      if (!isEnabled(settings, 'linux_info')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'linux_info', 'disk')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /disk &lt;server&gt;', true); break }
       if (needsTotp(settings, 'linux_info')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -700,7 +1176,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
 
     case 'memory':
     case 'mem': {
-      if (!isEnabled(settings, 'linux_info')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'linux_info', 'memory')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /memory &lt;server&gt;', true); break }
       if (needsTotp(settings, 'linux_info')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -708,7 +1184,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'top': {
-      if (!isEnabled(settings, 'linux_info')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'linux_info', 'top')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /top &lt;server&gt;', true); break }
       if (needsTotp(settings, 'linux_info')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -716,7 +1192,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'users': {
-      if (!isEnabled(settings, 'linux_info')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'linux_info', 'users')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /users &lt;server&gt;', true); break }
       if (needsTotp(settings, 'linux_info')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -726,7 +1202,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     case 'restart':
     case 'stop':
     case 'start': {
-      if (!isEnabled(settings, 'linux_svc')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'linux_svc', cmd)) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (args.length < 2) { await send(token, chatId, `Usage: /${cmd} &lt;service&gt; &lt;server&gt;`, true); break }
       const service = args[0]
       const serverName = args.slice(1).join(' ')
@@ -768,10 +1244,145 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
       break
     }
 
+    // ── New: Ping / network ───────────────────────────────────────────────────
+
+    case 'ping': {
+      if (!isCmdEnabled(settings, 'network', 'ping')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!args.length) { await send(token, chatId, 'Usage: /ping &lt;server&gt;', true); break }
+      if (needsTotp(settings, 'network')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'pingall': {
+      if (!isCmdEnabled(settings, 'network', 'pingall')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (needsTotp(settings, 'network')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'down': {
+      if (!isCmdEnabled(settings, 'network', 'down')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (needsTotp(settings, 'network')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'snmp': {
+      if (!isCmdEnabled(settings, 'network', 'snmp')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!args.length) { await send(token, chatId, 'Usage: /snmp &lt;device&gt;', true); break }
+      if (needsTotp(settings, 'network')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'interfaces': {
+      if (!isCmdEnabled(settings, 'network', 'interfaces')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!args.length) { await send(token, chatId, 'Usage: /interfaces &lt;device&gt;', true); break }
+      if (needsTotp(settings, 'network')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    // ── New: Linux extras ─────────────────────────────────────────────────────
+
+    case 'uptime': {
+      if (!isCmdEnabled(settings, 'linux_info', 'uptime')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!args.length) { await send(token, chatId, 'Usage: /uptime &lt;server&gt;', true); break }
+      if (needsTotp(settings, 'linux_info')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'logs': {
+      if (!isCmdEnabled(settings, 'linux_info', 'logs')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (args.length < 2) { await send(token, chatId, 'Usage: /logs &lt;service&gt; &lt;server&gt;', true); break }
+      if (needsTotp(settings, 'linux_info')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'netstat': {
+      if (!isCmdEnabled(settings, 'linux_info', 'netstat')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!args.length) { await send(token, chatId, 'Usage: /netstat &lt;server&gt;', true); break }
+      if (needsTotp(settings, 'linux_info')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'reboot': {
+      if (!isCmdEnabled(settings, 'linux_svc', 'reboot')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!args.length) { await send(token, chatId, 'Usage: /reboot &lt;server&gt;', true); break }
+      const rebootName = args.join(' ')
+      const rebootServer = await db.selectFrom('servers').selectAll()
+        .where('name', 'ilike', rebootName).where('is_active', '=', true).executeTakeFirst()
+      if (!rebootServer) { await send(token, chatId, `❌ Server not found: ${rebootName}`); break }
+      if (!rebootServer.management_key_id) { await send(token, chatId, '❌ Server not configured'); break }
+      if (!needsTotp(settings, 'linux_svc')) {
+        await send(token, chatId, `🔄 Rebooting <b>${rebootServer.name}</b>…`, true)
+        try {
+          await sshBot(rebootServer.id, async (client) => {
+            const { sshExec } = await import('../../utils/ssh')
+            await sshExec(client, `sudo reboot 2>&1 || true`)
+          })
+          await send(token, chatId, `✅ Reboot command sent to <b>${rebootServer.name}</b>.`, true)
+        } catch (err) {
+          const msg = (err as Error).message ?? ''
+          if (/connect|reset|closed|timeout/i.test(msg)) {
+            await send(token, chatId, `✅ Reboot command sent to <b>${rebootServer.name}</b> (connection dropped — expected).`, true)
+          } else { await send(token, chatId, `❌ Failed: ${msg}`) }
+        }
+        break
+      }
+      if (!settings.totpSecret) { await send(token, chatId, '❌ Bot TOTP not configured.'); break }
+      challenges.set(chatId, { action: 'reboot', rebootServerId: rebootServer.id, rebootServerName: rebootServer.name, who, expiresAt: Date.now() + 60_000 })
+      await send(token, chatId,
+        `🔄 <b>Reboot requires TOTP confirmation</b>\n\nServer: <b>${rebootServer.name}</b>\nRequested by: ${who}\n\nReply with your <b>TOTP code</b> within 60 seconds.\nAny other reply cancels.`, true)
+      break
+    }
+
+    case 'rebootdevice': {
+      if (!isCmdEnabled(settings, 'network', 'rebootdevice')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!args.length) { await send(token, chatId, 'Usage: /rebootdevice &lt;device name&gt;', true); break }
+      const rdName = args.join(' ')
+      const rdDevice = await (db as any).selectFrom('servers').selectAll()
+        .where('name', 'ilike', rdName).where('is_active', '=', true).where('device_category', '=', 'network').executeTakeFirst()
+      if (!rdDevice) { await send(token, chatId, `❌ Network device not found: ${escapeHtml(rdName)}`); break }
+      if (!rdDevice.management_key_id && !rdDevice.web_url) { await send(token, chatId, '❌ Device has no SSH key or web URL configured.'); break }
+      if (!settings.totpSecret) { await send(token, chatId, '❌ Bot TOTP not configured. Set it up in SSH Manager → Settings → Telegram.'); break }
+      challenges.set(chatId, { action: 'rebootdevice', rebootDeviceId: rdDevice.id, rebootDeviceName: rdDevice.name, who, expiresAt: Date.now() + 60_000 })
+      await send(token, chatId,
+        `🔄 <b>Network device reboot requires TOTP confirmation</b>\n\nDevice: <b>${escapeHtml(rdDevice.name)}</b>\nRequested by: ${who}\n\nReply with your <b>TOTP code</b> within 60 seconds.\nAny other reply cancels.`, true)
+      break
+    }
+
+    // ── New: Tasks ────────────────────────────────────────────────────────────
+
+    case 'tasks': {
+      if (!isCmdEnabled(settings, 'tasks', 'tasks')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (needsTotp(settings, 'tasks')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
+      await executeCommand(token, chatId, settings, cmd, args)
+      break
+    }
+
+    case 'runtask': {
+      if (!isCmdEnabled(settings, 'tasks', 'runtask')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!args.length) { await send(token, chatId, 'Usage: /runtask &lt;task name&gt;', true); break }
+      const taskName = args.join(' ')
+      const task = await (db as any).selectFrom('task_definitions').selectAll()
+        .where('title', 'ilike', taskName).where('is_active', '=', true).executeTakeFirst()
+      if (!task) { await send(token, chatId, `❌ Task not found: ${escapeHtml(taskName)}`); break }
+      if (!settings.totpSecret) { await send(token, chatId, '❌ Bot TOTP not configured. Set it up in SSH Manager → Settings → Telegram.'); break }
+      challenges.set(chatId, { action: 'runtask', taskId: task.id, taskName: task.title, who, expiresAt: Date.now() + 60_000 })
+      await send(token, chatId,
+        `▶️ <b>Run task requires TOTP confirmation</b>\n\nTask: <b>${escapeHtml(task.title)}</b>\nPriority: <b>${task.priority}</b>\nRequested by: ${who}\n\nReply with your <b>TOTP code</b> within 60 seconds.\nAny other reply cancels.`, true)
+      break
+    }
+
     // ── AD read-only commands ──────────────────────────────────────────────────
 
     case 'aduser': {
-      if (!isEnabled(settings, 'ad_read')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_read', 'aduser')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /aduser &lt;username&gt;', true); break }
       if (needsTotp(settings, 'ad_read')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -779,7 +1390,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'adgroups': {
-      if (!isEnabled(settings, 'ad_read')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_read', 'adgroups')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /adgroups &lt;username&gt;', true); break }
       if (needsTotp(settings, 'ad_read')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -787,7 +1398,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'adgroup': {
-      if (!isEnabled(settings, 'ad_read')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_read', 'adgroup')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, 'Usage: /adgroup &lt;groupname&gt;', true); break }
       if (needsTotp(settings, 'ad_read')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
@@ -795,35 +1406,35 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'adlocked': {
-      if (!isEnabled(settings, 'ad_read')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_read', 'adlocked')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (needsTotp(settings, 'ad_read')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
       break
     }
 
     case 'adexpired': {
-      if (!isEnabled(settings, 'ad_read')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_read', 'adexpired')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (needsTotp(settings, 'ad_read')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
       break
     }
 
     case 'addisabled': {
-      if (!isEnabled(settings, 'ad_read')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_read', 'addisabled')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (needsTotp(settings, 'ad_read')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
       break
     }
 
     case 'adhealth': {
-      if (!isEnabled(settings, 'ad_read')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_read', 'adhealth')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (needsTotp(settings, 'ad_read')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
       break
     }
 
     case 'adpolicy': {
-      if (!isEnabled(settings, 'ad_read')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_read', 'adpolicy')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (needsTotp(settings, 'ad_read')) { await promptTotp(token, chatId, settings, cmd, args, who, challenges); break }
       await executeCommand(token, chatId, settings, cmd, args)
       break
@@ -834,7 +1445,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     case 'adunlock':
     case 'adenable':
     case 'addisable': {
-      if (!isEnabled(settings, 'ad_write')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_write', cmd)) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (!args.length) { await send(token, chatId, `Usage: /${cmd} &lt;username&gt;`, true); break }
       const adUser = args[0]
       const icons: Record<string, string> = { adunlock: '🔓', adenable: '✅', addisable: '🚫' }
@@ -863,7 +1474,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
     }
 
     case 'adreset': {
-      if (!isEnabled(settings, 'ad_write')) { await send(token, chatId, '🚫 This command is disabled.'); break }
+      if (!isCmdEnabled(settings, 'ad_write', 'adreset')) { await send(token, chatId, '🚫 This command is disabled.'); break }
       if (args.length < 2) { await send(token, chatId, 'Usage: /adreset &lt;username&gt; &lt;newpassword&gt;', true); break }
       const [adUser, ...rest] = args
       const adPassword = rest.join(' ')

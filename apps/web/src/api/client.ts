@@ -7,12 +7,13 @@ let onMfaRequired: MfaRequiredHandler | null = null
 export function setForbiddenHandler(fn: ForbiddenHandler) { onForbidden = fn }
 export function setMfaRequiredHandler(fn: MfaRequiredHandler) { onMfaRequired = fn }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
     credentials: 'include',
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
@@ -32,7 +33,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>('POST', path, body, signal),
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   delete: <T = void>(path: string, body?: unknown) => request<T>('DELETE', path, body),
@@ -458,7 +459,7 @@ export type TransferJob = {
   created_by: string
 }
 
-export type CommandGroupConfig = { enabled: boolean; totp: boolean }
+export type CommandGroupConfig = { enabled: boolean; totp: boolean; cmds?: Record<string, boolean> }
 
 export type TelegramCommands = {
   servers:    CommandGroupConfig
@@ -468,6 +469,8 @@ export type TelegramCommands = {
   linux_svc:  CommandGroupConfig
   ad_read:    CommandGroupConfig
   ad_write:   CommandGroupConfig
+  network:    CommandGroupConfig
+  tasks:      CommandGroupConfig
 }
 
 export type TelegramSettings = {

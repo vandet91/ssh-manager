@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { api, TelegramSettings, AlertSettings, TotpActionRule, TotpActionSettings, DistroArt, distroArtApi } from '../api/client'
 
 interface PasswordPolicy {
@@ -103,8 +103,141 @@ const DEFAULT_COMMANDS = {
   linux_svc:  { enabled: true, totp: true  },
   ad_read:    { enabled: true, totp: false },
   ad_write:   { enabled: true, totp: true  },
+  network:    { enabled: true, totp: false },
+  tasks:      { enabled: true, totp: true  },
 }
 const DEFAULT_TG: TelegramSettings = { enabled: false, bot_token: '', allowed_chats: [], totp_secret: '', commands: DEFAULT_COMMANDS }
+
+// Per-group command lists for individual toggles
+const GROUP_COMMANDS: Record<keyof typeof DEFAULT_COMMANDS, { cmd: string; label: string }[]> = {
+  servers:    [{ cmd: 'servers', label: '/servers' }, { cmd: 'devices', label: '/devices' }, { cmd: 'status', label: '/status' }],
+  status:     [{ cmd: 'status', label: '/status' }],
+  software:   [{ cmd: 'software', label: '/software' }],
+  linux_info: [
+    { cmd: 'disk',    label: '/disk' },
+    { cmd: 'memory',  label: '/memory' },
+    { cmd: 'top',     label: '/top' },
+    { cmd: 'users',   label: '/users' },
+    { cmd: 'uptime',  label: '/uptime' },
+    { cmd: 'logs',    label: '/logs' },
+    { cmd: 'netstat', label: '/netstat' },
+  ],
+  linux_svc:  [
+    { cmd: 'start',   label: '/start' },
+    { cmd: 'stop',    label: '/stop' },
+    { cmd: 'restart', label: '/restart' },
+    { cmd: 'reboot',  label: '/reboot ⚠️' },
+  ],
+  network:    [
+    { cmd: 'ping',       label: '/ping' },
+    { cmd: 'pingall',    label: '/pingall' },
+    { cmd: 'down',       label: '/down' },
+    { cmd: 'snmp',       label: '/snmp' },
+    { cmd: 'interfaces',    label: '/interfaces' },
+    { cmd: 'rebootdevice', label: '/rebootdevice ⚠️' },
+  ],
+  tasks:      [{ cmd: 'tasks', label: '/tasks' }, { cmd: 'runtask', label: '/runtask ⚠️' }],
+  ad_read:    [
+    { cmd: 'aduser',     label: '/aduser' },
+    { cmd: 'adgroups',   label: '/adgroups' },
+    { cmd: 'adgroup',    label: '/adgroup' },
+    { cmd: 'adlocked',   label: '/adlocked' },
+    { cmd: 'adexpired',  label: '/adexpired' },
+    { cmd: 'addisabled', label: '/addisabled' },
+    { cmd: 'adhealth',   label: '/adhealth' },
+    { cmd: 'adpolicy',   label: '/adpolicy' },
+  ],
+  ad_write:   [
+    { cmd: 'adunlock',  label: '/adunlock ⚠️' },
+    { cmd: 'adenable',  label: '/adenable ⚠️' },
+    { cmd: 'addisable', label: '/addisable ⚠️' },
+    { cmd: 'adreset',   label: '/adreset ⚠️' },
+  ],
+}
+
+function TgCommandGroups({ tg, setTg }: { tg: TelegramSettings; setTg: React.Dispatch<React.SetStateAction<TelegramSettings>> }) {
+  const [expanded, setExpanded] = React.useState<string | null>(null)
+
+  const groups: [keyof typeof DEFAULT_COMMANDS, string, boolean][] = [
+    ['servers',    'Servers',         false],
+    ['software',   'Software',        false],
+    ['linux_info', 'Linux Info',      false],
+    ['linux_svc',  'Linux Services',  true ],
+    ['network',    'Network / SNMP',  false],
+    ['tasks',      'Tasks',           true ],
+    ['ad_read',    'AD Read',         false],
+    ['ad_write',   'AD Write',        true ],
+  ]
+
+  const updateGroup = (key: keyof typeof DEFAULT_COMMANDS, patch: Partial<{ enabled: boolean; totp: boolean; cmds: Record<string, boolean> }>) =>
+    setTg(prev => ({
+      ...prev,
+      commands: { ...(prev.commands ?? DEFAULT_COMMANDS), [key]: { ...(prev.commands?.[key] ?? DEFAULT_COMMANDS[key]), ...patch } },
+    }))
+
+  return (
+    <div style={{ border: '1px solid var(--border-med)', borderRadius: 8, overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 56px 56px 56px', alignItems: 'center', padding: '6px 14px', background: 'var(--bg-subtle)', borderBottom: '1px solid var(--border-med)', gap: 4 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Command Group</span>
+        <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', textAlign: 'center' }}>Enable</span>
+        <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', textAlign: 'center' }}>TOTP</span>
+        <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', textAlign: 'center' }}>Cmds</span>
+      </div>
+
+      {groups.map(([key, label], i) => {
+        const cfg = tg.commands?.[key] ?? DEFAULT_COMMANDS[key]
+        const enabled = cfg.enabled !== false
+        const totp = cfg.totp === true
+        const cmds = (cfg as any).cmds as Record<string, boolean> | undefined
+        const cmdList = GROUP_COMMANDS[key] ?? []
+        const disabledCount = cmdList.filter(c => cmds?.[c.cmd] === false).length
+        const isOpen = expanded === key
+
+        return (
+          <div key={key} style={{ borderBottom: i < groups.length - 1 ? '1px solid var(--border-subtle)' : 'none' }}>
+            {/* Group row */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 56px 56px 56px', alignItems: 'center', padding: '8px 14px', gap: 4, opacity: enabled ? 1 : 0.5 }}>
+              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-heading)' }}>{label}
+                {disabledCount > 0 && <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 }}>({cmdList.length - disabledCount}/{cmdList.length})</span>}
+              </span>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <input type="checkbox" checked={enabled} onChange={e => updateGroup(key, { enabled: e.target.checked })} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <input type="checkbox" checked={totp} disabled={!enabled} title={!enabled ? 'Enable the group first' : 'Require TOTP'} onChange={e => updateGroup(key, { totp: e.target.checked })} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <button type="button" onClick={() => setExpanded(isOpen ? null : key)} disabled={!enabled}
+                  style={{ fontSize: 10, padding: '2px 6px', background: isOpen ? 'var(--accent-hex)' : 'var(--bg-surface)', color: isOpen ? '#fff' : 'var(--text-muted)', border: '1px solid var(--border-med)', borderRadius: 4, cursor: enabled ? 'pointer' : 'default' }}>
+                  {isOpen ? '▲' : '▼'}
+                </button>
+              </div>
+            </div>
+
+            {/* Per-command rows */}
+            {isOpen && enabled && (
+              <div style={{ background: 'var(--bg-subtle)', borderTop: '1px solid var(--border-subtle)', padding: '6px 14px 10px 28px', display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+                {cmdList.map(({ cmd, label: cmdLabel }) => {
+                  const cmdEnabled = cmds?.[cmd] !== false
+                  return (
+                    <label key={cmd} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', padding: '3px 8px', borderRadius: 4, background: cmdEnabled ? 'rgba(var(--accent)/0.08)' : 'var(--bg-surface)', border: `1px solid ${cmdEnabled ? 'rgba(var(--accent)/0.25)' : 'var(--border-subtle)'}` }}>
+                      <input type="checkbox" checked={cmdEnabled} onChange={e => {
+                        const newCmds = { ...(cmds ?? {}), [cmd]: e.target.checked }
+                        updateGroup(key, { cmds: newCmds })
+                      }} style={{ margin: 0 }} />
+                      <span style={{ fontSize: 12, fontFamily: 'monospace', color: cmdEnabled ? 'var(--text-primary)' : 'var(--text-muted)' }}>{cmdLabel}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 const DEFAULT_ALERT: AlertSettings = {
   webhook_enabled: false, webhook_url: '',
@@ -630,46 +763,7 @@ export default function Settings() {
               </div>
 
               {/* Command group toggles */}
-              <div style={{ border: '1px solid var(--border-med)', borderRadius: 8, overflow: 'hidden' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', alignItems: 'center', padding: '6px 14px', background: 'var(--bg-subtle)', borderBottom: '1px solid var(--border-med)', gap: 8 }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Command Group</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', textAlign: 'center', width: 60 }}>Enable</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', textAlign: 'center', width: 60 }}>TOTP</span>
-                </div>
-                {([
-                  ['servers',    'Servers',        '/servers — list servers',           false],
-                  ['status',     'Status',         '/status — server info',             false],
-                  ['software',   'Software',       '/software — scan packages',         false],
-                  ['linux_info', 'Linux Info',     '/disk /memory /top /users',         false],
-                  ['linux_svc',  'Linux Services', '/start /stop /restart',             true ],
-                  ['ad_read',    'AD Read',        '/aduser /adgroups /adlocked …',     false],
-                  ['ad_write',   'AD Write',       '/adunlock /adenable /adreset …',    true ],
-                ] as [keyof typeof DEFAULT_COMMANDS, string, string, boolean][]).map(([key, label, hint], i, arr) => {
-                  const cfg = tg.commands?.[key] ?? DEFAULT_COMMANDS[key]
-                  const enabled = cfg.enabled !== false
-                  const totp = cfg.totp === true
-                  return (
-                    <div key={key} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', alignItems: 'center', padding: '8px 14px', gap: 8, borderBottom: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none', opacity: enabled ? 1 : 0.5 }}>
-                      <span>
-                        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-heading)' }}>{label}</span>
-                        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>{hint}</span>
-                      </span>
-                      <div style={{ width: 60, display: 'flex', justifyContent: 'center' }}>
-                        <input type="checkbox" checked={enabled} onChange={e => setTg(prev => ({
-                          ...prev,
-                          commands: { ...(prev.commands ?? DEFAULT_COMMANDS), [key]: { ...(prev.commands?.[key] ?? DEFAULT_COMMANDS[key]), enabled: e.target.checked } },
-                        }))} />
-                      </div>
-                      <div style={{ width: 60, display: 'flex', justifyContent: 'center' }}>
-                        <input type="checkbox" checked={totp} disabled={!enabled} title={!enabled ? 'Enable the group first' : 'Require TOTP code before executing'} onChange={e => setTg(prev => ({
-                          ...prev,
-                          commands: { ...(prev.commands ?? DEFAULT_COMMANDS), [key]: { ...(prev.commands?.[key] ?? DEFAULT_COMMANDS[key]), totp: e.target.checked } },
-                        }))} />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+              <TgCommandGroups tg={tg} setTg={setTg} />
 
               {/* Bot commands reference */}
               <div style={{ padding: '12px 16px', background: 'rgba(var(--accent)/0.06)', border: '1px solid rgba(var(--accent)/0.18)', borderRadius: 8 }}>
