@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react'
+import { useSystemName } from '../context/SystemNameContext'
 import { api, TelegramSettings, AlertSettings, TotpActionRule, TotpActionSettings, DistroArt, distroArtApi } from '../api/client'
 
 interface PasswordPolicy {
@@ -267,6 +268,26 @@ const ALERT_EVENT_LABELS: { key: keyof AlertSettings['events']; label: string; h
 ]
 
 export default function Settings() {
+  const { systemName, setSystemName } = useSystemName()
+  const [sysNameInput, setSysNameInput] = useState(systemName)
+  const [sysNameSaving, setSysNameSaving] = useState(false)
+  const [sysNameSaved, setSysNameSaved] = useState(false)
+
+  useEffect(() => { setSysNameInput(systemName) }, [systemName])
+
+  async function saveSystemName() {
+    setSysNameSaving(true); setSysNameSaved(false)
+    try {
+      const r = await fetch('/api/settings/system-name', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: sysNameInput }), credentials: 'include' })
+      if (!r.ok) throw new Error('Failed')
+      const d = await r.json()
+      setSystemName(d.system_name)
+      setSysNameSaved(true)
+      setTimeout(() => setSysNameSaved(false), 2000)
+    } catch { /* ignore */ }
+    setSysNameSaving(false)
+  }
+
   const [policy, setPolicy] = useState<PasswordPolicy>(DEFAULT)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -506,6 +527,31 @@ export default function Settings() {
         <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
       ) : (
         <>
+          {/* ── System Name Card ─────────────────────────────────────── */}
+          <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+            <div style={{ background: 'var(--card-header-bg)', borderBottom: '1px solid var(--card-border)', padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 16 }}>🏷</span>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-heading)' }}>System Name</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>Shown in the sidebar, login page, and browser tab</div>
+              </div>
+            </div>
+            <div style={{ padding: '20px', display: 'flex', gap: 10, alignItems: 'center' }}>
+              <input
+                value={sysNameInput}
+                onChange={e => setSysNameInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && saveSystemName()}
+                maxLength={80}
+                placeholder="SSH Manager"
+                style={{ flex: 1, padding: '8px 12px', borderRadius: 7, border: '1px solid var(--input-border)', background: 'var(--input-bg)', color: 'var(--input-text)', fontSize: 14, outline: 'none' }}
+              />
+              <button type="button" onClick={saveSystemName} disabled={sysNameSaving || !sysNameInput.trim()}
+                style={{ padding: '8px 20px', borderRadius: 7, border: 'none', background: 'var(--accent-hex)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>
+                {sysNameSaving ? 'Saving…' : sysNameSaved ? '✓ Saved' : 'Save'}
+              </button>
+            </div>
+          </div>
+
         <form onSubmit={save}>
           {/* ── Password Policy Card ─────────────────────────────────── */}
           <div style={{

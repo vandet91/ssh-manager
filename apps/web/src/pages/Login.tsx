@@ -20,6 +20,7 @@ export default function Login({ onLogin }: Props) {
   const [loading, setLoading] = useState(false)
   const [bgUrl, setBgUrl] = useState<string | null>(null)
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  const [systemName, setSystemName] = useState(() => localStorage.getItem('ssh-mgr-system-name') ?? 'SSH Manager')
 
   useEffect(() => {
     const t = Date.now()
@@ -28,6 +29,9 @@ export default function Login({ onLogin }: Props) {
     }).catch(() => {})
     fetch(`/api/settings/login-logo?t=${t}`).then(r => {
       if (r.ok && r.status !== 204) setLogoUrl(`/api/settings/login-logo?t=${t}`)
+    }).catch(() => {})
+    fetch('/api/settings/public').then(r => r.json()).then((d: { system_name: string }) => {
+      if (d.system_name) { setSystemName(d.system_name); document.title = d.system_name }
     }).catch(() => {})
   }, [])
 
@@ -143,7 +147,7 @@ export default function Login({ onLogin }: Props) {
             }
           </div>
           <h1 style={{ margin: '0 0 4px', fontSize: 24, fontWeight: 700, color: '#fff', textShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
-            SSH Manager
+            {systemName}
           </h1>
           <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>
             Secure Access Control

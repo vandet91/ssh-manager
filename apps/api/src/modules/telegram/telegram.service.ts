@@ -10,11 +10,16 @@
 import speakeasy from 'speakeasy'
 import { db } from '../../db/client'
 import { withServerSsh } from '../../utils/server-ssh'
+import { writeAuditLog } from '../../utils/audit'
 import { Client } from 'ssh2'
 
 // 5-second connect timeout for bot commands — fail fast if server is unreachable
 const sshBot = <T>(serverId: string, fn: (client: Client) => Promise<T>) =>
   withServerSsh(serverId, fn, undefined, 5000)
+
+function tgAudit(who: string, action: string, resource?: string, serverId?: string, details?: Record<string, unknown>) {
+  writeAuditLog({ userEmail: `tg:${who}`, action, resource: resource ?? null, serverId: serverId ?? null, details: { via: 'telegram', ...details } }).catch(() => {})
+}
 
 // ── Telegram HTTP helpers ──────────────────────────────────────────────────────
 
@@ -799,6 +804,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
       await send(token, chatId, `🔓 Unlocking <b>${escapeHtml(ch.adUser!)}</b>…`, true)
       try {
         await runAdScript(`Unlock-ADAccount -Identity '${ch.adUser}'; Write-Output 'OK'`)
+        tgAudit(ch.who, 'telegram.adunlock', ch.adUser)
         await send(token, chatId, `✅ Account <b>${escapeHtml(ch.adUser!)}</b> unlocked.`, true)
       } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
       return
@@ -808,6 +814,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
       await send(token, chatId, `✅ Enabling <b>${escapeHtml(ch.adUser!)}</b>…`, true)
       try {
         await runAdScript(`Enable-ADAccount -Identity '${ch.adUser}'; Write-Output 'OK'`)
+        tgAudit(ch.who, 'telegram.adenable', ch.adUser)
         await send(token, chatId, `✅ Account <b>${escapeHtml(ch.adUser!)}</b> enabled.`, true)
       } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
       return
@@ -817,6 +824,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
       await send(token, chatId, `🚫 Disabling <b>${escapeHtml(ch.adUser!)}</b>…`, true)
       try {
         await runAdScript(`Disable-ADAccount -Identity '${ch.adUser}'; Write-Output 'OK'`)
+        tgAudit(ch.who, 'telegram.addisable', ch.adUser)
         await send(token, chatId, `✅ Account <b>${escapeHtml(ch.adUser!)}</b> disabled.`, true)
       } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
       return
@@ -845,6 +853,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
             await anyDb.updateTable('server_credentials').set({ password_enc: enc, updated_at: new Date() }).where('id', '=', c.id).execute()
           }
         }
+        tgAudit(ch.who, 'telegram.adreset', ch.adUser)
         await send(token, chatId, `✅ Password reset for <b>${escapeHtml(ch.adUser!)}</b>. Vault synced.`, true)
       } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
       return
@@ -858,11 +867,13 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
           const { sshExec } = await import('../../utils/ssh')
           await sshExec(client, `sudo reboot 2>&1 || true`)
         })
+        tgAudit(ch.who, 'telegram.reboot', ch.rebootServerName, ch.rebootServerId)
         await send(token, chatId, `✅ Reboot command sent to <b>${escapeHtml(ch.rebootServerName!)}</b>.`, true)
       } catch (err) {
         // SSH will drop during reboot — treat connection reset as success
         const msg = (err as Error).message ?? ''
         if (/connect|reset|closed|timeout/i.test(msg)) {
+          tgAudit(ch.who, 'telegram.reboot', ch.rebootServerName, ch.rebootServerId)
           await send(token, chatId, `✅ Reboot command sent to <b>${escapeHtml(ch.rebootServerName!)}</b> (connection dropped — expected).`, true)
         } else {
           await send(token, chatId, `❌ Failed: ${msg}`)
@@ -980,6 +991,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
           status: 'pending',
           created_at: new Date(),
         }).returningAll().executeTakeFirst()
+        tgAudit(ch.who, 'telegram.runtask', ch.taskName, undefined, { task_id: ch.taskId, run_id: run.id })
         await send(token, chatId, `✅ Task <b>${escapeHtml(ch.taskName!)}</b> queued (run ID: <code>${run.id.slice(0, 8)}</code>).`, true)
       } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
       return
@@ -1006,8 +1018,10 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
         const st = await sshExec(client, `systemctl is-active ${ch.service} 2>/dev/null`)
         return st.stdout.trim()
       }) as string
+      tgAudit(ch.who, `telegram.svc.${ch.action}`, ch.service, ch.serverId, { server: ch.serverName, result: status })
       await send(token, chatId, `✅ Done! <b>${ch.service}</b> on <b>${ch.serverName}</b> → <code>${status}</code>`, true)
     } catch (err) {
+      tgAudit(ch.who, `telegram.svc.${ch.action}.failed`, ch.service, ch.serverId, { server: ch.serverName, error: (err as Error).message })
       await send(token, chatId, `❌ Failed: ${(err as Error).message}`)
     }
     return
@@ -1024,6 +1038,8 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
   if (!text.startsWith('/')) return
   const [cmdRaw, ...args] = text.split(/\s+/)
   const cmd = cmdRaw.replace(/^\//, '').split('@')[0].toLowerCase()
+
+  tgAudit(who, `telegram.${cmd}`, args.join(' ') || undefined)
 
   switch (cmd) {
     case 'help':
@@ -1221,8 +1237,12 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
             if (code !== 0) throw new Error(out.stdout.replace(/EXIT:\d+\n?$/, '').trim() || out.stderr)
             return (await sshExec(client, `systemctl is-active ${service} 2>/dev/null`)).stdout.trim()
           }) as string
+          tgAudit(who, `telegram.svc.${cmd}`, service, server.id, { server: server.name, result: status })
           await send(token, chatId, `✅ Done! <b>${service}</b> on <b>${server.name}</b> → <code>${status}</code>`, true)
-        } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
+        } catch (err) {
+          tgAudit(who, `telegram.svc.${cmd}.failed`, service, server.id, { server: server.name, error: (err as Error).message })
+          await send(token, chatId, `❌ Failed: ${(err as Error).message}`)
+        }
         break
       }
       if (!settings.totpSecret) {
@@ -1325,10 +1345,12 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
             const { sshExec } = await import('../../utils/ssh')
             await sshExec(client, `sudo reboot 2>&1 || true`)
           })
+          tgAudit(who, 'telegram.reboot', rebootServer.name, rebootServer.id)
           await send(token, chatId, `✅ Reboot command sent to <b>${rebootServer.name}</b>.`, true)
         } catch (err) {
           const msg = (err as Error).message ?? ''
           if (/connect|reset|closed|timeout/i.test(msg)) {
+            tgAudit(who, 'telegram.reboot', rebootServer.name, rebootServer.id)
             await send(token, chatId, `✅ Reboot command sent to <b>${rebootServer.name}</b> (connection dropped — expected).`, true)
           } else { await send(token, chatId, `❌ Failed: ${msg}`) }
         }
@@ -1458,6 +1480,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
             cmd === 'adenable' ? `Enable-ADAccount -Identity '${adUser}'` :
                                  `Disable-ADAccount -Identity '${adUser}'`
           )
+          tgAudit(who, `telegram.${cmd}`, adUser)
           await send(token, chatId, `✅ Done! Account <b>${escapeHtml(adUser)}</b> → <b>${labels[cmd]}d</b>.`, true)
         } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
         break
@@ -1482,6 +1505,7 @@ async function handle(token: string, msg: TgMessage, settings: TgSettings): Prom
         await send(token, chatId, `🔑 Resetting password for <b>${escapeHtml(adUser)}</b>…`, true)
         try {
           await runAdScript(`Set-ADAccountPassword -Identity '${adUser}' -NewPassword (ConvertTo-SecureString '${adPassword}' -AsPlainText -Force) -Reset`)
+          tgAudit(who, 'telegram.adreset', adUser)
           await send(token, chatId, `✅ Password for <b>${escapeHtml(adUser)}</b> has been reset.`, true)
         } catch (err) { await send(token, chatId, `❌ Failed: ${(err as Error).message}`) }
         break

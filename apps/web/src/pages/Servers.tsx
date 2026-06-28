@@ -40,6 +40,57 @@ function HostBadge({ type, detail }: { type: HostType | null | undefined; detail
   )
 }
 
+const OS_META: Record<string, { icon: string; label: string; color: string; bg: string; border: string }> = {
+  linux:        { icon: '🐧', label: 'Linux',   color: '#4ade80', bg: 'rgba(21,128,61,0.15)',  border: 'rgba(34,197,94,0.4)' },
+  windows:      { icon: '🪟', label: 'Windows', color: '#60a5fa', bg: 'rgba(29,78,216,0.15)',  border: 'rgba(96,165,250,0.4)' },
+  router:       { icon: '📡', label: 'Router',  color: '#fb923c', bg: 'rgba(194,65,12,0.15)',  border: 'rgba(249,115,22,0.4)' },
+  'access-point':{ icon: '📶', label: 'AP',     color: '#c084fc', bg: 'rgba(107,33,168,0.15)', border: 'rgba(192,132,252,0.4)' },
+  switch:       { icon: '🔀', label: 'Switch',  color: '#22d3ee', bg: 'rgba(8,145,178,0.15)',  border: 'rgba(34,211,238,0.4)' },
+  dvr:          { icon: '📹', label: 'DVR',     color: '#f472b6', bg: 'rgba(157,23,77,0.15)',  border: 'rgba(244,114,182,0.4)' },
+  nvr:          { icon: '🎥', label: 'NVR',     color: '#f472b6', bg: 'rgba(157,23,77,0.15)',  border: 'rgba(244,114,182,0.4)' },
+  'other-network':{ icon: '🌐', label: 'Network', color: '#94a3b8', bg: 'rgba(51,65,85,0.15)', border: 'rgba(148,163,184,0.4)' },
+}
+
+function OsBadge({ type }: { type: string | null }) {
+  if (!type) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
+  const m = OS_META[type]
+  if (!m) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{type}</span>
+  return (
+    <span title={m.label} style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: 28, height: 22, fontSize: 14,
+      background: m.bg, border: `1px solid ${m.border}`,
+      borderRadius: 5, cursor: 'default',
+    }}>
+      {m.icon}
+    </span>
+  )
+}
+
+function CertBadge({ server }: { server: { cert_host?: string | null; cert_expires_at?: string | null; cert_error?: string | null; cert_last_checked_at?: string | null } }) {
+  if (!server.cert_host) return <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+  if (server.cert_error) return (
+    <span title={server.cert_error} style={{ fontSize: 11, fontWeight: 600, color: '#f87171', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 5, padding: '1px 6px' }}>
+      ✗ Error
+    </span>
+  )
+  if (!server.cert_expires_at) return (
+    <span style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-panel-alt)', border: '1px solid var(--border-weak)', borderRadius: 5, padding: '1px 6px' }}>
+      Not checked
+    </span>
+  )
+  const days = Math.floor((new Date(server.cert_expires_at).getTime() - Date.now()) / 86400000)
+  const label = days < 0 ? 'Expired' : days === 0 ? 'Today' : `${days}d`
+  const color = days < 0 ? '#f87171' : days < 14 ? '#fb923c' : days < 30 ? '#fbbf24' : '#4ade80'
+  const bg = days < 0 ? 'rgba(239,68,68,0.12)' : days < 14 ? 'rgba(249,115,22,0.12)' : days < 30 ? 'rgba(251,191,36,0.12)' : 'rgba(74,222,128,0.1)'
+  const border = days < 0 ? 'rgba(239,68,68,0.35)' : days < 14 ? 'rgba(249,115,22,0.35)' : days < 30 ? 'rgba(251,191,36,0.35)' : 'rgba(74,222,128,0.3)'
+  return (
+    <span title={`Expires ${new Date(server.cert_expires_at).toLocaleDateString()}`} style={{ fontSize: 11, fontWeight: 600, color, background: bg, border: `1px solid ${border}`, borderRadius: 5, padding: '1px 6px', whiteSpace: 'nowrap' }}>
+      {days < 0 ? '✗' : '🔒'} {label}
+    </span>
+  )
+}
+
 type AiIssue = { severity: 'critical'|'warning'|'info'; title: string; description: string; service?: string|null; timestamp?: string|null; root_cause?: string|null; fix_commands?: string[]; prevention?: string|null }
 type AiResult = { summary: string; health_score: number; issues: AiIssue[]; security_alerts: AiIssue[]; recommendations: string[]; raw_provider: string; raw_model: string; analysed_at: string }
 
@@ -143,7 +194,7 @@ export default function Servers() {
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [infoError, setInfoError] = useState('')
-  const [infoTab, setInfoTab] = useState<'overview' | 'users' | 'keys' | 'credentials' | 'software' | 'recommendations' | 'benchmark' | 'ai'>('overview')
+  const [infoTab, setInfoTab] = useState<'overview' | 'users' | 'keys' | 'credentials' | 'software' | 'recommendations' | 'benchmark' | 'ai' | 'cert'>('overview')
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [recLoading, setRecLoading] = useState(false)
   const [recError, setRecError] = useState('')
@@ -165,6 +216,34 @@ export default function Servers() {
   const [serviceResults, setServiceResults] = useState<Record<string, string>>({})  // svcName → new status
   const [ndbNodes, setNdbNodes] = useState<Array<{ id: number; type: 'mgmd' | 'ndbd' | 'mysqld'; host: string; status: 'connected' | 'not_connected' | 'unknown'; nodegroup?: number; master?: boolean }>>([])
   const [ndbLoading, setNdbLoading] = useState(false)
+  const [certChecking, setCertChecking] = useState(false)
+  const [certRenewing, setCertRenewing] = useState(false)
+  const [certMsg, setCertMsg] = useState('')
+  const [certSettings, setCertSettings] = useState<{ cert_host: string; cert_port: number; cert_protocol: string; cert_renewal_cmd: string; cert_auto_renew: boolean }>({ cert_host: '', cert_port: 443, cert_protocol: 'https', cert_renewal_cmd: '', cert_auto_renew: false })
+  const [certSettingsSaved, setCertSettingsSaved] = useState(false)
+
+  // Deploy flow state
+  type CertValidationResult = {
+    valid: boolean; subject: string; issuer: string; sans: string[]
+    notBefore: string; notAfter: string; daysRemaining: number
+    isSelfSigned: boolean; keyMatches: boolean | null; chainValid: boolean | null
+    fingerprint: string; errors: string[]; warnings: string[]
+  }
+  const [deployFiles, setDeployFiles] = useState({ cert_path: '', key_path: '', chain_path: '' })
+  const [deployValidating, setDeployValidating] = useState(false)
+  const [deployValidation, setDeployValidation] = useState<CertValidationResult | null>(null)
+  const [deployValidationError, setDeployValidationError] = useState('')
+  const [deployApply, setDeployApply] = useState({
+    target_cert: '', target_key: '', target_chain: '',
+    concat_chain: true, backup: true,
+    service_name: 'nginx', service_action: 'reload' as 'reload' | 'restart' | 'none',
+  })
+  const [deployMode, setDeployMode] = useState<'now' | 'schedule'>('now')
+  const [deployScheduleAt, setDeployScheduleAt] = useState('')
+  const [deployApplying, setDeployApplying] = useState(false)
+  const [deployResult, setDeployResult] = useState<{ ok: boolean; output?: string; error?: string } | null>(null)
+  const [pendingApply, setPendingApply] = useState<{ run_at: string } | null>(null)
+
   const [credentials, setCredentials] = useState<ServerCredential[]>([])
   const [credLoading, setCredLoading] = useState(false)
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, string>>({})
@@ -897,6 +976,7 @@ export default function Servers() {
             <col style={{ width: 160 }} /> {/* Hostname */}
             <col style={{ width: 75 }}  /> {/* Env */}
             <col style={{ width: 100 }} /> {/* Status */}
+            <col style={{ width: 90 }}  /> {/* Cert */}
             <col style={{ width: 85 }}  /> {/* Added */}
             <col style={{ width: 105 }} /> {/* Last Connected */}
             <col />                        {/* Actions — fills remaining */}
@@ -909,6 +989,7 @@ export default function Servers() {
               <th className="px-3 py-2">Hostname</th>
               <th className="px-3 py-2">Env</th>
               <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">TLS Cert</th>
               <th className="px-3 py-2">Added</th>
               <th className="px-3 py-2">Last Connected</th>
               <th className="px-3 py-2">Actions</th>
@@ -920,18 +1001,7 @@ export default function Servers() {
                 style={{ borderBottom: '1px solid var(--border-weak)' }}>
                 <td className="px-3 py-2 text-white font-medium" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</td>
                 <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                  {s.os_type === 'windows'
-                    ? <span className="inline-flex items-center gap-1 text-xs text-blue-300 bg-blue-900/30 border border-blue-700/40 rounded px-1.5 py-0.5 font-medium">🪟 Win</span>
-                    : s.os_type === 'linux'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-green-300 bg-green-900/30 border border-green-700/40 rounded px-1.5 py-0.5 font-medium">🐧 Linux</span>
-                    : s.os_type === 'router'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-orange-300 bg-orange-900/30 border border-orange-700/40 rounded px-1.5 py-0.5 font-medium">📡 Router</span>
-                    : s.os_type === 'access-point'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-purple-300 bg-purple-900/30 border border-purple-700/40 rounded px-1.5 py-0.5 font-medium">📶 AP</span>
-                    : s.os_type === 'switch'
-                      ? <span className="inline-flex items-center gap-1 text-xs text-cyan-300 bg-cyan-900/30 border border-cyan-700/40 rounded px-1.5 py-0.5 font-medium">🔀 Switch</span>
-                      : <span className="text-xs text-gray-500">—</span>
-                  }
+                  <OsBadge type={s.os_type} />
                 </td>
                 <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
                   <HostBadge type={s.host_type} detail={s.host_type_detail} />
@@ -948,6 +1018,9 @@ export default function Servers() {
                       : s.host_key_verified
                         ? <Badge label="Ready" variant="ok" />
                         : <Badge label="Unverified" variant="medium" />}
+                </td>
+                <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                  <CertBadge server={s} />
                 </td>
                 <td className="px-3 py-2 text-gray-400 text-xs" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }} title={new Date(s.created_at).toLocaleString()}>{new Date(s.created_at).toLocaleDateString()}</td>
                 <td className="px-3 py-2 text-gray-400 text-xs" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>{s.last_connected_at ? new Date(s.last_connected_at).toLocaleDateString() : <span className="text-gray-600">—</span>}</td>
@@ -1587,7 +1660,7 @@ export default function Servers() {
               <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border-med)', flexShrink: 0, flexWrap: 'wrap' }}>
                 {(infoServer?.os_type === 'windows'
                   ? (['overview', 'credentials', 'users', 'keys'] as const)
-                  : (['overview', 'users', 'keys', 'credentials', 'software', 'recommendations', 'benchmark', 'ai'] as const)
+                  : (['overview', 'users', 'keys', 'credentials', 'software', 'recommendations', 'benchmark', 'ai', 'cert'] as const)
                 ).map((t) => (
                   <button key={t}
                     type="button"
@@ -1600,6 +1673,16 @@ export default function Servers() {
                       if (t === 'software' && software.length === 0 && !softwareLoading) loadSoftware(infoServer!.id)
                       if (t === 'recommendations' && recommendations.length === 0 && !recLoading) loadRecommendations(infoServer!.id)
                       if (t === 'benchmark' && !benchmark && !benchmarkLoading) loadBenchmark(infoServer!.id)
+                      if (t === 'cert') {
+                        const s = infoServer!
+                        setCertSettings({ cert_host: s.cert_host ?? s.hostname, cert_port: s.cert_port ?? 443, cert_protocol: s.cert_protocol ?? 'https', cert_renewal_cmd: s.cert_renewal_cmd ?? '', cert_auto_renew: s.cert_auto_renew ?? false })
+                        setCertMsg('')
+                        setDeployValidation(null)
+                        setDeployValidationError('')
+                        setDeployResult(null)
+                        setDeployFiles({ cert_path: '', key_path: '', chain_path: '' })
+                        setPendingApply((s as any).cert_pending_apply_at ? { run_at: (s as any).cert_pending_apply_at } : null)
+                      }
                     }}
                     style={{
                       padding: '9px 14px', fontSize: 13, fontWeight: 500,
@@ -1621,6 +1704,7 @@ export default function Servers() {
                       : t === 'recommendations' ? '💡 Best Practices'
                       : t === 'benchmark' ? '🔐 Security Benchmark'
                       : t === 'ai' ? '🤖 AI Analyst'
+                      : t === 'cert' ? '🔒 TLS Cert'
                       : 'Overview'}
                   </button>
                 ))}
@@ -3725,6 +3809,488 @@ export default function Servers() {
                       </div>
                     )
                   })()}
+
+                </div>
+              )}
+
+              {/* TLS Certificate Tab */}
+              {infoTab === 'cert' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                  {/* Current cert status */}
+                  <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 16 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>Current Certificate</div>
+                    {!infoServer?.cert_host ? (
+                      <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No TLS host configured. Set one below to start monitoring.</p>
+                    ) : infoServer.cert_error ? (
+                      <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>
+                        ✗ Error: {infoServer.cert_error}
+                      </div>
+                    ) : infoServer.cert_expires_at ? (() => {
+                      const days = Math.floor((new Date(infoServer.cert_expires_at!).getTime() - Date.now()) / 86400000)
+                      const color = days < 0 ? '#f87171' : days < 14 ? '#fb923c' : days < 30 ? '#fbbf24' : '#4ade80'
+                      return (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', fontSize: 13 }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Host</span>
+                          <span style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{infoServer.cert_host}:{infoServer.cert_port ?? 443}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>Subject</span>
+                          <span style={{ color: 'var(--text-primary)' }}>{infoServer.cert_subject || '—'}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>Issuer</span>
+                          <span style={{ color: 'var(--text-primary)' }}>{infoServer.cert_issuer || '—'}</span>
+                          {infoServer.cert_is_self_signed && (
+                            <>
+                              <span style={{ color: 'var(--text-muted)' }}>Type</span>
+                              <span style={{ color: '#fbbf24' }}>⚠ Self-signed</span>
+                            </>
+                          )}
+                          {infoServer.cert_sans && infoServer.cert_sans.length > 0 && (
+                            <>
+                              <span style={{ color: 'var(--text-muted)' }}>SANs</span>
+                              <span style={{ color: 'var(--text-primary)', fontSize: 11 }}>{infoServer.cert_sans.join(', ')}</span>
+                            </>
+                          )}
+                          <span style={{ color: 'var(--text-muted)' }}>Expires</span>
+                          <span style={{ color, fontWeight: 600 }}>
+                            {new Date(infoServer.cert_expires_at!).toLocaleDateString()} ({days < 0 ? 'Expired' : `${days} days left`})
+                          </span>
+                          <span style={{ color: 'var(--text-muted)' }}>Last checked</span>
+                          <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{infoServer.cert_last_checked_at ? new Date(infoServer.cert_last_checked_at).toLocaleString() : '—'}</span>
+                        </div>
+                      )
+                    })() : (
+                      <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Not yet checked. Click "Check Now" below.</p>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  {infoServer?.cert_host && (
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <button
+                        disabled={certChecking}
+                        onClick={async () => {
+                          setCertChecking(true); setCertMsg('')
+                          try {
+                            await api.post(`/servers/${infoServer!.id}/cert/check`)
+                            const updated = await api.get<Server>(`/servers/${infoServer!.id}`)
+                            setInfoServer(updated)
+                            setServers(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s))
+                            setCertMsg('✓ Certificate checked successfully')
+                          } catch (e: unknown) {
+                            setCertMsg(`✗ ${(e as {message?:string}).message ?? 'Check failed'}`)
+                          } finally { setCertChecking(false) }
+                        }}
+                        style={{ padding: '7px 16px', fontSize: 13, fontWeight: 600, borderRadius: 7, border: 'none', cursor: certChecking ? 'not-allowed' : 'pointer', background: 'var(--accent-hex)', color: '#fff', opacity: certChecking ? 0.6 : 1 }}>
+                        {certChecking ? '⏳ Checking…' : '🔄 Check Now'}
+                      </button>
+
+                      {infoServer.cert_renewal_cmd && (
+                        <button
+                          disabled={certRenewing}
+                          onClick={async () => {
+                            setCertRenewing(true); setCertMsg('')
+                            try {
+                              const r = await api.post<{ ok: boolean; output: string }>(`/servers/${infoServer!.id}/cert/renew`)
+                              setCertMsg(`✓ Renewal complete. ${r.output.slice(0, 120)}`)
+                              const updated = await api.get<Server>(`/servers/${infoServer!.id}`)
+                              setInfoServer(updated)
+                              setServers(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s))
+                            } catch (e: unknown) {
+                              setCertMsg(`✗ ${(e as {message?:string}).message ?? 'Renewal failed'}`)
+                            } finally { setCertRenewing(false) }
+                          }}
+                          style={{ padding: '7px 16px', fontSize: 13, fontWeight: 600, borderRadius: 7, border: '1px solid rgba(74,222,128,0.4)', cursor: certRenewing ? 'not-allowed' : 'pointer', background: 'rgba(74,222,128,0.1)', color: '#4ade80', opacity: certRenewing ? 0.6 : 1 }}>
+                          {certRenewing ? '⏳ Renewing…' : '🔑 Renew Cert'}
+                        </button>
+                      )}
+
+                      {certMsg && (
+                        <span style={{ fontSize: 12, color: certMsg.startsWith('✓') ? '#4ade80' : '#f87171' }}>{certMsg}</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Settings */}
+                  <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>Monitoring Settings</div>
+
+                    {/* Protocol quick-select */}
+                    <div>
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Protocol</label>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {([
+                          ['https',    'HTTPS',      443],
+                          ['postgres', 'PostgreSQL', 5432],
+                          ['mysql',    'MySQL',      3306],
+                          ['mariadb',  'MariaDB',    3306],
+                          ['mongodb',  'MongoDB',    27017],
+                          ['redis',    'Redis',      6380],
+                          ['smtp',     'SMTP',       587],
+                          ['imap',     'IMAP',       993],
+                          ['ldap',     'LDAPS',      636],
+                        ] as const).map(([proto, label, defaultPort]) => (
+                          <button key={proto}
+                            onClick={() => setCertSettings(f => ({
+                              ...f,
+                              cert_protocol: proto,
+                              cert_port: f.cert_port === 443 || f.cert_port === 5432 || f.cert_port === 3306 || f.cert_port === 27017 || f.cert_port === 6380 || f.cert_port === 587 || f.cert_port === 993 || f.cert_port === 636 ? defaultPort : f.cert_port,
+                            }))}
+                            style={{ padding: '4px 10px', fontSize: 11, fontWeight: 500, borderRadius: 6, cursor: 'pointer', border: `1px solid ${certSettings.cert_protocol === proto ? 'var(--accent-hex)' : 'var(--border-med)'}`, background: certSettings.cert_protocol === proto ? 'var(--accent-hex)' : 'var(--bg-panel-alt)', color: certSettings.cert_protocol === proto ? '#fff' : 'var(--text-primary)', transition: 'all 0.1s' }}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      {certSettings.cert_protocol !== 'https' && (
+                        <p style={{ margin: '6px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
+                          ℹ Uses STARTTLS — cert check runs via SSH using <code style={{ fontFamily: 'monospace' }}>openssl s_client -starttls {certSettings.cert_protocol}</code>
+                        </p>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '10px 12px', alignItems: 'end' }}>
+                      <div>
+                        <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Host / Domain to check</label>
+                        <input value={certSettings.cert_host} onChange={e => setCertSettings(f => ({ ...f, cert_host: e.target.value }))}
+                          placeholder={infoServer?.hostname}
+                          style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }} />
+                      </div>
+                      <div style={{ width: 80 }}>
+                        <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Port</label>
+                        <input type="number" value={certSettings.cert_port} onChange={e => setCertSettings(f => ({ ...f, cert_port: Number(e.target.value) }))}
+                          style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 13 }} />
+                      </div>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Renewal command <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional, runs via SSH)</span></label>
+                      <input value={certSettings.cert_renewal_cmd} onChange={e => setCertSettings(f => ({ ...f, cert_renewal_cmd: e.target.value }))}
+                        placeholder="certbot renew --quiet"
+                        style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace', boxSizing: 'border-box' }} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input type="checkbox" id="cert-auto-renew" checked={certSettings.cert_auto_renew} onChange={e => setCertSettings(f => ({ ...f, cert_auto_renew: e.target.checked }))} />
+                      <label htmlFor="cert-auto-renew" style={{ fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer' }}>Auto-renew when cert expires within 30 days</label>
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await api.put(`/servers/${infoServer!.id}/cert/settings`, certSettings)
+                            const updated = await api.get<Server>(`/servers/${infoServer!.id}`)
+                            setInfoServer(updated)
+                            setServers(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s))
+                            setCertSettingsSaved(true)
+                            setTimeout(() => setCertSettingsSaved(false), 2000)
+                          } catch (e: unknown) {
+                            setCertMsg(`✗ ${(e as {message?:string}).message ?? 'Save failed'}`)
+                          }
+                        }}
+                        style={{ padding: '7px 18px', fontSize: 13, fontWeight: 600, borderRadius: 7, border: 'none', cursor: 'pointer', background: 'var(--accent-hex)', color: '#fff' }}>
+                        {certSettingsSaved ? '✓ Saved' : 'Save Settings'}
+                      </button>
+                      {certSettings.cert_host && (
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Changes saved here enable automatic daily cert checks.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ── Deploy New Certificate ── */}
+                  {infoServer?.os_type === 'linux' && (
+                    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-weak)', borderRadius: 10, padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Deploy New Certificate</div>
+                      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
+                        Upload your new cert files to the server first (via File Manager), then validate and deploy here.
+                      </p>
+
+                      {/* Pending apply banner */}
+                      {pendingApply && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.35)', borderRadius: 8, padding: '10px 14px' }}>
+                          <span style={{ fontSize: 14 }}>🕐</span>
+                          <div style={{ flex: 1, fontSize: 13, color: '#fbbf24' }}>
+                            Scheduled apply: <strong>{new Date(pendingApply.run_at).toLocaleString()}</strong>
+                          </div>
+                          <button
+                            onClick={async () => {
+                              await api.delete(`/servers/${infoServer!.id}/cert/schedule-apply`)
+                              setPendingApply(null)
+                            }}
+                            style={{ fontSize: 12, padding: '4px 10px', borderRadius: 6, border: '1px solid rgba(251,191,36,0.4)', background: 'rgba(251,191,36,0.1)', color: '#fbbf24', cursor: 'pointer' }}>
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Step 1: File paths */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Step 1 — File paths on server</div>
+                        {([
+                          ['cert_path', 'Certificate file *', '/tmp/server.crt', true],
+                          ['key_path',   'Private key file',   '/tmp/server.key', false],
+                          ['chain_path', 'Chain / intermediate file', '/tmp/chain.crt', false],
+                        ] as const).map(([field, label, ph, required]) => (
+                          <div key={field}>
+                            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>
+                              {label} {required && <span style={{ color: '#f87171' }}>*</span>}
+                            </label>
+                            <input
+                              value={deployFiles[field]}
+                              onChange={e => { setDeployFiles(f => ({ ...f, [field]: e.target.value })); setDeployValidation(null); setDeployValidationError('') }}
+                              placeholder={ph}
+                              style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace', boxSizing: 'border-box' }}
+                            />
+                          </div>
+                        ))}
+
+                        <button
+                          disabled={!deployFiles.cert_path || deployValidating}
+                          onClick={async () => {
+                            setDeployValidating(true); setDeployValidation(null); setDeployValidationError('')
+                            try {
+                              const r = await api.post<CertValidationResult>(`/servers/${infoServer!.id}/cert/validate-files`, {
+                                cert_path: deployFiles.cert_path,
+                                key_path: deployFiles.key_path || undefined,
+                                chain_path: deployFiles.chain_path || undefined,
+                              })
+                              setDeployValidation(r)
+                            } catch (e: unknown) {
+                              setDeployValidationError((e as { message?: string }).message ?? 'Validation failed')
+                            } finally { setDeployValidating(false) }
+                          }}
+                          style={{ padding: '8px 18px', fontSize: 13, fontWeight: 600, borderRadius: 7, border: 'none', cursor: (!deployFiles.cert_path || deployValidating) ? 'not-allowed' : 'pointer', background: 'var(--accent-hex)', color: '#fff', opacity: (!deployFiles.cert_path || deployValidating) ? 0.5 : 1, alignSelf: 'flex-start' }}>
+                          {deployValidating ? '⏳ Validating…' : '🔍 Validate Certificate'}
+                        </button>
+                      </div>
+
+                      {/* Validation error */}
+                      {deployValidationError && (
+                        <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>
+                          ✗ {deployValidationError}
+                        </div>
+                      )}
+
+                      {/* Validation result */}
+                      {deployValidation && (
+                        <div style={{ background: deployValidation.valid ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)', border: `1px solid ${deployValidation.valid ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 16 }}>{deployValidation.valid ? '✅' : '❌'}</span>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: deployValidation.valid ? '#4ade80' : '#f87171' }}>
+                              {deployValidation.valid ? 'Certificate is valid' : 'Validation failed'}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '6px 16px', fontSize: 12 }}>
+                            <span style={{ color: 'var(--text-muted)' }}>Subject</span>
+                            <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{deployValidation.subject}</span>
+                            <span style={{ color: 'var(--text-muted)' }}>Issuer</span>
+                            <span style={{ color: 'var(--text-primary)' }}>{deployValidation.issuer}</span>
+                            {deployValidation.sans.length > 0 && <>
+                              <span style={{ color: 'var(--text-muted)' }}>SANs</span>
+                              <span style={{ color: 'var(--text-primary)', fontSize: 11 }}>{deployValidation.sans.join(', ')}</span>
+                            </>}
+                            <span style={{ color: 'var(--text-muted)' }}>Valid from</span>
+                            <span style={{ color: 'var(--text-primary)' }}>{deployValidation.notBefore}</span>
+                            <span style={{ color: 'var(--text-muted)' }}>Expires</span>
+                            <span style={{ color: deployValidation.daysRemaining < 30 ? '#fbbf24' : '#4ade80', fontWeight: 600 }}>
+                              {deployValidation.notAfter} ({deployValidation.daysRemaining}d)
+                            </span>
+                            {deployValidation.keyMatches !== null && <>
+                              <span style={{ color: 'var(--text-muted)' }}>Key matches</span>
+                              <span style={{ color: deployValidation.keyMatches ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                                {deployValidation.keyMatches ? '✓ Yes' : '✗ No — key does not match cert!'}
+                              </span>
+                            </>}
+                            {deployValidation.chainValid !== null && <>
+                              <span style={{ color: 'var(--text-muted)' }}>Chain valid</span>
+                              <span style={{ color: deployValidation.chainValid ? '#4ade80' : '#fbbf24', fontWeight: 600 }}>
+                                {deployValidation.chainValid ? '✓ Yes' : '⚠ Could not verify'}
+                              </span>
+                            </>}
+                            {deployValidation.fingerprint && <>
+                              <span style={{ color: 'var(--text-muted)' }}>Fingerprint</span>
+                              <span style={{ color: 'var(--text-muted)', fontSize: 10, fontFamily: 'monospace' }}>{deployValidation.fingerprint}</span>
+                            </>}
+                          </div>
+
+                          {deployValidation.errors.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              {deployValidation.errors.map((e, i) => (
+                                <div key={i} style={{ fontSize: 12, color: '#f87171' }}>✗ {e}</div>
+                              ))}
+                            </div>
+                          )}
+                          {deployValidation.warnings.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              {deployValidation.warnings.map((w, i) => (
+                                <div key={i} style={{ fontSize: 12, color: '#fbbf24' }}>⚠ {w}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Step 2: Apply — only shown after successful validation */}
+                      {deployValidation?.valid && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 4 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Step 2 — Deployment settings</div>
+
+                          {/* Service presets */}
+                          <div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Quick preset:</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                              {([
+                                { label: 'Nginx',      service: 'nginx',      action: 'reload'  as const, cert: '/etc/nginx/ssl/server.crt',              key: '/etc/nginx/ssl/server.key',              chain: '',                                         concat: true  },
+                                { label: 'Apache2',    service: 'apache2',    action: 'reload'  as const, cert: '/etc/ssl/certs/server.crt',               key: '/etc/ssl/private/server.key',            chain: '/etc/ssl/certs/chain.crt',                 concat: false },
+                                { label: 'Caddy',      service: 'caddy',      action: 'reload'  as const, cert: '/etc/caddy/ssl/server.crt',               key: '/etc/caddy/ssl/server.key',              chain: '',                                         concat: true  },
+                                { label: 'HAProxy',    service: 'haproxy',    action: 'reload'  as const, cert: '/etc/haproxy/ssl/server.pem',             key: '',                                       chain: '',                                         concat: true  },
+                                { label: 'PostgreSQL', service: 'postgresql', action: 'reload'  as const, cert: '/var/lib/postgresql/ssl/server.crt',      key: '/var/lib/postgresql/ssl/server.key',     chain: '',                                         concat: false },
+                                { label: 'MySQL',      service: 'mysql',      action: 'restart' as const, cert: '/etc/mysql/ssl/server-cert.pem',          key: '/etc/mysql/ssl/server-key.pem',          chain: '/etc/mysql/ssl/ca-cert.pem',               concat: false },
+                                { label: 'MariaDB',    service: 'mariadb',    action: 'restart' as const, cert: '/etc/mysql/ssl/server-cert.pem',          key: '/etc/mysql/ssl/server-key.pem',          chain: '/etc/mysql/ssl/ca-cert.pem',               concat: false },
+                                { label: 'MongoDB',    service: 'mongod',     action: 'restart' as const, cert: '/etc/ssl/mongodb/mongodb.pem',            key: '',                                       chain: '/etc/ssl/mongodb/ca.pem',                  concat: true  },
+                                { label: 'Redis',      service: 'redis-server', action: 'restart' as const, cert: '/etc/redis/ssl/redis.crt',             key: '/etc/redis/ssl/redis.key',               chain: '',                                         concat: false },
+                                { label: 'Postfix',    service: 'postfix',    action: 'reload'  as const, cert: '/etc/ssl/certs/postfix.crt',              key: '/etc/ssl/private/postfix.key',           chain: '/etc/ssl/certs/postfix-chain.crt',         concat: false },
+                                { label: 'Dovecot',    service: 'dovecot',    action: 'reload'  as const, cert: '/etc/ssl/certs/dovecot.pem',              key: '/etc/ssl/private/dovecot.key',           chain: '',                                         concat: false },
+                              ]).map(p => (
+                                <button key={p.label}
+                                  onClick={() => setDeployApply(f => ({ ...f, target_cert: p.cert, target_key: p.key, target_chain: p.chain, concat_chain: p.concat, service_name: p.service, service_action: p.action }))}
+                                  style={{ padding: '4px 10px', fontSize: 11, fontWeight: 500, borderRadius: 6, cursor: 'pointer', border: '1px solid var(--border-med)', background: deployApply.service_name === p.service ? 'rgba(99,102,241,0.15)' : 'var(--bg-panel-alt)', color: deployApply.service_name === p.service ? 'var(--accent-hex)' : 'var(--text-primary)', transition: 'all 0.1s' }}>
+                                  {p.label}
+                                </button>
+                              ))}
+                            </div>
+                            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '6px 0 0' }}>Presets fill common paths — adjust to match your actual config.</p>
+                          </div>
+
+                          {/* Target paths */}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                            {([
+                              ['target_cert',  'Target cert path *',  '/etc/nginx/ssl/server.crt'],
+                              ['target_key',   'Target key path',     '/etc/nginx/ssl/server.key'],
+                              ['target_chain', 'Target chain path',   '/etc/nginx/ssl/chain.crt'],
+                            ] as const).map(([field, label, ph]) => (
+                              <div key={field} style={{ gridColumn: field === 'target_cert' ? '1 / -1' : 'auto' }}>
+                                <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>{label}</label>
+                                <input
+                                  value={deployApply[field]}
+                                  onChange={e => setDeployApply(f => ({ ...f, [field]: e.target.value }))}
+                                  placeholder={ph}
+                                  style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'monospace', boxSizing: 'border-box' }}
+                                />
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Options row */}
+                          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: 'var(--text-primary)' }}>
+                              <input type="checkbox" checked={deployApply.concat_chain} onChange={e => setDeployApply(f => ({ ...f, concat_chain: e.target.checked }))} />
+                              Concat chain into cert file (nginx fullchain)
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: 'var(--text-primary)' }}>
+                              <input type="checkbox" checked={deployApply.backup} onChange={e => setDeployApply(f => ({ ...f, backup: e.target.checked }))} />
+                              Backup existing files before replace
+                            </label>
+                          </div>
+
+                          {/* Service */}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                            <div>
+                              <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Web service name</label>
+                              <input
+                                value={deployApply.service_name}
+                                onChange={e => setDeployApply(f => ({ ...f, service_name: e.target.value }))}
+                                placeholder="nginx"
+                                list="cert-service-suggestions"
+                                style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}
+                              />
+                              <datalist id="cert-service-suggestions">
+                                {['nginx', 'apache2', 'httpd', 'caddy', 'haproxy', 'lighttpd', 'traefik', 'postgresql', 'mysql', 'mariadb', 'mongod', 'redis-server', 'postfix', 'dovecot', 'stunnel', 'varnish'].map(s => <option key={s} value={s} />)}
+                              </datalist>
+                            </div>
+                            <div>
+                              <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Service action after deploy</label>
+                              <select
+                                value={deployApply.service_action}
+                                onChange={e => setDeployApply(f => ({ ...f, service_action: e.target.value as 'reload' | 'restart' | 'none' }))}
+                                style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}>
+                                <option value="reload">Reload (graceful, no downtime)</option>
+                                <option value="restart">Restart (brief downtime)</option>
+                                <option value="none">None (apply files only)</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Timing */}
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            {(['now', 'schedule'] as const).map(m => (
+                              <button key={m} onClick={() => setDeployMode(m)}
+                                style={{ padding: '6px 14px', fontSize: 12, fontWeight: 500, borderRadius: 6, cursor: 'pointer', transition: 'all 0.15s', background: deployMode === m ? 'var(--accent-hex)' : 'var(--bg-panel-alt)', color: deployMode === m ? '#fff' : 'var(--text-primary)', border: `1px solid ${deployMode === m ? 'var(--accent-hex)' : 'var(--border-med)'}` }}>
+                                {m === 'now' ? '⚡ Apply Now' : '🕐 Schedule'}
+                              </button>
+                            ))}
+                          </div>
+
+                          {deployMode === 'schedule' && (
+                            <div>
+                              <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Run at (local time)</label>
+                              <input
+                                type="datetime-local"
+                                value={deployScheduleAt}
+                                onChange={e => setDeployScheduleAt(e.target.value)}
+                                min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: 13 }}
+                              />
+                            </div>
+                          )}
+
+                          {/* Deploy result */}
+                          {deployResult && (
+                            <div style={{ background: deployResult.ok ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', border: `1px solid ${deployResult.ok ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 8, padding: '10px 14px' }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: deployResult.ok ? '#4ade80' : '#f87171', marginBottom: deployResult.output ? 6 : 0 }}>
+                                {deployResult.ok ? '✅ Success' : `✗ ${deployResult.error}`}
+                              </div>
+                              {deployResult.output && (
+                                <pre style={{ margin: 0, fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 120, overflowY: 'auto' }}>{deployResult.output}</pre>
+                              )}
+                            </div>
+                          )}
+
+                          <button
+                            disabled={!deployApply.target_cert || deployApplying || (deployMode === 'schedule' && !deployScheduleAt)}
+                            onClick={async () => {
+                              setDeployApplying(true); setDeployResult(null)
+                              const cfg = {
+                                cert_path:      deployFiles.cert_path,
+                                key_path:       deployFiles.key_path || undefined,
+                                chain_path:     deployFiles.chain_path || undefined,
+                                target_cert:    deployApply.target_cert,
+                                target_key:     deployApply.target_key || undefined,
+                                target_chain:   deployApply.target_chain || undefined,
+                                concat_chain:   deployApply.concat_chain,
+                                backup:         deployApply.backup,
+                                service_name:   deployApply.service_name,
+                                service_action: deployApply.service_action,
+                              }
+                              try {
+                                if (deployMode === 'now') {
+                                  const r = await api.post<{ ok: boolean; output: string }>(`/servers/${infoServer!.id}/cert/apply-files`, cfg)
+                                  setDeployResult({ ok: true, output: r.output })
+                                  const updated = await api.get<Server>(`/servers/${infoServer!.id}`)
+                                  setInfoServer(updated)
+                                  setServers(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s))
+                                } else {
+                                  await api.post(`/servers/${infoServer!.id}/cert/schedule-apply`, { ...cfg, run_at: new Date(deployScheduleAt).toISOString() })
+                                  setDeployResult({ ok: true, output: `Scheduled for ${new Date(deployScheduleAt).toLocaleString()}` })
+                                  setPendingApply({ run_at: new Date(deployScheduleAt).toISOString() })
+                                }
+                              } catch (e: unknown) {
+                                setDeployResult({ ok: false, error: (e as { message?: string }).message ?? 'Failed' })
+                              } finally { setDeployApplying(false) }
+                            }}
+                            style={{ padding: '9px 22px', fontSize: 13, fontWeight: 700, borderRadius: 7, border: 'none', cursor: (!deployApply.target_cert || deployApplying) ? 'not-allowed' : 'pointer', background: deployApplying ? 'var(--bg-panel-alt)' : '#10b981', color: '#fff', opacity: (!deployApply.target_cert || deployApplying) ? 0.5 : 1, alignSelf: 'flex-start' }}>
+                            {deployApplying ? '⏳ Working…' : deployMode === 'now' ? '🚀 Deploy & Restart Service' : '📅 Schedule Deploy'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                 </div>
               )}

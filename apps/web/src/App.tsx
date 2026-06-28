@@ -4,6 +4,7 @@ import { api, User, setForbiddenHandler, setMfaRequiredHandler } from './api/cli
 import DebugPanel, { debugLog } from './components/DebugPanel'
 import { TotpElevationProvider } from './context/TotpElevationContext'
 import { PermissionProvider, setPermissionRole } from './context/PermissionContext'
+import { SystemNameProvider } from './context/SystemNameContext'
 import Login from './pages/Login'
 import MfaSetup from './pages/MfaSetup'
 import Dashboard from './pages/Dashboard'
@@ -190,6 +191,7 @@ function App() {
   }
 
   return (
+    <SystemNameProvider>
     <TotpElevationProvider>
     <PermissionProvider>
     <BrowserRouter>
@@ -203,6 +205,7 @@ function App() {
     </BrowserRouter>
     </PermissionProvider>
     </TotpElevationProvider>
+    </SystemNameProvider>
   )
 }
 

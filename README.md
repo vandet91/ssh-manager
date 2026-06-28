@@ -1,46 +1,54 @@
-﻿# SSH Manager
+# SSH Manager
 
-A self-hosted web platform for centralized SSH access, server monitoring, and infrastructure operations. Built with React + Fastify + PostgreSQL, deployed via Docker Compose.
+A self-hosted web platform for centralized SSH access, server monitoring, certificate management, and infrastructure operations. Built with React + Fastify + PostgreSQL, deployed via Docker Compose.
 
 ---
 
 ## Features
 
 ### Dashboard
-- Live stats: active servers, SSH keys, vault entries, recent audit events
-- Server status overview grouped by environment (production / staging / development)
-- Quick-action shortcuts to common pages
+- Live stat cards: active servers, SSH keys, vault entries, user count, key rotation alerts, TLS cert alerts
+- Server overview grouped by environment and OS type with bar charts
+- **Key Rotation** widget — all active keys sorted by urgency (overdue → this week → 30 days → manual)
+- **TLS Certificate Expiry** widget — servers with monitored certs sorted by days remaining
+- Recently connected servers with pulse indicator
+- Full activity feed (admin: all users; operator: own actions)
 
 ### Servers
-- Full server inventory with hostname, SSH port, OS type, environment, and tags
-- OS detection with distro art display (auto-fetched from `/etc/os-release`)
+- Full server inventory: hostname, SSH port, OS type, environment tags
+- OS detection with distro art (auto-fetched from `/etc/os-release`)
 - SSHD status check and root account vault management
 - Host type classification (bare-metal, VM, container, cloud, etc.)
 - Windows / Linux / Router / AP / Switch / DVR / NVR support
-- Domain controller flag and RDP-ready status
+- RDP setup and domain controller flag
+
+### TLS Certificate Monitoring *(new)*
+- Per-server TLS cert monitoring — checks expiry, issuer, subject, SANs
+- **Protocol support**: HTTPS (direct TLS), PostgreSQL, MySQL, MariaDB, MongoDB, Redis, SMTP, IMAP, LDAPS — STARTTLS protocols checked via SSH + openssl
+- **Cert column** in servers table with color-coded badge (green → yellow → orange → red → expired)
+- **TLS Cert tab** in server detail modal:
+  - Live cert info: subject, issuer, SANs, fingerprint, expiry countdown
+  - **Validate & Deploy** workflow for commercial certs (Sectigo, DigiCert, etc.)
+  - Config test before service restart (nginx, apache2, caddy, haproxy, lighttpd, db servers)
+  - **Schedule deployment** — pick a datetime, applied automatically within 5 minutes
+  - Service presets: Nginx, Apache2, Caddy, HAProxy, PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Postfix, Dovecot
+- Background worker checks all monitored servers every 24 hours
+- Auto-renew support via configurable renewal command (Let's Encrypt / certbot)
+- Dashboard widget shows servers expiring within 30 days
 
 ### Terminal
 - Browser-based SSH terminal powered by **xterm.js** over WebSocket
 - Multi-tab sessions (open multiple servers side by side)
-- Server picker grouped by **environment** using `<optgroup>`
+- Server picker grouped by environment
 - Per-session font size control
 - SFTP file upload via drag-and-drop
-- Command history sidebar with searchable **Command Library**
-- Linux and Windows command sets with category filters
+- Command history sidebar with searchable Command Library
 
 ### Keys
 - SSH key management (generate, import, archive)
 - Assign keys to servers with per-user Linux user mapping
 - Key rotation policies with configurable intervals and rotation history
-
-### Credentials
-- Stored password credentials per server, encrypted at rest
-- Credential categories and labels
-
-### Assignments
-- Per-server, per-user terminal access control
-- Linux user mapping per assignment, domain credential linking
-- Active/inactive toggle
+- Rotation alerts on Dashboard
 
 ### Network Devices
 - Inventory of routers, switches, access points, DVRs, NVRs
@@ -48,54 +56,50 @@ A self-hosted web platform for centralized SSH access, server monitoring, and in
 - Web UI access links, SSH access (key or password), ping/last-seen tracking
 
 ### Network Scanner
-- LAN/subnet ping sweep + port probe
+- LAN/subnet ping sweep and port probe
 - Auto-discovery of new devices with export to server/device inventory
 
 ### Security
-- Automated per-server security scans (SSH hardening, open ports, firewall, etc.)
+- Automated per-server security scans (SSH hardening, open ports, firewall)
 - Severity scoring: critical / high / medium / low / info
-- **Finding suppression** — acknowledge false positives per-server with a reason, persisted in DB
-- Open-port **reference table** — 40+ common ports with risk categories (safe / db / cluster / infra / review), highlights ports found on the scanned server
-- Suppressed findings shown at reduced opacity with show/hide toggle
+- Finding suppression — acknowledge false positives with a reason
+- Open-port reference table — 40+ common ports with risk categories
 - Admin-only
 
 ### Domain
 - Active Directory / domain controller management
 - Domain auth switching per server
-- **PingCastle** report upload and viewer (AD security scoring)
+- PingCastle report upload and viewer (AD security scoring)
 
 ### Remote Exec (PsExec)
 - Run commands on Windows hosts remotely
-- Interactive shell popup
-- Admin-only
+- Interactive shell popup — admin-only
 
 ### Remote Desktop
 - RDP session launcher in the browser
 - Per-server RDP configuration
 
 ### DB Connector
-- Connect to PostgreSQL or MySQL databases directly from the browser
-- Run queries, view results in a table
-- Multiple saved connections
+- Connect to PostgreSQL or MySQL databases from the browser
+- Run queries, view results, multiple saved connections
+
+### DB Manager
+- Direct database administration interface
+- Schema browser, table editor — admin-only
 
 ### Diagrams
-- Interactive network diagram builder with large MDI icon library (search + category filter)
-- Canvas customization: **background color**, **grid color**, **grid size** (10–120 px), show/hide grid toggle
-- Right panel with **independent scrolling** device list and sticky search header
-- Save/load multiple diagrams per account
+- Interactive network diagram builder with large MDI icon library
+- Canvas: background color, grid color, grid size, show/hide toggle
+- Save/load multiple diagrams
 
 ### Documentation
-- Rich-text documentation editor powered by **TipTap v2**
-- Image upload, resize (drag handles), and delete
-- **Greenshot-style annotation tool** — draw directly on images:
-  - Tools: Pen (freehand), Arrow, Rectangle, Circle, Text, Highlight
-  - Color picker and stroke size control
-  - Undo support and Save (re-uploads annotated image)
-  - Implemented via React Portal to work inside TipTap's contentEditable area
+- Rich-text documentation editor (TipTap v2)
+- Image upload, resize, and Greenshot-style annotation tool
+- Draw pens, arrows, rectangles, circles, text, highlights on images
 
 ### File Manager
 - SFTP-based file browser per server
-- Upload, download, and browse directories
+- Upload, download, browse directories
 
 ### Firmware & Backup
 - Firmware file repository for network devices
@@ -103,9 +107,8 @@ A self-hosted web platform for centralized SSH access, server monitoring, and in
 
 ### Vault
 - Encrypted secret storage (passwords, tokens, notes)
-- Organizational units (OUs) for grouping
-- Archive/restore support
-- Optional TOTP re-verification required to reveal secrets
+- Organizational units (OUs), archive/restore
+- Optional TOTP re-verification to reveal secrets
 
 ### Share Center
 - Secure credential sharing between users
@@ -113,33 +116,43 @@ A self-hosted web platform for centralized SSH access, server monitoring, and in
 
 ### Command Library
 - Shared library of reusable shell commands
-- Categories, labels, and descriptions
 - Usable directly from the terminal sidebar
+
+### Tasks
+- Scheduled task runner — cron-expression schedule or manual trigger
+- Multi-step tasks with per-step commands
+- Run history and live logs
 
 ### Users
 - User management with role-based access (admin / standard)
 - MFA setup (TOTP authenticator app)
-- Per-user MFA exemption configuration
-- Session management
+- Per-user MFA exemption, session management
 
 ### Logs
-- Full audit log of all user actions (login, key ops, server changes, vault reveals, etc.)
-- Color-coded by action type
-- Admin-only
+- Full audit log of all user actions
+- Telegram bot actions appear as `tg:<username>` entries
+- Color-coded by action type — admin-only
 
 ### Migration
 - In-app database migration runner
-- Before/after snapshot comparison
-- Admin-only
+- Before/after snapshot comparison — admin-only
 
-### Settings (Admin)
-- **Login page background** image upload with full-screen cover
-- **Telegram** notifications — bot token + chat ID, per-event toggles
-- **TOTP action rules** — require MFA re-verification for sensitive actions (vault reveal, key rotation, etc.)
-- **SSO** — Microsoft 365 (OAuth2) and Google OAuth2
+### Settings
+- **System Name** — rename the app; shown in sidebar, login page, browser tab
+- **Login background** image upload
+- **Telegram** notifications — bot token + chat ID, per-event toggles, command audit logging
+- **TOTP action rules** — require MFA re-verification for sensitive actions
+- **SSO** — Microsoft 365 and Google OAuth2
 - **RADIUS** server configuration
-- Alert thresholds and notification preferences
-- Theme selection (modern / proxmox × dark / light)
+- Alert thresholds and theme selection
+
+### Telegram Bot
+- SSH service control: restart / stop / start services
+- Server reboot command
+- Active Directory unlock, enable, disable, reset password
+- Task runner trigger
+- All commands produce audit log entries (`tg:<username>`)
+- Per-command enable/disable in Settings
 
 ---
 
@@ -153,7 +166,8 @@ A self-hosted web platform for centralized SSH access, server monitoring, and in
 | Backend | Fastify (Node.js), TypeScript |
 | ORM | Kysely |
 | Database | PostgreSQL |
-| Auth | Session-based + MFA (TOTP) + SSO (Microsoft / Google OAuth2) + RADIUS |
+| Cache / Queue | Redis + BullMQ |
+| Auth | Session + MFA (TOTP) + SSO (Microsoft / Google) + RADIUS |
 | Deploy | Docker Compose |
 
 ---
@@ -164,9 +178,10 @@ A self-hosted web platform for centralized SSH access, server monitoring, and in
 apps/
   api/
     src/
-      modules/          # Feature modules
+      modules/
         auth/           # Login, MFA, SSO, RADIUS
-        servers/        # Server CRUD, OS info, SSHD
+        servers/        # Server CRUD, OS info, SSHD, network profile
+        cert/           # TLS certificate monitoring + deploy
         terminal/       # WebSocket SSH terminal
         keys/           # SSH key management + rotation
         credentials/    # Stored passwords
@@ -175,6 +190,7 @@ apps/
         vault/          # Encrypted secrets
         domain/         # AD / domain controller
         db-connector/   # Browser DB queries
+        db-manager/     # DB administration
         diagrams/       # Network diagrams
         docs/           # Documentation editor
         commands/       # Command library
@@ -182,66 +198,80 @@ apps/
         network-scan/   # LAN scanner
         firmware-repo/  # Firmware storage
         share/          # Credential sharing
-        pingcastle/     # AD security reports
         radius/         # RADIUS auth
-        settings/       # App settings
-        telegram/       # Telegram notifications
+        settings/       # App settings (system name, telegram, SSO, etc.)
+        telegram/       # Telegram bot with audit logging
         users/          # User management
         migration/      # DB migration runner
         rdp/            # Remote desktop
         psexec/         # Remote exec (Windows)
+        tasks/          # Task scheduler
       db/
-        migrations/     # 45 schema migrations
+        migrations/     # 52 schema migrations
         client.ts       # Kysely DB client
-      jobs/             # Background workers (security scan, key rotation)
+      jobs/
+        rotation.worker.ts   # Key rotation scheduler
+        tasks.worker.ts      # Task scheduler
+        cert.worker.ts       # TLS cert daily check + pending applies
+      utils/
+        ssh.ts / server-ssh.ts   # SSH helpers
+        vault.ts                 # Encryption
+        audit.ts                 # Audit log writer
   web/
     src/
       pages/            # React page components
       components/       # Layout, Modal, Badge, TotpModal
       api/              # Typed API client
-      context/          # Auth, permissions, TOTP elevation
+      context/          # Auth, permissions, TOTP elevation, SystemName
 ```
 
 ---
 
 ## Quick Start
 
-### Development
+### Development (Docker, local port 4004)
 
 ```bash
-npm install
-npm run dev
+docker compose up -d --build
 ```
 
-### Production
+Rebuild specific containers:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose up -d --build web        # frontend only
+docker compose up -d --build api        # backend only
+docker compose up -d --build api web    # both
 ```
 
-### Dev — rebuild web only
-
-```bash
-docker compose up -d --build web
-```
-
-### Dev — rebuild api + web
-
-```bash
-docker compose up -d --build api web
-```
-
----
-
-## Environment Variables
+### Environment Variables
 
 Create `apps/api/.env`:
 
 ```env
-DATABASE_URL=postgresql://user:pass@localhost:5432/sshmanager
-SESSION_SECRET=change-me
-ENCRYPTION_KEY=32-byte-hex-key
+DATABASE_URL=postgresql://user:pass@postgres:5432/sshmanager
+SESSION_SECRET=change-me-minimum-32-chars
+ENCRYPTION_KEY=64-char-hex-string
+BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+BOOTSTRAP_ADMIN_PASSWORD=changeme
+PORT=3001
 ```
+
+Optional for SSO/Telegram:
+
+```env
+MICROSOFT_CLIENT_ID=
+MICROSOFT_CLIENT_SECRET=
+MICROSOFT_TENANT_ID=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+TELEGRAM_BOT_TOKEN=       # can also be set in Settings UI
+```
+
+---
+
+## Default Login
+
+On first start the bootstrap admin account is created automatically using `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` from `.env`.
 
 ---
 

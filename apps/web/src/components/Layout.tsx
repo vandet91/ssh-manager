@@ -1,6 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { api, User } from '../api/client'
 import { setPermissionRole } from '../context/PermissionContext'
+import { useSystemName } from '../context/SystemNameContext'
 import type { ThemeName, ThemeMode } from '../App'
 import Terminal from '../pages/Terminal'
 import RemoteDesktopPage from '../pages/RemoteDesktopPage'
@@ -60,6 +61,7 @@ interface Props {
 export default function Layout({ user, onLogout, themeName, setThemeName, themeMode, setThemeMode }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
+  const { systemName } = useSystemName()
   const isDark = themeMode === 'dark'
   const isPersistent = PERSISTENT_ROUTES.includes(location.pathname)
   const isAdmin = true
@@ -106,7 +108,7 @@ export default function Layout({ user, onLogout, themeName, setThemeName, themeM
             </div>
             <div>
               <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--sidebar-active-text)', letterSpacing: '0.01em' }}>
-                SSH Manager
+                {systemName}
               </div>
               <div style={{ fontSize: 11, color: 'var(--sidebar-text)', marginTop: 1 }}>v1.0</div>
             </div>

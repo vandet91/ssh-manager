@@ -47,7 +47,9 @@ import docsRoutes from './modules/docs/docs.routes'
 import radiusRoutes from './modules/radius/radius.routes'
 import tasksRoutes from './modules/tasks/tasks.routes'
 import dbManagerRoutes from './modules/db-manager/db-manager.routes'
+import certRoutes from './modules/cert/cert.routes'
 import { startTelegramBot } from './modules/telegram/telegram.service'
+import { startCertWorker } from './jobs/cert.worker'
 import { startRotationWorker, scheduleRotations } from './jobs/rotation.worker'
 import { startTasksWorker } from './jobs/tasks.worker'
 import { FileMigrationProvider, Migrator } from 'kysely'
@@ -176,6 +178,7 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(docsRoutes)
   await fastify.register(tasksRoutes)
   await fastify.register(dbManagerRoutes)
+  await fastify.register(certRoutes)
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
@@ -192,6 +195,9 @@ async function main(): Promise<void> {
   // Start Telegram bot (polls independently; re-reads settings dynamically)
   const stopTelegram = startTelegramBot()
 
+  // Start cert monitoring worker
+  const stopCertWorker = startCertWorker()
+
   // Start task scheduler
   const stopTasksWorker = startTasksWorker()
 
@@ -206,6 +212,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     fastify.log.info('Shutting down...')
     stopTelegram()
+    stopCertWorker()
     stopTasksWorker()
     clearInterval(rotationInterval)
     await rotWorker.close()

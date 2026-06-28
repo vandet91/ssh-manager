@@ -86,6 +86,30 @@ export type Server = {
   snmp_enabled: boolean
   snmp_version: string
   snmp_last_fetched_at: string | null
+  // TLS certificate monitoring
+  cert_host: string | null
+  cert_port: number | null
+  cert_protocol: string | null
+  cert_expires_at: string | null
+  cert_issuer: string | null
+  cert_subject: string | null
+  cert_sans: string[] | null
+  cert_is_self_signed: boolean | null
+  cert_last_checked_at: string | null
+  cert_renewal_cmd: string | null
+  cert_auto_renew: boolean | null
+  cert_error: string | null
+}
+
+export type CertInfo = {
+  host: string
+  port: number
+  subject: string
+  issuer: string
+  sans: string[]
+  expiresAt: string
+  isSelfSigned: boolean
+  error?: string
 }
 
 export type NetworkProfile = {

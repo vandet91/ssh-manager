@@ -94,6 +94,26 @@ export function validatePassword(password: string, policy: PasswordPolicy): stri
 }
 
 async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
+  // GET /settings/public — no auth required (used on login page)
+  fastify.get('/settings/public', async () => {
+    const row = await (db as any).selectFrom('settings').select('value').where('key', '=', 'system_name').executeTakeFirst()
+    return { system_name: (row?.value as string) ?? 'SSH Manager' }
+  })
+
+  // PUT /settings/system-name — admin only
+  fastify.put('/settings/system-name', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
+    const { name } = req.body as { name: string }
+    if (!name || typeof name !== 'string' || name.trim().length < 1) return reply.status(400).send({ error: 'Name required' })
+    const trimmed = name.trim().slice(0, 80)
+    await (db as any)
+      .insertInto('settings')
+      .values({ key: 'system_name', value: JSON.stringify(trimmed), updated_at: new Date() })
+      .onConflict((oc: any) => oc.column('key').doUpdateSet({ value: JSON.stringify(trimmed), updated_at: new Date() }))
+      .execute()
+    await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'settings.system_name.updated', resource: 'settings', details: { name: trimmed }, request: req })
+    return { system_name: trimmed }
+  })
+
   // GET /settings/password-policy
   fastify.get('/settings/password-policy', { preHandler: [requireAuth, requireAdmin] }, async () => {
     return getPasswordPolicy()
