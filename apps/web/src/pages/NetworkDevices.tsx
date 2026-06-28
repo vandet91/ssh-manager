@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, Server, NetworkProfile, SshKey, SnmpProfile, PingResult, PingStatus, FirmwareCheckResult } from '../api/client'
 import Modal from '../components/Modal'
@@ -247,7 +247,7 @@ function AccessProfileModal({ device, snmpProfiles, onClose, onSaved }: {
   onClose: () => void
   onSaved: () => void
 }) {
-  const [tab, setTab] = useState<'ssh' | 'web' | 'snmp' | 'monitor'>('ssh')
+  const [tab, setTab] = useState<'ssh' | 'web' | 'snmp' | 'monitor' | 'actions' | 'guide'>('ssh')
   const [profile, setProfile] = useState<NetworkProfile | null>(null)
   const [keys, setKeys] = useState<SshKey[]>([])
   const [saving, setSaving] = useState(false)
@@ -340,12 +340,13 @@ function AccessProfileModal({ device, snmpProfiles, onClose, onSaved }: {
   const tabs = [
     { id: 'ssh', label: '⌨ SSH' }, { id: 'web', label: '🌐 Web' },
     { id: 'snmp', label: '📊 SNMP' }, { id: 'monitor', label: '📡 Monitor' },
+    { id: 'actions', label: '⚡ Actions' }, { id: 'guide', label: '📖 Guide' },
   ] as const
 
   return (
-    <Modal title={`Access Profile — ${device.name}`} onClose={onClose}>
-      <div style={{ minWidth: 490, maxWidth: 540 }}>
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--border-med)', marginBottom: 16 }}>
+    <Modal title={`Access Profile — ${device.name}`} onClose={onClose} size="lg">
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 420 }}>
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--border-med)', marginBottom: 16, flexShrink: 0 }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: '7px 16px', background: 'none', border: 'none', borderBottom: tab === t.id ? '2px solid var(--accent-hex)' : '2px solid transparent', color: tab === t.id ? 'var(--accent-hex)' : 'var(--text-muted)', fontWeight: tab === t.id ? 600 : 400, fontSize: 13, cursor: 'pointer' }}>
               {t.label}
@@ -353,6 +354,7 @@ function AccessProfileModal({ device, snmpProfiles, onClose, onSaved }: {
           ))}
         </div>
 
+        <div>
         {tab === 'ssh' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <Toggle value={sshEnabled} onChange={setSshEnabled} label="Enable SSH Access" />
@@ -476,13 +478,680 @@ function AccessProfileModal({ device, snmpProfiles, onClose, onSaved }: {
           </div>
         )}
 
-        {error && <p style={{ color: 'var(--danger)', fontSize: 12, marginTop: 12, marginBottom: 0 }}>{error}</p>}
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-          <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
-          <button onClick={save} disabled={saving} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>{saving ? 'Saving…' : 'Save Profile'}</button>
+        {tab === 'actions' && (
+          <HttpActionsTab device={device} />
+        )}
+
+        {tab === 'guide' && (
+          <GuideTab />
+        )}
         </div>
+
+        {error && <p style={{ color: 'var(--danger)', fontSize: 12, margin: '8px 0 0', flexShrink: 0 }}>{error}</p>}
+        {tab !== 'actions' && tab !== 'guide' && (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12, flexShrink: 0 }}>
+            <button onClick={onClose} style={{ padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+            <button onClick={save} disabled={saving} style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>{saving ? 'Saving…' : 'Save Profile'}</button>
+          </div>
+        )}
       </div>
     </Modal>
+  )
+}
+
+// ── Guide Tab ─────────────────────────────────────────────────────────────────
+
+function GuideTab() {
+  const [section, setSection] = useState<'tabs' | 'dahua' | 'unifi' | 'mikrotik' | 'pfsense' | 'tplink' | 'cisco'>('tabs')
+
+  const h2: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: 'var(--text-heading)', margin: '0 0 6px 0' }
+  const h3: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--accent-hex)', margin: '10px 0 4px 0' }
+  const p: React.CSSProperties = { fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 6px 0', lineHeight: 1.6 }
+  const badge = (color: string, text: string) => (
+    <span style={{ display: 'inline-block', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: `${color}20`, color, marginRight: 4 }}>{text}</span>
+  )
+  const tag = (text: string) => (
+    <code style={{ fontSize: 11, background: 'var(--bg-body)', padding: '1px 5px', borderRadius: 3, color: 'var(--text-secondary)' }}>{text}</code>
+  )
+
+  type Row = { method: string; path: string; body?: string; note?: string }
+  function ApiTable({ rows }: { rows: Row[] }) {
+    const colors: Record<string, string> = { GET: '#3b82f6', POST: '#10b981', PUT: '#f59e0b', PATCH: '#8b5cf6', DELETE: '#ef4444' }
+    return (
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginBottom: 8 }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--border-med)' }}>
+            {['Method', 'URL Path', 'Body / Note'].map(h => (
+              <th key={h} style={{ textAlign: 'left', padding: '4px 6px', color: 'var(--text-muted)', fontWeight: 600 }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} style={{ borderBottom: '1px solid var(--border-weak)' }}>
+              <td style={{ padding: '5px 6px', whiteSpace: 'nowrap' }}>
+                <span style={{ fontWeight: 700, fontSize: 10, padding: '1px 5px', borderRadius: 3, background: `${colors[r.method] ?? '#888'}20`, color: colors[r.method] ?? '#888' }}>{r.method}</span>
+              </td>
+              <td style={{ padding: '5px 6px' }}><code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{r.path}</code></td>
+              <td style={{ padding: '5px 6px', color: 'var(--text-muted)', fontSize: 11 }}>{r.body ?? r.note ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )
+  }
+
+  const navItems: { id: typeof section; label: string; icon: string }[] = [
+    { id: 'tabs',      label: 'Tab Overview',  icon: '📋' },
+    { id: 'dahua',     label: 'Dahua',         icon: '📷' },
+    { id: 'unifi',     label: 'UniFi',         icon: '📡' },
+    { id: 'mikrotik',  label: 'MikroTik',      icon: '🔀' },
+    { id: 'pfsense',   label: 'pfSense / OPNsense', icon: '🔥' },
+    { id: 'tplink',    label: 'TP-Link Omada', icon: '🔗' },
+    { id: 'cisco',     label: 'Cisco Switch',  icon: '🔵' },
+  ]
+
+  return (
+    <div style={{ display: 'flex', gap: 14, minHeight: 340 }}>
+      {/* Sidebar nav */}
+      <div style={{ width: 140, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {navItems.map(n => (
+          <button key={n.id} onClick={() => setSection(n.id)} style={{
+            textAlign: 'left', padding: '6px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12,
+            background: section === n.id ? 'var(--accent-hex)20' : 'transparent',
+            color: section === n.id ? 'var(--accent-hex)' : 'var(--text-secondary)',
+            fontWeight: section === n.id ? 600 : 400,
+          }}>
+            {n.icon} {n.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Divider */}
+      <div style={{ width: 1, background: 'var(--border-med)', flexShrink: 0 }} />
+
+      {/* Content */}
+      <div style={{ flex: 1, overflow: 'auto' }}>
+
+        {section === 'tabs' && (
+          <div>
+            <h2 style={h2}>Access Profile — Tab Overview</h2>
+            <p style={p}>Each tab configures a different access method for this network device.</p>
+
+            <h3 style={h3}>⌨ SSH Tab</h3>
+            <p style={p}>Enable SSH access and configure authentication (SSH key or password). You can link a vault entry so credentials are never stored in plain text. Port defaults to 22.</p>
+
+            <h3 style={h3}>🌐 Web Tab</h3>
+            <p style={p}>Set the device's base web URL (e.g. {tag('http://192.168.1.100')}). This URL is used as the base for HTTP Actions. You can also enable a web proxy to open the device UI through SSH Manager.</p>
+
+            <h3 style={h3}>📊 SNMP Tab</h3>
+            <p style={p}>Attach an SNMP profile to poll device metrics (uptime, interfaces, CPU, memory). Requires SNMP to be enabled on the device. Supports SNMPv1, v2c, and v3.</p>
+
+            <h3 style={h3}>📡 Monitor Tab</h3>
+            <p style={p}>Configure ping-based monitoring. SSH Manager will periodically ping the device and alert if it goes offline.</p>
+
+            <h3 style={h3}>⚡ Actions Tab</h3>
+            <p style={p}>Define HTTP actions — one-click requests sent from the SSH Manager server to the device's REST API. Useful for rebooting, saving config, checking firmware, etc. without SSH.</p>
+
+            <div style={{ background: 'var(--bg-body)', borderRadius: 8, padding: '10px 12px', marginTop: 8 }}>
+              <p style={{ ...p, margin: 0, color: 'var(--text-muted)', fontSize: 11 }}>
+                💡 <strong>Tip:</strong> HTTP Actions work even if the device has no SSH. As long as the device has a web/REST interface and SSH Manager can reach it on the network, actions will work.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {section === 'dahua' && (
+          <div>
+            <h2 style={h2}>Dahua NVR / IP Camera</h2>
+            <p style={p}>Dahua devices expose a CGI API. Set {tag('Web URL')} to {tag('http://192.168.x.x')} and use <strong>Basic Auth</strong> with your admin credentials.</p>
+
+            <h3 style={h3}>Authentication</h3>
+            <p style={p}>{badge('#3b82f6', 'Auth')} Basic Auth — username: {tag('admin')}, password: device password<br />
+            {badge('#f59e0b', 'Content-Type')} {tag('application/x-www-form-urlencoded')}</p>
+
+            <h3 style={h3}>Common Actions</h3>
+            <ApiTable rows={[
+              { method: 'GET',  path: '/cgi-bin/magicBox.cgi?action=getSystemInfo', note: 'System info (model, serial, firmware)' },
+              { method: 'GET',  path: '/cgi-bin/magicBox.cgi?action=getDeviceType', note: 'Device type' },
+              { method: 'GET',  path: '/cgi-bin/magicBox.cgi?action=getSoftwareVersion', note: 'Firmware version' },
+              { method: 'POST', path: '/cgi-bin/magicBox.cgi?action=reboot', note: 'Reboot the device' },
+              { method: 'GET',  path: '/cgi-bin/configManager.cgi?action=getConfig&name=Network', note: 'Get network config' },
+              { method: 'GET',  path: '/cgi-bin/userManager.cgi?action=getUserInfoAll', note: 'List users' },
+            ]} />
+
+            <div style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 7, padding: '8px 10px', marginTop: 4 }}>
+              <p style={{ ...p, margin: 0, fontSize: 11 }}>⚠️ Dahua uses Digest Auth on some firmware versions. If Basic Auth fails, try setting the device to allow Basic Auth in <strong>Security → Web Service</strong>.</p>
+            </div>
+          </div>
+        )}
+
+        {section === 'unifi' && (
+          <div>
+            <h2 style={h2}>UniFi (Ubiquiti)</h2>
+            <p style={p}>UniFi Network Application exposes a REST API. Use an <strong>API Key</strong> (UniFi OS 3.x+) for token-based auth, or session cookies for older versions.</p>
+
+            <h3 style={h3}>Authentication (UniFi OS 3.x+)</h3>
+            <p style={p}>{badge('#8b5cf6', 'Bearer')} Create API key in <strong>UniFi OS → Settings → API</strong><br />
+            {badge('#f59e0b', 'Header')} {tag('X-API-Key: <your-key>')} — add as a Custom Header instead of using Bearer field</p>
+
+            <h3 style={h3}>Common Actions</h3>
+            <ApiTable rows={[
+              { method: 'GET',  path: '/proxy/network/api/s/default/stat/device', note: 'List all devices' },
+              { method: 'GET',  path: '/proxy/network/api/s/default/stat/sta',    note: 'List connected clients' },
+              { method: 'GET',  path: '/proxy/network/api/s/default/stat/health', note: 'Site health status' },
+              { method: 'POST', path: '/proxy/network/api/s/default/cmd/devmgr',  body: '{"cmd":"restart","mac":"AA:BB:CC:DD:EE:FF"}' },
+              { method: 'POST', path: '/proxy/network/api/s/default/cmd/devmgr',  body: '{"cmd":"upgrade","mac":"AA:BB:CC:DD:EE:FF"}' },
+            ]} />
+
+            <div style={{ background: 'var(--bg-body)', borderRadius: 7, padding: '8px 10px', marginTop: 4 }}>
+              <p style={{ ...p, margin: 0, fontSize: 11 }}>💡 Replace {tag('default')} with your site name. Replace MAC with the device MAC from the UniFi dashboard.</p>
+            </div>
+          </div>
+        )}
+
+        {section === 'mikrotik' && (
+          <div>
+            <h2 style={h2}>MikroTik (RouterOS REST API)</h2>
+            <p style={p}>Available on RouterOS 7.1+. Enable in <strong>IP → Services → www</strong> (port 80) or <strong>www-ssl</strong> (port 443).</p>
+
+            <h3 style={h3}>Authentication</h3>
+            <p style={p}>{badge('#3b82f6', 'Basic')} username: {tag('admin')}, password: RouterOS password<br />
+            {badge('#f59e0b', 'Content-Type')} {tag('application/json')}</p>
+
+            <h3 style={h3}>Common Actions</h3>
+            <ApiTable rows={[
+              { method: 'GET',  path: '/rest/system/resource',         note: 'CPU, memory, uptime' },
+              { method: 'GET',  path: '/rest/system/routerboard',      note: 'Hardware info, firmware' },
+              { method: 'GET',  path: '/rest/interface',               note: 'All interfaces' },
+              { method: 'GET',  path: '/rest/ip/address',              note: 'IP addresses' },
+              { method: 'GET',  path: '/rest/ip/route',                note: 'Routing table' },
+              { method: 'POST', path: '/rest/system/reboot',           body: '{}' },
+              { method: 'POST', path: '/rest/system/package/update',   body: '{}' },
+            ]} />
+
+            <div style={{ background: 'var(--bg-body)', borderRadius: 7, padding: '8px 10px', marginTop: 4 }}>
+              <p style={{ ...p, margin: 0, fontSize: 11 }}>💡 Use {tag('/rest/system/package/update')} to check and download firmware updates. Apply with a reboot.</p>
+            </div>
+          </div>
+        )}
+
+        {section === 'pfsense' && (
+          <div>
+            <h2 style={h2}>pfSense / OPNsense</h2>
+
+            <h3 style={h3}>OPNsense REST API</h3>
+            <p style={p}>OPNsense has a built-in API. Create an API key in <strong>System → Access → Users → Edit user → API Keys</strong>.<br />
+            {badge('#3b82f6', 'Basic')} Key as username, Secret as password</p>
+            <ApiTable rows={[
+              { method: 'GET',  path: '/api/core/firmware/status',       note: 'Firmware update status' },
+              { method: 'POST', path: '/api/core/firmware/update',        body: '{}' },
+              { method: 'POST', path: '/api/core/system/reboot',          body: '{}' },
+              { method: 'GET',  path: '/api/core/system/status',          note: 'System status' },
+              { method: 'GET',  path: '/api/interfaces/overview/export',  note: 'Interface overview' },
+              { method: 'GET',  path: '/api/diagnostics/interface/getarp', note: 'ARP table' },
+            ]} />
+
+            <h3 style={h3}>pfSense — FauxAPI Package</h3>
+            <p style={p}>Install <strong>FauxAPI</strong> package in pfSense. Set API key + secret in {tag('/etc/fauxapi/credentials.ini')}.<br />
+            {badge('#f59e0b', 'Header')} {tag('fauxapi-auth: <generated-auth-string>')}</p>
+            <ApiTable rows={[
+              { method: 'GET',  path: '/fauxapi/v1/?action=system_stats',   note: 'CPU, mem, uptime' },
+              { method: 'GET',  path: '/fauxapi/v1/?action=gateway_status', note: 'WAN gateway status' },
+              { method: 'POST', path: '/fauxapi/v1/?action=system_reboot',  body: '{}' },
+            ]} />
+          </div>
+        )}
+
+        {section === 'tplink' && (
+          <div>
+            <h2 style={h2}>TP-Link Omada SDN Controller</h2>
+            <p style={p}>Omada Software Controller exposes a REST API. Default port is {tag('8088')} (HTTP) or {tag('8043')} (HTTPS).</p>
+
+            <h3 style={h3}>Authentication Flow</h3>
+            <p style={p}>Omada uses session-based login. You must login first to get a token, then use it in subsequent requests.</p>
+            <ApiTable rows={[
+              { method: 'POST', path: '/api/v2/hotspot/login', body: '{"username":"admin","password":"xxx"}' },
+              { method: 'GET',  path: '/api/v2/sites',         note: 'List sites (requires login session)' },
+            ]} />
+
+            <h3 style={h3}>Omada Controller v5 API (newer)</h3>
+            <ApiTable rows={[
+              { method: 'POST', path: '/openapi/v1/{omadacId}/login', body: '{"username":"admin","password":"xxx"}' },
+              { method: 'GET',  path: '/openapi/v1/{omadacId}/sites', note: 'List all sites' },
+              { method: 'GET',  path: '/openapi/v1/{omadacId}/sites/{siteId}/devices', note: 'Devices in site' },
+            ]} />
+
+            <div style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 7, padding: '8px 10px', marginTop: 4 }}>
+              <p style={{ ...p, margin: 0, fontSize: 11 }}>⚠️ TP-Link Omada relies on session cookies. HTTP Actions work best for stateless endpoints. For session-based auth, consider using SSH to the controller host instead.</p>
+            </div>
+          </div>
+        )}
+
+        {section === 'cisco' && (
+          <div>
+            <h2 style={h2}>Cisco Switch — HTTP / REST API</h2>
+            <p style={p}>
+              Many Cisco switch models expose a web management interface or REST API even without SSH.
+              The approach differs by product family:
+            </p>
+
+            <h3 style={h3}>Cisco SG / SF Small Business Switches (no SSH)</h3>
+            <p style={p}>
+              Models like SG200, SG300, SG500, SF300 have a web UI only. They use a CGI-based API accessible via HTTP.
+              {badge('#3b82f6', 'Basic')} username: {tag('cisco')}, password: device password<br />
+              {badge('#f59e0b', 'Content-Type')} {tag('application/x-www-form-urlencoded')}
+            </p>
+            <ApiTable rows={[
+              { method: 'GET',  path: '/System.xml',                       note: 'System info, firmware, uptime' },
+              { method: 'GET',  path: '/PortStatistics.xml',               note: 'Per-port TX/RX counters' },
+              { method: 'GET',  path: '/vlanPortAssign.xml',               note: 'VLAN port assignments' },
+              { method: 'POST', path: '/SaveConf.xml',                     body: 'form body — saves running config' },
+              { method: 'POST', path: '/Restart.xml',                      body: 'form body — reboot device' },
+            ]} />
+
+            <h3 style={h3}>Cisco CBS (Business Switching) Series</h3>
+            <p style={p}>
+              CBS110, CBS220, CBS250, CBS350 — these models have a REST-style JSON API (firmware 3.x+).
+              {badge('#3b82f6', 'Basic')} admin credentials<br />
+              {badge('#f59e0b', 'Content-Type')} {tag('application/json')}
+            </p>
+            <ApiTable rows={[
+              { method: 'GET',  path: '/api/v1/system/info',               note: 'Model, serial, firmware version' },
+              { method: 'GET',  path: '/api/v1/system/status',             note: 'CPU, memory, temperature' },
+              { method: 'GET',  path: '/api/v1/interface/status',          note: 'All interface link status' },
+              { method: 'GET',  path: '/api/v1/vlan/list',                 note: 'VLAN table' },
+              { method: 'POST', path: '/api/v1/system/save-config',        body: '{}' },
+              { method: 'POST', path: '/api/v1/system/reboot',             body: '{}' },
+              { method: 'POST', path: '/api/v1/firmware/check',            body: '{}' },
+            ]} />
+
+            <h3 style={h3}>Cisco Catalyst (IOS-XE REST API)</h3>
+            <p style={p}>
+              Catalyst 9000 series running IOS-XE 16.6+ supports RESTCONF. Enable with {tag('ip http server')} and {tag('restconf')} in IOS config.
+              {badge('#8b5cf6', 'Bearer')} or {badge('#3b82f6', 'Basic')} admin credentials<br />
+              {badge('#f59e0b', 'Accept')} header: {tag('application/yang-data+json')}
+            </p>
+            <ApiTable rows={[
+              { method: 'GET',  path: '/restconf/data/Cisco-IOS-XE-native:native/hostname',          note: 'Device hostname' },
+              { method: 'GET',  path: '/restconf/data/Cisco-IOS-XE-native:native/version',           note: 'IOS-XE version' },
+              { method: 'GET',  path: '/restconf/data/ietf-interfaces:interfaces',                   note: 'All interfaces' },
+              { method: 'GET',  path: '/restconf/data/Cisco-IOS-XE-native:native/vlan',              note: 'VLAN config' },
+              { method: 'GET',  path: '/restconf/data/Cisco-IOS-XE-memory-oper:memory-statistics',   note: 'Memory usage' },
+              { method: 'POST', path: '/restconf/operations/cisco-ia:save-config',                   body: '{}' },
+            ]} />
+
+            <div style={{ background: 'var(--bg-body)', borderRadius: 7, padding: '8px 10px', marginTop: 6 }}>
+              <p style={{ ...p, margin: '0 0 4px 0', fontSize: 11, fontWeight: 600 }}>💡 How to identify your model's API:</p>
+              <p style={{ ...p, margin: 0, fontSize: 11 }}>
+                1. Open the device web UI and check the URL structure when navigating menus — CGI paths like {tag('/System.xml')} indicate the SG/SF API.<br />
+                2. Check firmware release notes — CBS350 firmware 3.0+ added the JSON REST API.<br />
+                3. For Catalyst, run {tag('show ip http server status')} in CLI to confirm REST is enabled.
+              </p>
+            </div>
+
+            <div style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 7, padding: '8px 10px', marginTop: 6 }}>
+              <p style={{ ...p, margin: 0, fontSize: 11 }}>
+                ⚠️ Older SG200/SF200 models (end-of-life) have no API at all — only the web UI. For these, use SNMP to read stats and consider upgrading to CBS series for full API access.
+              </p>
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  )
+}
+
+// ── HTTP Actions Tab ──────────────────────────────────────────────────────────
+
+type AuthType = 'none' | 'basic' | 'bearer' | 'vault'
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+interface HttpAction {
+  id: string
+  name: string
+  description: string | null
+  method: HttpMethod
+  url_path: string
+  headers: Record<string, string>
+  body: string | null
+  content_type: string
+  auth_type: AuthType
+  auth_username: string | null
+  vault_id: string | null
+  vault_title: string | null
+  follow_redirects: boolean
+  timeout_ms: number
+  sort_order: number
+}
+
+interface ActionResult {
+  ok: boolean
+  status?: number
+  status_text?: string
+  duration_ms?: number
+  response?: string
+  error?: string
+}
+
+const BUILT_IN_TEMPLATES: Omit<HttpAction, 'id' | 'vault_id' | 'vault_title'>[] = [
+  { name: 'Reboot', description: 'Reboot the device', method: 'POST', url_path: '/api/system/reboot', headers: {}, body: null, content_type: 'application/json', auth_type: 'none', auth_username: null, follow_redirects: true, timeout_ms: 10000, sort_order: 0 },
+  { name: 'Save Config', description: 'Save running config to startup', method: 'POST', url_path: '/api/system/save-config', headers: {}, body: null, content_type: 'application/json', auth_type: 'none', auth_username: null, follow_redirects: true, timeout_ms: 10000, sort_order: 1 },
+  { name: 'Get System Info', description: 'Fetch system status/info', method: 'GET', url_path: '/api/system/info', headers: {}, body: null, content_type: 'application/json', auth_type: 'none', auth_username: null, follow_redirects: true, timeout_ms: 10000, sort_order: 2 },
+  { name: 'Firmware Update Check', description: 'Check for firmware updates', method: 'GET', url_path: '/api/firmware/check', headers: {}, body: null, content_type: 'application/json', auth_type: 'none', auth_username: null, follow_redirects: true, timeout_ms: 15000, sort_order: 3 },
+]
+
+const METHOD_COLORS: Record<HttpMethod, string> = {
+  GET: '#3b82f6', POST: '#10b981', PUT: '#f59e0b', PATCH: '#8b5cf6', DELETE: '#ef4444',
+}
+
+const emptyForm = (): Partial<HttpAction> & { auth_password: string } => ({
+  name: '', description: '', method: 'POST', url_path: '',
+  headers: {}, body: '', content_type: 'application/json',
+  auth_type: 'none', auth_username: '', auth_password: '',
+  vault_id: null, follow_redirects: true, timeout_ms: 10000, sort_order: 0,
+})
+
+function HttpActionsTab({ device }: { device: Server }) {
+  const [actions, setActions] = useState<HttpAction[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showForm, setShowForm] = useState(false)
+  const [editing, setEditing] = useState<HttpAction | null>(null)
+  const [form, setForm] = useState(emptyForm())
+  const [headerKey, setHeaderKey] = useState('')
+  const [headerVal, setHeaderVal] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState('')
+  const [results, setResults] = useState<Record<string, ActionResult>>({})
+  const [running, setRunning] = useState<Record<string, boolean>>({})
+  const [showResult, setShowResult] = useState<string | null>(null)
+  const [vaultEntries, setVaultEntries] = useState<{ id: string; title: string }[]>([])
+
+  const load = () => {
+    setLoading(true)
+    api.get<HttpAction[]>(`/network-devices/${device.id}/actions`)
+      .then(setActions).catch(() => {}).finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    load()
+    api.get<{ id: string; title: string }[]>('/vault?type=database&limit=200')
+      .then(rows => setVaultEntries(rows)).catch(() => {})
+  }, [device.id])
+
+  function openCreate(template?: Partial<HttpAction>) {
+    setEditing(null)
+    setForm({ ...emptyForm(), ...(template ?? {}) })
+    setHeaderKey(''); setHeaderVal(''); setFormError('')
+    setShowForm(true)
+  }
+
+  function openEdit(a: HttpAction) {
+    setEditing(a)
+    setForm({ ...a, auth_password: '' })
+    setHeaderKey(''); setHeaderVal(''); setFormError('')
+    setShowForm(true)
+  }
+
+  async function saveForm() {
+    if (!form.name || !form.url_path) { setFormError('Name and URL path are required'); return }
+    setSaving(true); setFormError('')
+    try {
+      const payload = {
+        name: form.name, description: form.description ?? null,
+        method: form.method, url_path: form.url_path,
+        headers: form.headers ?? {}, body: form.body || null,
+        content_type: form.content_type, auth_type: form.auth_type,
+        auth_username: form.auth_username || null,
+        auth_password: (form as any).auth_password || undefined,
+        vault_id: form.vault_id || null,
+        follow_redirects: form.follow_redirects,
+        timeout_ms: form.timeout_ms, sort_order: form.sort_order ?? 0,
+      }
+      if (editing) {
+        await api.patch(`/network-devices/${device.id}/actions/${editing.id}`, payload)
+      } else {
+        await api.post(`/network-devices/${device.id}/actions`, payload)
+      }
+      setShowForm(false); load()
+    } catch (e: any) { setFormError(e.message) }
+    finally { setSaving(false) }
+  }
+
+  async function deleteAction(a: HttpAction) {
+    if (!confirm(`Delete action "${a.name}"?`)) return
+    await api.delete(`/network-devices/${device.id}/actions/${a.id}`)
+    load()
+  }
+
+  async function execute(a: HttpAction) {
+    setRunning(r => ({ ...r, [a.id]: true }))
+    setShowResult(a.id)
+    try {
+      const res = await api.post<ActionResult>(`/network-devices/${device.id}/actions/${a.id}/execute`, {})
+      setResults(r => ({ ...r, [a.id]: res }))
+    } catch (e: any) {
+      setResults(r => ({ ...r, [a.id]: { ok: false, error: e.message } }))
+    } finally {
+      setRunning(r => ({ ...r, [a.id]: false }))
+    }
+  }
+
+  const inp: React.CSSProperties = { width: '100%', padding: '4px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-input)', color: 'var(--text-primary)', fontSize: 12, boxSizing: 'border-box' }
+  const lbl: React.CSSProperties = { fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 2, fontWeight: 500 }
+
+  if (showForm) return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-heading)', marginBottom: 0 }}>
+        {editing ? `Edit — ${editing.name}` : 'New HTTP Action'}
+      </div>
+
+      {formError && <div style={{ color: 'var(--danger)', fontSize: 12 }}>{formError}</div>}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8 }}>
+        <div>
+          <label style={lbl}>Method</label>
+          <select value={form.method} onChange={e => setForm(f => ({ ...f, method: e.target.value as HttpMethod }))} style={{ ...inp, color: METHOD_COLORS[form.method as HttpMethod] ?? 'var(--text-primary)', fontWeight: 700 }}>
+            {(['GET','POST','PUT','PATCH','DELETE'] as HttpMethod[]).map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={lbl}>URL Path *</label>
+          <input value={form.url_path ?? ''} onChange={e => setForm(f => ({ ...f, url_path: e.target.value }))} placeholder="/api/system/reboot" style={inp} />
+        </div>
+      </div>
+
+      <div>
+        <label style={lbl}>Action Name *</label>
+        <input value={form.name ?? ''} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Reboot" style={inp} />
+      </div>
+
+      <div>
+        <label style={lbl}>Description</label>
+        <input value={form.description ?? ''} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What does this action do?" style={inp} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <div>
+          <label style={lbl}>Content-Type</label>
+          <select value={form.content_type} onChange={e => setForm(f => ({ ...f, content_type: e.target.value }))} style={inp}>
+            <option value="application/json">application/json</option>
+            <option value="application/x-www-form-urlencoded">application/x-www-form-urlencoded</option>
+            <option value="text/plain">text/plain</option>
+            <option value="multipart/form-data">multipart/form-data</option>
+          </select>
+        </div>
+        <div>
+          <label style={lbl}>Timeout (ms)</label>
+          <input type="number" value={form.timeout_ms} onChange={e => setForm(f => ({ ...f, timeout_ms: Number(e.target.value) }))} min={1000} max={60000} step={1000} style={inp} />
+        </div>
+      </div>
+
+      {/* Body */}
+      {!['GET','DELETE'].includes(form.method ?? '') && (
+        <div>
+          <label style={lbl}>Request Body</label>
+          <textarea value={form.body ?? ''} onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
+            placeholder={'{\n  "confirm": true\n}'} rows={4}
+            style={{ ...inp, fontFamily: 'monospace', resize: 'vertical' }} />
+        </div>
+      )}
+
+      {/* Custom headers */}
+      <div>
+        <label style={lbl}>Custom Headers</label>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 5 }}>
+          <input value={headerKey} onChange={e => setHeaderKey(e.target.value)} placeholder="X-API-Key" style={{ ...inp, flex: 1 }} />
+          <input value={headerVal} onChange={e => setHeaderVal(e.target.value)} placeholder="value" style={{ ...inp, flex: 1 }} />
+          <button type="button" onClick={() => {
+            if (!headerKey.trim()) return
+            setForm(f => ({ ...f, headers: { ...(f.headers ?? {}), [headerKey.trim()]: headerVal } }))
+            setHeaderKey(''); setHeaderVal('')
+          }} style={{ padding: '5px 10px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-input)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>+ Add</button>
+        </div>
+        {Object.entries(form.headers ?? {}).map(([k, v]) => (
+          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '3px 6px', background: 'var(--bg-body)', borderRadius: 4, marginBottom: 3 }}>
+            <code style={{ color: 'var(--accent-hex)', flex: '0 0 auto' }}>{k}</code>
+            <span style={{ color: 'var(--text-muted)' }}>:</span>
+            <span style={{ flex: 1, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</span>
+            <button onClick={() => setForm(f => { const h = { ...(f.headers ?? {}) }; delete h[k]; return { ...f, headers: h } })}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13, padding: '0 2px' }}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      {/* Auth */}
+      <div>
+        <label style={lbl}>Authentication</label>
+        <select value={form.auth_type} onChange={e => setForm(f => ({ ...f, auth_type: e.target.value as AuthType }))} style={inp}>
+          <option value="none">None</option>
+          <option value="basic">Basic Auth (username + password)</option>
+          <option value="bearer">Bearer Token</option>
+          <option value="vault">From Vault (basic auth)</option>
+        </select>
+      </div>
+
+      {form.auth_type === 'basic' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div><label style={lbl}>Username</label><input value={form.auth_username ?? ''} onChange={e => setForm(f => ({ ...f, auth_username: e.target.value }))} style={inp} /></div>
+          <div><label style={lbl}>Password {editing ? '(blank = keep)' : ''}</label><input type="password" value={(form as any).auth_password ?? ''} onChange={e => setForm(f => ({ ...f, auth_password: e.target.value } as any))} style={inp} /></div>
+        </div>
+      )}
+      {form.auth_type === 'bearer' && (
+        <div><label style={lbl}>Token {editing ? '(blank = keep)' : ''}</label><input type="password" value={(form as any).auth_password ?? ''} onChange={e => setForm(f => ({ ...f, auth_password: e.target.value } as any))} placeholder="Bearer token" style={inp} /></div>
+      )}
+      {(form.auth_type === 'vault' || form.auth_type === 'basic') && (
+        <div>
+          <label style={lbl}>Vault Entry (optional — credentials from vault)</label>
+          <select value={form.vault_id ?? ''} onChange={e => setForm(f => ({ ...f, vault_id: e.target.value || null }))} style={inp}>
+            <option value="">— Manual credentials above —</option>
+            {vaultEntries.map(v => <option key={v.id} value={v.id}>{v.title}</option>)}
+          </select>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input type="checkbox" id="followRedir" checked={form.follow_redirects} onChange={e => setForm(f => ({ ...f, follow_redirects: e.target.checked }))} />
+        <label htmlFor="followRedir" style={{ fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer' }}>Follow redirects</label>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 2 }}>
+        <button onClick={() => setShowForm(false)} style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--border-med)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+        <button onClick={saveForm} disabled={saving} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>{saving ? 'Saving…' : (editing ? 'Save Changes' : 'Create Action')}</button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', flex: 1 }}>
+          HTTP requests sent from the server to <code style={{ color: 'var(--accent-hex)' }}>{device.web_url || '(no web URL set)'}</code>
+        </span>
+        <button onClick={() => openCreate()} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: 'var(--accent-hex)', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600, flexShrink: 0 }}>+ New Action</button>
+      </div>
+
+      {/* Templates */}
+      {actions.length === 0 && !loading && (
+        <div style={{ background: 'var(--bg-body)', border: '1px dashed var(--border-med)', borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>Quick-start templates:</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {BUILT_IN_TEMPLATES.map(t => (
+              <button key={t.name} onClick={() => openCreate(t)}
+                style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-input)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                {t.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Action list */}
+      {loading ? (
+        <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '12px 0' }}>Loading…</div>
+      ) : actions.length === 0 ? null : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {actions.map(a => (
+            <div key={a.id} style={{ background: 'var(--bg-body)', border: '1px solid var(--border-med)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Method badge */}
+                <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: `${METHOD_COLORS[a.method]}20`, color: METHOD_COLORS[a.method], flexShrink: 0 }}>
+                  {a.method}
+                </span>
+                <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-heading)', flex: 1 }}>{a.name}</span>
+                {a.vault_id && <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--accent-hex)20', color: 'var(--accent-hex)' }}>🔐 vault</span>}
+                {/* Execute */}
+                <button onClick={() => execute(a)} disabled={running[a.id]} style={{ padding: '4px 10px', borderRadius: 5, border: 'none', background: running[a.id] ? 'var(--bg-input)' : '#10b981', color: running[a.id] ? 'var(--text-muted)' : '#fff', cursor: running[a.id] ? 'default' : 'pointer', fontSize: 11, fontWeight: 600, flexShrink: 0 }}>
+                  {running[a.id] ? '…' : '▶ Run'}
+                </button>
+                <button onClick={() => openEdit(a)} style={{ padding: '4px 8px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11 }}>Edit</button>
+                <button onClick={() => deleteAction(a)} style={{ padding: '4px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.3)', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 11 }}>Del</button>
+              </div>
+
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, paddingLeft: 2 }}>
+                <code style={{ fontSize: 10 }}>{a.url_path}</code>
+                {a.description && <span style={{ marginLeft: 8 }}>— {a.description}</span>}
+              </div>
+
+              {/* Result panel */}
+              {showResult === a.id && results[a.id] && (
+                <div style={{ marginTop: 8, borderTop: '1px solid var(--border-weak)', paddingTop: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: results[a.id].ok ? '#10b981' : '#ef4444' }}>
+                      {results[a.id].ok ? '✓' : '✗'} {results[a.id].status ? `HTTP ${results[a.id].status} ${results[a.id].status_text}` : results[a.id].error}
+                    </span>
+                    {results[a.id].duration_ms !== undefined && (
+                      <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{results[a.id].duration_ms}ms</span>
+                    )}
+                    <button onClick={() => setShowResult(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13 }}>✕</button>
+                  </div>
+                  {results[a.id].response && (
+                    <pre style={{ fontSize: 10, color: 'var(--text-secondary)', background: 'var(--bg-card)', borderRadius: 5, padding: '6px 8px', overflowX: 'auto', maxHeight: 120, margin: 0 }}>
+                      {(() => { try { return JSON.stringify(JSON.parse(results[a.id].response!), null, 2) } catch { return results[a.id].response } })()}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Templates when there are already some actions */}
+      {actions.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 2 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', alignSelf: 'center' }}>Templates:</span>
+          {BUILT_IN_TEMPLATES.map(t => (
+            <button key={t.name} onClick={() => openCreate(t)}
+              style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-weak)', background: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+              {t.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1498,6 +2167,7 @@ function PortsTab({ devices }: { devices: Server[] }) {
   const [selectedId, setSelectedId] = useState<string>(snmpDevices[0]?.id ?? '')
   const [ports, setPorts] = useState<SnmpPort[] | null>(null)
   const [fetching, setFetching] = useState(false)
+  const pollAbortRef = useRef<AbortController | null>(null)
   const [fetchedAt, setFetchedAt] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'up' | 'down'>('all')
@@ -1667,16 +2337,28 @@ function PortsTab({ devices }: { devices: Server[] }) {
 
   const pollPorts = async () => {
     if (!selectedId) return
+    const abort = new AbortController()
+    pollAbortRef.current = abort
     setFetching(true); setError('')
     try {
-      const r = await api.post<{ ok: boolean; fetched_at: string; ports: SnmpPort[]; vlans?: SnmpVlan[]; discovered_radius?: DiscoveredRadius[] }>(`/servers/${selectedId}/snmp-ports`)
+      const r = await api.post<{ ok: boolean; fetched_at: string; ports: SnmpPort[]; vlans?: SnmpVlan[]; discovered_radius?: DiscoveredRadius[] }>(`/servers/${selectedId}/snmp-ports`, undefined, abort.signal)
       setPorts(r.ports)
       setFetchedAt(r.fetched_at)
       if (r.vlans) setVlans(r.vlans)
       if (r.discovered_radius) setDiscoveredRadius(r.discovered_radius)
     } catch (e: any) {
+      if ((e as any)?.name === 'AbortError') return
       setError(e?.data?.error ?? e?.message ?? 'Port poll failed')
-    } finally { setFetching(false) }
+    } finally {
+      pollAbortRef.current = null
+      setFetching(false)
+    }
+  }
+
+  const stopPoll = () => {
+    pollAbortRef.current?.abort()
+    pollAbortRef.current = null
+    setFetching(false)
   }
 
   const saveVlan = async (vlanId: number) => {
@@ -1753,6 +2435,15 @@ function PortsTab({ devices }: { devices: Server[] }) {
         >
           {fetching ? 'Polling…' : '🔌 Poll Ports'}
         </button>
+
+        {fetching && (
+          <button
+            onClick={stopPoll}
+            style={{ padding: '7px 12px', borderRadius: 7, border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+          >
+            ✕ Stop
+          </button>
+        )}
 
         {ports && (
           <>

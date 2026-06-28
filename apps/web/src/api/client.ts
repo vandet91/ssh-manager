@@ -1,3 +1,5 @@
+import { debugLog } from '../components/DebugPanel'
+
 const BASE = '/api'
 
 type ForbiddenHandler = (message: string) => void
@@ -25,7 +27,9 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
         onForbidden(err.required ? `Access denied — requires permission: ${err.required}` : `Access denied: ${message}`)
       }
     }
-    throw Object.assign(new Error(message), { status: res.status, data: err })
+    const apiErr = Object.assign(new Error(message), { status: res.status, data: err })
+    debugLog('api', `${method} ${path} → ${res.status} ${message}`, JSON.stringify(err, null, 2))
+    throw apiErr
   }
   if (res.status === 204) return undefined as T
   return res.json()

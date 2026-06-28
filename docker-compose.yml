@@ -25,6 +25,7 @@ services:
       - tftp-data:/var/lib/ssh-manager/tftp-root
       - assets:/var/lib/ssh-manager/assets
       - doc-uploads:/app/uploads/documents
+      - db-backups:/var/lib/ssh-manager/backups
 
   # Guacamole RDP/VNC protocol daemon
   guacd:
@@ -151,3 +152,4 @@ volumes:
   tftp-data:
   assets:
   doc-uploads:
+  db-backups:

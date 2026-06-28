@@ -39,12 +39,14 @@ import distroArtRoutes from './modules/distro-art/distro-art.routes'
 import networkProfileRoutes from './modules/servers/network-profile.routes'
 import snmpProfileRoutes from './modules/servers/snmp-profiles.routes'
 import networkPingRoutes from './modules/servers/network-ping.routes'
+import deviceHttpActionsRoutes from './modules/servers/device-http-actions.routes'
 import firmwareRepoRoutes from './modules/firmware-repo/firmware-repo.routes'
 import configBackupRoutes from './modules/config-backup/config-backup.routes'
 import networkScanRoutes from './modules/network-scan/network-scan.routes'
 import docsRoutes from './modules/docs/docs.routes'
 import radiusRoutes from './modules/radius/radius.routes'
 import tasksRoutes from './modules/tasks/tasks.routes'
+import dbManagerRoutes from './modules/db-manager/db-manager.routes'
 import { startTelegramBot } from './modules/telegram/telegram.service'
 import { startRotationWorker, scheduleRotations } from './jobs/rotation.worker'
 import { startTasksWorker } from './jobs/tasks.worker'
@@ -166,12 +168,14 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(networkProfileRoutes)
   await fastify.register(snmpProfileRoutes)
   await fastify.register(networkPingRoutes)
+  await fastify.register(deviceHttpActionsRoutes)
   await fastify.register(radiusRoutes)
   await fastify.register(firmwareRepoRoutes)
   await fastify.register(configBackupRoutes)
   await fastify.register(networkScanRoutes)
   await fastify.register(docsRoutes)
   await fastify.register(tasksRoutes)
+  await fastify.register(dbManagerRoutes)
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))

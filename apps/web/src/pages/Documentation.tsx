@@ -140,12 +140,29 @@ function drawShapeOnCtx(ctx: CanvasRenderingContext2D, s: Shape) {
     case 'arrow': {
       if (s.x1 === undefined || s.y1 === undefined || s.x2 === undefined || s.y2 === undefined) return
       const angle = Math.atan2(s.y2 - s.y1, s.x2 - s.x1)
-      const head  = s.size * 5 + 10
-      ctx.beginPath(); ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke()
+      const headLen = s.size * 7 + 16    // medium head
+      const wingAngle = Math.PI / 6      // 30° — sharper point
+      const shaftW = Math.max(s.size * 2, 3)
+
+      // Wing tips
+      const wx1 = s.x2 - headLen * Math.cos(angle - wingAngle)
+      const wy1 = s.y2 - headLen * Math.sin(angle - wingAngle)
+      const wx2 = s.x2 - headLen * Math.cos(angle + wingAngle)
+      const wy2 = s.y2 - headLen * Math.sin(angle + wingAngle)
+
+      // Stop shaft before the head base so it doesn't poke through
+      const shaftEndX = s.x2 - headLen * 0.75 * Math.cos(angle)
+      const shaftEndY = s.y2 - headLen * 0.75 * Math.sin(angle)
+
+      ctx.lineWidth = shaftW
+      ctx.lineCap = 'round'
+      ctx.beginPath(); ctx.moveTo(s.x1, s.y1); ctx.lineTo(shaftEndX, shaftEndY); ctx.stroke()
+
+      // Filled arrowhead triangle
       ctx.beginPath()
       ctx.moveTo(s.x2, s.y2)
-      ctx.lineTo(s.x2 - head * Math.cos(angle - Math.PI / 6), s.y2 - head * Math.sin(angle - Math.PI / 6))
-      ctx.lineTo(s.x2 - head * Math.cos(angle + Math.PI / 6), s.y2 - head * Math.sin(angle + Math.PI / 6))
+      ctx.lineTo(wx1, wy1)
+      ctx.lineTo(wx2, wy2)
       ctx.closePath(); ctx.fill()
       break
     }

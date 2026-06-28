@@ -36,6 +36,7 @@ const nav: { to: string; label: string; icon: string; adminOnly?: boolean; group
   { to: '/diagrams',        label: 'Diagrams',          icon: '📐',  group: 'Tools' },
   { to: '/docs',            label: 'Documentation',     icon: '📖',  group: 'Tools' },
   { to: '/tasks',           label: 'Tasks',             icon: '📋',  group: 'Tools' },
+  { to: '/db-manager',     label: 'DB Manager',        icon: '🗄',  group: 'Tools', adminOnly: true },
   { to: '/commands',        label: 'Commands',          icon: '⌘',   group: 'Tools',   adminOnly: true },
   { to: '/share',           label: 'Share',             icon: '🔗',  group: 'Tools',   adminOnly: true },
   { to: '/firmware-repo',   label: 'Firmware & Backup', icon: '💾',  group: 'Tools' },

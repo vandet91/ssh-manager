@@ -1,6 +1,7 @@
 ﻿import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, Component, type ReactNode } from 'react'
 import { api, User, setForbiddenHandler, setMfaRequiredHandler } from './api/client'
+import DebugPanel, { debugLog } from './components/DebugPanel'
 import { TotpElevationProvider } from './context/TotpElevationContext'
 import { PermissionProvider, setPermissionRole } from './context/PermissionContext'
 import Login from './pages/Login'
@@ -33,6 +34,23 @@ import NetworkScan from './pages/NetworkScan'
 import Security from './pages/Security'
 import Documentation from './pages/Documentation'
 import Tasks from './pages/Tasks'
+import DatabaseManager from './pages/DatabaseManager'
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+  static getDerivedStateFromError(e: Error) { return { error: e } }
+  componentDidCatch(e: Error) { debugLog('error', `Render crash: ${e.message}`, e.stack) }
+  render() {
+    if (this.state.error) return (
+      <div style={{ padding: 32, color: '#ef4444', fontFamily: 'monospace', fontSize: 13 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>⚠ Render Error</div>
+        <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>{this.state.error.message}</div>
+        <div style={{ marginTop: 8, fontSize: 11, color: '#f87171', opacity: 0.7 }}>Check the 🐛 debug panel (bottom-right) for details.</div>
+      </div>
+    )
+    return this.props.children
+  }
+}
 
 export type ThemeName = 'modern' | 'proxmox'
 export type ThemeMode = 'dark' | 'light'
@@ -120,6 +138,7 @@ function AppRoutes({ user, setUser, themeName, setThemeName, themeMode, setTheme
           <Route path="/security"       element={<Security />} />
           <Route path="/docs"           element={<Documentation />} />
           <Route path="/tasks"          element={<Tasks />} />
+          <Route path="/db-manager"     element={<ErrorBoundary><DatabaseManager /></ErrorBoundary>} />
           <Route path="/logs"           element={<Logs />} />
           <Route path="/activity"       element={<MyActivity />} />
           <Route path="/migration"      element={<Migration />} />
@@ -174,6 +193,7 @@ function App() {
     <TotpElevationProvider>
     <PermissionProvider>
     <BrowserRouter>
+      {user && <DebugPanel />}
       <AppRoutes
         user={user ?? null} setUser={setUser}
         themeName={themeName} setThemeName={setThemeName}
