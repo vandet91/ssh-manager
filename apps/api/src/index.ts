@@ -11,6 +11,7 @@ import fastifyMultipart from '@fastify/multipart'
 import { config } from './config'
 import { db } from './db/client'
 import { getRedis, closeRedis } from './jobs/redis'
+import { RedisSessionStore } from './utils/redisSessionStore'
 import { setupPassport } from './modules/auth/passport'
 import authRoutes from './modules/auth/auth.routes'
 import ssoRoutes from './modules/auth/sso.routes'
@@ -128,6 +129,7 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   await fastify.register(fastifySession, {
     secret: config.SESSION_SECRET,
     saveUninitialized: false,
+    store: new RedisSessionStore(getRedis(), config.SESSION_MAX_AGE_MS),
     cookie: {
       httpOnly: true,
       secure: config.NODE_ENV === 'production',
