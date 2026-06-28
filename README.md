@@ -229,7 +229,7 @@ apps/
 
 ## Quick Start
 
-### Development (Docker, local port 4004)
+### Development (Windows / Mac — Docker Desktop)
 
 ```bash
 docker compose up -d --build
@@ -242,6 +242,29 @@ docker compose up -d --build web        # frontend only
 docker compose up -d --build api        # backend only
 docker compose up -d --build api web    # both
 ```
+
+App runs at **http://localhost:4004**
+
+### Linux Server (Production)
+
+On a Linux Docker host, use the Linux override file. It enables **host networking** on the API so the network scanner can read the real ARP table, send arping packets, and do mDNS/LLMNR discovery.
+
+```bash
+# First run / full rebuild
+docker compose -f docker-compose.yml -f docker-compose.linux.yml up -d --build
+
+# Rebuild specific containers
+docker compose -f docker-compose.yml -f docker-compose.linux.yml up -d --build api
+docker compose -f docker-compose.yml -f docker-compose.linux.yml up -d --build web
+docker compose -f docker-compose.yml -f docker-compose.linux.yml up -d --build api web
+
+# View logs
+docker compose -f docker-compose.yml -f docker-compose.linux.yml logs -f api
+```
+
+App runs at **http://<your-server-ip>:4004**
+
+> **Note:** The Linux override is NOT compatible with Docker Desktop on Windows or Mac — those run Docker inside a VM and `network_mode: host` will not give access to the physical network interface.
 
 ### Environment Variables
 
