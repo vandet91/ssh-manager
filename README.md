@@ -268,26 +268,76 @@ App runs at **http://<your-server-ip>:4004**
 
 ### Environment Variables
 
-Create `apps/api/.env`:
+Copy `.env.example` to `.env` and fill in the values:
 
-```env
-DATABASE_URL=postgresql://user:pass@postgres:5432/sshmanager
-SESSION_SECRET=change-me-minimum-32-chars
-ENCRYPTION_KEY=64-char-hex-string
-BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-BOOTSTRAP_ADMIN_PASSWORD=changeme
-PORT=3001
+```bash
+cp .env.example .env
 ```
 
-Optional for SSO/Telegram:
+#### Required values
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SESSION_SECRET` | Min 32 chars — signs session cookies |
+| `VAULT_ENCRYPTION_KEY` | 64-char hex (32 bytes) — encrypts vault + credentials |
+| `BOOTSTRAP_ADMIN_EMAIL` | Admin account email created on first start |
+| `BOOTSTRAP_ADMIN_PASSWORD` | Admin account password (min 8 chars) |
+
+#### Generate secure random values
+
+**SESSION_SECRET** (64-char random string):
+
+```bash
+# Linux / Mac
+openssl rand -hex 64
+
+# Node.js (any platform)
+node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+```
+
+**VAULT_ENCRYPTION_KEY** (exactly 64 hex chars = 32 bytes):
+
+```bash
+# Linux / Mac
+openssl rand -hex 32
+
+# Node.js (any platform)
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+# Windows PowerShell
+-join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
+```
+
+**GUAC_CRYPT_KEY** (exactly 32 chars for RDP session encryption):
+
+```bash
+openssl rand -base64 24 | tr -d '=' | cut -c1-32
+```
+
+#### Optional variables
 
 ```env
-MICROSOFT_CLIENT_ID=
-MICROSOFT_CLIENT_SECRET=
-MICROSOFT_TENANT_ID=
+# Microsoft 365 SSO
+MS_CLIENT_ID=
+MS_CLIENT_SECRET=
+MS_TENANT_ID=
+MS_CALLBACK_URL=https://yourdomain.com/auth/microsoft/callback
+
+# Google Workspace SSO
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-TELEGRAM_BOT_TOKEN=       # can also be set in Settings UI
+GOOGLE_CALLBACK_URL=https://yourdomain.com/auth/google/callback
+GOOGLE_HOSTED_DOMAIN=           # restrict to one domain, e.g. company.com
+
+# Telegram bot (can also be configured in Settings UI)
+TELEGRAM_BOT_TOKEN=
+
+# Remote Desktop
+GUAC_CRYPT_KEY=ChangeMe32CharKeyForGuacamole!!!
+
+# MFA issuer name shown in authenticator apps
+MFA_ISSUER=SSHManager
 ```
 
 ---
@@ -295,6 +345,109 @@ TELEGRAM_BOT_TOKEN=       # can also be set in Settings UI
 ## Default Login
 
 On first start the bootstrap admin account is created automatically using `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` from `.env`.
+
+> **Change the password** after first login via **Settings → Account**.
+
+---
+
+## Windows Remote Management
+
+The app can manage Windows servers via three protocols. All require admin credentials stored in the **Vault** or **Credentials** module.
+
+### PsExec
+
+Runs commands on Windows hosts using Impacket's `psexec.py` (pre-installed inside the API container).
+
+**Requirements on the Windows target:**
+- SMB port `445` open and reachable from the Docker host
+- Admin share `ADMIN$` accessible
+- Local or domain administrator credentials
+
+**How it works:**
+```
+Browser → API container → psexec.py (Impacket) → SMB 445 → Windows target
+```
+
+### WMI Exec
+
+Runs commands via Windows Management Instrumentation using Impacket's `wmiexec.py`.
+
+**Requirements on the Windows target:**
+- RPC port `135` open (endpoint mapper)
+- Dynamic RPC ports `49152–65535` open (or a WMI firewall rule)
+- Admin credentials
+
+**Advantage over PsExec:** Does not write a service binary to disk — lower antivirus detection risk.
+
+### WinRM (Windows Remote Management)
+
+Runs PowerShell commands using `pywinrm` over HTTP (port 5985) or HTTPS (port 5986).
+
+**Enable WinRM on the Windows target (run as Administrator):**
+
+```powershell
+Enable-PSRemoting -Force
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value "*" -Force
+```
+
+For HTTPS (recommended):
+
+```powershell
+$cert = New-SelfSignedCertificate -DnsName "hostname" -CertStoreLocation Cert:\LocalMachine\My
+New-Item -Path WSMan:\localhost\Listener -Transport HTTPS -Address * `
+  -CertificateThumbPrint $cert.Thumbprint -Force
+netsh advfirewall firewall add rule name="WinRM HTTPS" protocol=TCP dir=in localport=5986 action=allow
+```
+
+### Evil-WinRM (Interactive Shell)
+
+For interactive PowerShell sessions, `evil-winrm` (Ruby gem) is pre-installed inside the API container and available from the Terminal tab.
+
+```bash
+evil-winrm -i <windows-ip> -u Administrator -p <password>
+```
+
+### Port Summary
+
+| Protocol | Port | Notes |
+|----------|------|-------|
+| PsExec / WMI | 445 (SMB) | Needs `ADMIN$` share |
+| WMI | 135 + dynamic RPC | Firewall-unfriendly |
+| WinRM HTTP | 5985 | Plain text — LAN only |
+| WinRM HTTPS | 5986 | Encrypted — recommended |
+| RDP (browser) | 3389 | Via Guacamole inside Docker |
+
+---
+
+## HTTPS (SSL/TLS)
+
+Place your certificate files in `nginx/ssl/`:
+
+```
+nginx/ssl/fullchain.pem   ← cert + intermediate chain combined
+nginx/ssl/privkey.pem     ← private key
+```
+
+If your CA provides separate files, combine them:
+
+```bash
+cat yourdomain.crt intermediate.crt > nginx/ssl/fullchain.pem
+cp yourdomain.key nginx/ssl/privkey.pem
+```
+
+Start with the HTTPS overlay:
+
+```bash
+# Linux production + HTTPS
+docker compose -f docker-compose.yml -f docker-compose.linux.yml -f docker-compose.https.yml up -d --build
+```
+
+Also update `.env`:
+
+```env
+FRONTEND_URL=https://yourdomain.com
+CORS_ORIGIN=https://yourdomain.com
+```
 
 ---
 
