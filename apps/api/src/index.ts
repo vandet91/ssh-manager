@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import bcrypt from 'bcryptjs'
 import Fastify from 'fastify'
 import fastifyCookie from '@fastify/cookie'
 import fastifySession from '@fastify/session'
@@ -74,18 +75,30 @@ async function runMigrations(): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
-  // Ensure bootstrap admin exists
   const adminEmail = config.BOOTSTRAP_ADMIN_EMAIL.toLowerCase()
-  const existing = await db.selectFrom('users').select(['id']).where('email', '=', adminEmail).executeTakeFirst()
+  const existing = await db.selectFrom('users').select(['id', 'password_hash']).where('email', '=', adminEmail).executeTakeFirst()
+
   if (!existing) {
+    const passwordHash = config.BOOTSTRAP_ADMIN_PASSWORD
+      ? await bcrypt.hash(config.BOOTSTRAP_ADMIN_PASSWORD, 12)
+      : null
     await db.insertInto('users').values({
       email: adminEmail,
-      provider: 'microsoft',
-      provider_id: `bootstrap:${adminEmail}`,
+      provider: passwordHash ? 'local' : 'microsoft',
+      provider_id: passwordHash ? null : `bootstrap:${adminEmail}`,
+      password_hash: passwordHash,
       role: 'admin',
       display_name: 'Admin',
     }).onConflict((oc) => oc.doNothing()).execute()
-    console.log(`Bootstrap admin created: ${adminEmail}`)
+    console.log(`Bootstrap admin created: ${adminEmail} (${passwordHash ? 'local password' : 'SSO only'})`)
+  } else if (existing && !existing.password_hash && config.BOOTSTRAP_ADMIN_PASSWORD) {
+    // Existing SSO-only admin — backfill password so local login works
+    const passwordHash = await bcrypt.hash(config.BOOTSTRAP_ADMIN_PASSWORD, 12)
+    await db.updateTable('users')
+      .set({ password_hash: passwordHash, provider: 'local', provider_id: null })
+      .where('email', '=', adminEmail)
+      .execute()
+    console.log(`Bootstrap admin updated with local password: ${adminEmail}`)
   }
 }
 

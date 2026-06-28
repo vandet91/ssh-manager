@@ -20,6 +20,7 @@ const schema = z.object({
   GOOGLE_HOSTED_DOMAIN: z.string().optional(),
   MFA_ISSUER: z.string().default('SSHManager'),
   BOOTSTRAP_ADMIN_EMAIL: z.string().email(),
+  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(8).optional(),
   TERMINAL_IDLE_TIMEOUT_MIN: z.coerce.number().default(30),
   RECORDINGS_STORAGE_PATH: z.string().default('/var/lib/ssh-manager/recordings'),
   RATE_LIMIT_AUTH: z.coerce.number().default(10),
