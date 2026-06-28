@@ -32,3 +32,10 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# SSL certificates — never commit private keys or certs
+nginx/ssl/*.pem
+nginx/ssl/*.crt
+nginx/ssl/*.key
+nginx/ssl/*.p12
+nginx/ssl/*.pfx
