@@ -244,7 +244,7 @@ function StepEditor({ step, servers, onChange, onRemove }: {
   }
 
   return (
-    <div style={{ border: '1px solid var(--border-med)', borderRadius: 8, padding: 12, background: 'var(--bg-body)', marginBottom: 8 }}>
+    <div style={{ border: '1px solid var(--border-med)', borderRadius: 8, padding: 12, background: 'var(--bg-panel-alt)', marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
         <select value={step.step_type} onChange={e => onChange({ ...step, step_type: e.target.value as StepType, config: {} })}
           style={{ ...inp, flex: 1 }}>
@@ -252,7 +252,7 @@ function StepEditor({ step, servers, onChange, onRemove }: {
         </select>
         <input value={step.label ?? ''} onChange={e => onChange({ ...step, label: e.target.value })}
           placeholder="Step label (optional)" style={{ ...inp, flex: 1 }} />
-        <button onClick={onRemove} style={{ padding: '4px 8px', borderRadius: 5, border: 'none', background: '#7f1d1d', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}>✕</button>
+        <button onClick={onRemove} style={{ padding: '4px 8px', borderRadius: 5, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}>✕</button>
       </div>
 
       {/* Delay */}
@@ -299,8 +299,8 @@ function StepEditor({ step, servers, onChange, onRemove }: {
                 <button key={s.id} onClick={() => toggleTarget(s.id)} style={{
                   padding: '3px 8px', borderRadius: 5, fontSize: 11, cursor: 'pointer',
                   border: `1px solid ${sel ? 'var(--accent-hex)' : 'var(--border-med)'}`,
-                  background: sel ? 'var(--accent-hex)20' : 'transparent',
-                  color: sel ? 'var(--accent-hex)' : 'var(--text-secondary)',
+                  background: sel ? 'var(--accent-hex)20' : 'var(--bg-input)',
+                  color: sel ? 'var(--accent-hex)' : 'var(--text-primary)',
                 }}>
                   {s.name}
                 </button>
@@ -452,11 +452,11 @@ function TaskForm({ task, tasks, servers, onSave, onClose }: {
 
         {/* Notifications */}
         <div style={{ marginBottom: 16, display: 'flex', gap: 20 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer' }}>
             <input type="checkbox" checked={!!form.notify_telegram} onChange={e => set('notify_telegram', e.target.checked)} />
             Telegram notification
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-primary)', cursor: 'pointer' }}>
             <input type="checkbox" checked={!!form.notify_email} onChange={e => set('notify_email', e.target.checked)} />
             Email notification
           </label>
@@ -645,10 +645,10 @@ export default function Tasks() {
       {toast && (
         <div style={{
           position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-          background: toast.ok ? '#065f46' : '#7f1d1d',
-          border: `1px solid ${toast.ok ? '#047857' : '#991b1b'}`,
+          background: 'var(--card-bg)',
+          border: `1px solid ${toast.ok ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'}`,
           borderRadius: 8, padding: '10px 20px',
-          color: toast.ok ? '#6ee7b7' : '#fca5a5',
+          color: toast.ok ? '#10b981' : '#ef4444',
           fontSize: 13, fontWeight: 500, zIndex: 9999,
         }}>{toast.msg}</div>
       )}
@@ -734,7 +734,7 @@ export default function Tasks() {
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-                          <button onClick={() => handleRun(task.id)} disabled={running.has(task.id)} title="Run now" style={{ ...btnStyle, background: '#065f46', color: '#6ee7b7', border: 'none' }}>
+                          <button onClick={() => handleRun(task.id)} disabled={running.has(task.id)} title="Run now" style={{ ...btnStyle, background: 'rgba(16,185,129,0.15)', color: '#10b981', border: '1px solid rgba(16,185,129,0.35)' }}>
                             {running.has(task.id) ? '⏳' : '▶ Run'}
                           </button>
                           <button onClick={() => setHistoryId(task.id)} style={btnStyle} title="Run history">📋</button>
@@ -742,7 +742,7 @@ export default function Tasks() {
                             {task.is_active ? '⏸' : '▶'}
                           </button>
                           <button onClick={() => setFormTask({ ...task })} style={btnStyle} title="Edit">✏</button>
-                          <button onClick={() => handleDelete(task.id)} style={{ ...btnStyle, border: '1px solid #7f1d1d', color: '#ef4444' }} title="Delete">🗑</button>
+                          <button onClick={() => handleDelete(task.id)} style={{ ...btnStyle, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.08)', color: '#ef4444' }} title="Delete">🗑</button>
                         </div>
                       </div>
                     </div>
