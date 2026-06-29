@@ -2750,7 +2750,7 @@ function PortsTab({ devices }: { devices: Server[] }) {
 
       {/* ── Bulk action toolbar — floats when ports are selected ── */}
       {checkedPorts.size > 0 && (
-        <div style={{ position: 'sticky', bottom: 16, marginTop: 12, borderRadius: 10, background: 'var(--bg-card)', border: `1px solid ${hasMixedModes ? 'rgba(251,191,36,0.5)' : 'var(--border-med)'}`, boxShadow: '0 4px 20px rgba(0,0,0,0.35)', overflow: 'hidden' }}>
+        <div style={{ position: 'sticky', bottom: 16, marginTop: 12, borderRadius: 10, background: 'var(--card-bg)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: `1px solid ${hasMixedModes ? 'rgba(251,191,36,0.5)' : 'var(--border-med)'}`, boxShadow: '0 8px 32px rgba(0,0,0,0.55)', overflow: 'hidden' }}>
 
           {/* Mixed-mode warning banner */}
           {hasMixedModes && (
