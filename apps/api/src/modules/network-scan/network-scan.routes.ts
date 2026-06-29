@@ -227,20 +227,35 @@ function grabBanner(ip: string, port: number, timeoutMs = 2000): Promise<string 
 // ── Ping ─────────────────────────────────────────────────────────────────────
 
 async function pingHost(ip: string): Promise<{ alive: boolean; latency_ms: number | null; ttl: number | null }> {
+  // 1. ICMP ping — fast, gives TTL and latency
   try {
     const { stdout } = await execAsync(`ping -c 1 -W 1 ${ip}`, { timeout: 3000 })
-    const ttlMatch   = stdout.match(/ttl=(\d+)/i)
-    const timeMatch  = stdout.match(/time[=<]([\d.]+)/i)
+    const ttlMatch  = stdout.match(/ttl=(\d+)/i)
+    const timeMatch = stdout.match(/time[=<]([\d.]+)/i)
     return {
       alive: true,
       latency_ms: timeMatch ? parseFloat(timeMatch[1]) : null,
       ttl: ttlMatch ? parseInt(ttlMatch[1]) : null,
     }
-  } catch {
-    // Fallback: TCP connect to port 80 or 443
-    const alive = await scanPort(ip, 80, 500) || await scanPort(ip, 443, 500) || await scanPort(ip, 22, 500)
-    return { alive, latency_ms: null, ttl: null }
-  }
+  } catch {}
+
+  // 2. TCP connect fallback — catches hosts with open ports but blocking ICMP
+  const tcpAlive = await scanPort(ip, 80, 500) || await scanPort(ip, 443, 500) || await scanPort(ip, 22, 500)
+    || await scanPort(ip, 8080, 500) || await scanPort(ip, 5555, 300) || await scanPort(ip, 62078, 300)
+  if (tcpAlive) return { alive: true, latency_ms: null, ttl: null }
+
+  // 3. ARP ping — works on Android, iOS, and any device that blocks ICMP.
+  //    Layer 2 probe: the device MUST reply to ARP to communicate on the LAN.
+  //    Only works when the API has host networking (docker-compose.linux.yml).
+  try {
+    const t0 = Date.now()
+    const { stdout } = await execAsync(`arping -c 1 -w 1 ${ip} 2>/dev/null`, { timeout: 2500 })
+    if (/bytes from/i.test(stdout) || /Unicast reply/i.test(stdout)) {
+      return { alive: true, latency_ms: Date.now() - t0, ttl: 64 }
+    }
+  } catch {}
+
+  return { alive: false, latency_ms: null, ttl: null }
 }
 
 function osFromTtl(ttl: number | null): string | null {
