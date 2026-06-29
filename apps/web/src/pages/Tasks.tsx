@@ -239,8 +239,8 @@ function StepEditor({ step, servers, onChange, onRemove }: {
 
   const inp: React.CSSProperties = {
     width: '100%', padding: '5px 8px', borderRadius: 5,
-    border: '1px solid var(--border-med)', background: 'var(--bg-input)',
-    color: 'var(--text-primary)', fontSize: 12, boxSizing: 'border-box',
+    border: '1px solid var(--input-border)', background: 'var(--input-bg)',
+    color: 'var(--input-text)', fontSize: 12, boxSizing: 'border-box',
   }
 
   return (
@@ -299,7 +299,7 @@ function StepEditor({ step, servers, onChange, onRemove }: {
                 <button key={s.id} onClick={() => toggleTarget(s.id)} style={{
                   padding: '3px 8px', borderRadius: 5, fontSize: 11, cursor: 'pointer',
                   border: `1px solid ${sel ? 'var(--accent-hex)' : 'var(--border-med)'}`,
-                  background: sel ? 'var(--accent-hex)20' : 'var(--bg-input)',
+                  background: sel ? 'var(--accent-hex)20' : 'var(--input-bg)',
                   color: sel ? 'var(--accent-hex)' : 'var(--text-primary)',
                 }}>
                   {s.name}
@@ -356,8 +356,8 @@ function TaskForm({ task, tasks, servers, onSave, onClose }: {
 
   const inp: React.CSSProperties = {
     width: '100%', padding: '7px 10px', borderRadius: 6,
-    border: '1px solid var(--border-med)', background: 'var(--bg-input)',
-    color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box',
+    border: '1px solid var(--input-border)', background: 'var(--input-bg)',
+    color: 'var(--input-text)', fontSize: 13, boxSizing: 'border-box',
   }
   const label: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }
 
@@ -628,7 +628,7 @@ export default function Tasks() {
 
   const btnStyle: React.CSSProperties = {
     padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-med)',
-    background: 'var(--bg-input)', color: 'var(--text-secondary)', fontSize: 11, cursor: 'pointer',
+    background: 'var(--input-bg)', color: 'var(--text-secondary)', fontSize: 11, cursor: 'pointer',
   }
 
   const upcoming = tasks.filter(t => t.is_active && t.trigger_type !== 'schedule')
@@ -663,7 +663,7 @@ export default function Tasks() {
         </div>
 
         {/* View toggle */}
-        <div style={{ display: 'flex', background: 'var(--bg-input)', borderRadius: 6, padding: 2, gap: 2 }}>
+        <div style={{ display: 'flex', background: 'var(--input-bg)', borderRadius: 6, padding: 2, gap: 2 }}>
           {(['list','calendar'] as const).map(v => (
             <button key={v} onClick={() => setView(v)} style={{
               padding: '4px 12px', borderRadius: 5, border: 'none', fontSize: 12,
