@@ -1,6 +1,7 @@
 services:
   api:
     build: ./apps/api
+    restart: unless-stopped
     ports:
       - "3001:3001"
     cap_add:
@@ -48,6 +49,7 @@ services:
 
   web:
     build: ./apps/web
+    restart: unless-stopped
     ports:
       - "4004:4004"
     depends_on:
@@ -56,6 +58,7 @@ services:
 
   postgres:
     image: postgres:15-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: sshmanager
       POSTGRES_USER: sshmanager
@@ -72,6 +75,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: redis-server --appendonly yes --appendfsync everysec
     ports:
       - "6379:6379"
