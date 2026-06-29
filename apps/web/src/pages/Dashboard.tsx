@@ -274,7 +274,7 @@ export default function Dashboard() {
           {staleServers.length > 0 && (
             <div>
               <div style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>⚠ Not seen in 7+ days</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 100, overflowY: 'auto', paddingRight: 6 }}>
+              <div className="thin-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 100, overflowY: 'auto', paddingRight: 10 }}>
                 {staleServers.map(s => (
                   <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
                     <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
@@ -299,7 +299,7 @@ export default function Dashboard() {
           {activeKeys.length === 0 ? (
             <p style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '20px 0' }}>No SSH keys found.</p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto', paddingRight: 6 }}>
+            <div className="thin-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto', paddingRight: 10 }}>
               {[...activeKeys]
                 .sort((a, b) => {
                   const aOver = a.next_rotation_at && new Date(a.next_rotation_at) < now ? -2 : 0
