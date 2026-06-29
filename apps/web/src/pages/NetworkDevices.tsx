@@ -2873,22 +2873,42 @@ function PortsTab({ devices }: { devices: Server[] }) {
 
             {actionModal === 'vlan' && (
               <>
-                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>VLAN ID (1–4094)</label>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+                  {vlanMode === 'untagged' ? 'VLAN ID (1–4094)' : 'VLAN IDs (1–4094, comma-separated)'}
+                </label>
                 <input
-                  autoFocus type="number" min={1} max={4094} value={actionInput}
+                  autoFocus
+                  type={vlanMode === 'untagged' ? 'number' : 'text'}
+                  min={1} max={4094}
+                  value={actionInput}
                   onChange={e => setActionInput(e.target.value)}
-                  placeholder="e.g. 100"
-                  style={{ ...inp, width: '100%' }}
+                  placeholder={vlanMode === 'untagged' ? 'e.g. 100' : 'e.g. 10,20,30'}
+                  style={{ ...inp, width: '100%', borderColor: vlanMode === 'untagged' && actionInput.includes(',') ? '#ef4444' : undefined }}
                 />
+                {vlanMode === 'untagged' && actionInput.includes(',') && (
+                  <div style={{ fontSize: 11, color: '#ef4444', marginTop: 4 }}>
+                    Access ports can only have one untagged VLAN. Enter a single VLAN ID.
+                  </div>
+                )}
                 <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', margin: '10px 0 6px' }}>Apply as</label>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {(['untagged', 'tagged'] as const).map(m => (
-                    <button key={m} onClick={() => setVlanMode(m)}
+                    <button key={m} onClick={() => { setVlanMode(m); setActionInput('') }}
                       style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: `1px solid ${vlanMode === m ? 'var(--accent-hex)' : 'var(--border-med)'}`, background: vlanMode === m ? 'var(--accent-hex)' : 'transparent', color: vlanMode === m ? '#fff' : 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                       {m === 'untagged' ? '📥 Untagged (access)' : '🏷 Tagged (trunk)'}
                     </button>
                   ))}
                 </div>
+                {vlanMode === 'untagged' && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+                    Access port: only one VLAN allowed (untagged). Switches the port to <code>switchport access vlan {'<id>'}</code>.
+                  </div>
+                )}
+                {vlanMode === 'tagged' && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+                    Trunk port: adds the VLAN(s) to the allowed list. Use commas to add multiple at once.
+                  </div>
+                )}
               </>
             )}
 
@@ -2939,7 +2959,7 @@ function PortsTab({ devices }: { devices: Server[] }) {
                 Cancel
               </button>
               <button
-                disabled={actionRunning || (actionModal !== 'mode' && !actionInput.trim())}
+                disabled={actionRunning || (actionModal !== 'mode' && !actionInput.trim()) || (actionModal === 'vlan' && vlanMode === 'untagged' && actionInput.includes(','))}
                 onClick={() => {
                   if (actionModal === 'description') runPortCli('description', { description: actionInput.trim() })
                   else if (actionModal === 'vlan') runPortCli('vlan', { vlan: +actionInput, vlanMode })
