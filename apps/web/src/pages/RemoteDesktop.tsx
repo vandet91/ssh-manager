@@ -136,6 +136,24 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           kb.onkeyup  = (k) => { client.sendKeyEvent(0, k) }
           keyboardRef.current = kb
           canvasRef.current.focus()
+
+          // Sync local clipboard → remote on canvas focus/click (requires HTTPS)
+          const syncClipboardToRemote = () => {
+            navigator.clipboard?.readText?.().then(text => {
+              if (text) client.setClipboard(new Blob([text], { type: 'text/plain' }))
+            }).catch(() => {})
+          }
+          canvasRef.current.addEventListener('focus', syncClipboardToRemote)
+          canvasRef.current.addEventListener('click', syncClipboardToRemote)
+
+          // Sync remote clipboard → local
+          client.onclipboard = (stream: Guacamole.InputStream, mimetype: string) => {
+            if (!mimetype.startsWith('text/')) return
+            const reader = new Guacamole.StringReader(stream)
+            let text = ''
+            reader.ontext = (chunk: string) => { text += chunk }
+            reader.onend = () => { navigator.clipboard?.writeText?.(text).catch(() => {}) }
+          }
           const parent = canvasRef.current.parentElement
           if (parent) {
             const w = parent.clientWidth || form.width
