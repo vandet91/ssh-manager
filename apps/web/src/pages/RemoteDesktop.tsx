@@ -40,6 +40,8 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
   const [cmdCategory, setCmdCategory] = useState('All')
   const [cmdSearch, setCmdSearch] = useState('')
   const [clipboardText, setClipboardText] = useState('')
+  const [showPasteBox, setShowPasteBox] = useState(false)
+  const pasteBoxRef = useRef<HTMLTextAreaElement>(null)
   const [form, setForm] = useState(() => ({
     credential_id: '',
     username: 'Administrator',
@@ -274,27 +276,9 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           <>
             <button onClick={() => setShowSharePanel(!showSharePanel)} style={btn(showSharePanel ? '#8b5cf6' : '#4c1d95')} title="Show/hide shared files & commands">📦 Share</button>
             <button
-              title="Paste clipboard text into RDP (Ctrl+V)"
-              onClick={() => {
-                if (!clientRef.current) return
-                // Use a hidden textarea to capture paste without permission popup
-                const ta = document.createElement('textarea')
-                ta.style.cssText = 'position:fixed;top:-999px;left:-999px;opacity:0'
-                document.body.appendChild(ta)
-                ta.focus()
-                ta.addEventListener('paste', (e) => {
-                  const text = e.clipboardData?.getData('text/plain') || ''
-                  document.body.removeChild(ta)
-                  if (!text || !clientRef.current) return
-                  const stream = (clientRef.current as any).createClipboardStream('text/plain')
-                  const writer = new (Guacamole as any).StringWriter(stream)
-                  writer.sendText(text)
-                  writer.sendEnd()
-                  canvasRef.current?.focus()
-                }, { once: true })
-                document.execCommand('paste')
-              }}
-              style={btn('#0f766e')}
+              title="Paste clipboard text into RDP"
+              onClick={() => { setShowPasteBox(v => !v); setTimeout(() => pasteBoxRef.current?.focus(), 50) }}
+              style={btn(showPasteBox ? '#0f766e' : '#0f4c3a')}
             >📋 Paste</button>
             <button onClick={disconnect} style={btn('#b91c1c')}>⏹ Disconnect</button>
             <button onClick={toggleFullscreen} style={btn('#374151')}>{isFullscreen ? '⊡ Exit Full' : '⊞ Full'}</button>
@@ -398,6 +382,47 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
       {state === 'connected' && (
         <div style={{ position: 'absolute', bottom: 5, right: 10, fontSize: 10, color: '#6b7280', pointerEvents: 'none' }}>
           Drag files here to upload → File Explorer → This PC → "Upload" drive
+        </div>
+      )}
+
+      {/* Floating paste box */}
+      {showPasteBox && state === 'connected' && (
+        <div style={{
+          position: 'absolute', top: 44, left: '50%', transform: 'translateX(-50%)',
+          background: '#161b22', border: '1px solid #30363d', borderRadius: 10,
+          padding: 14, zIndex: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+          display: 'flex', flexDirection: 'column', gap: 8, width: 320,
+        }}>
+          <div style={{ fontSize: 12, color: '#8b949e', textAlign: 'center' }}>
+            Press <kbd style={{ background: '#21262d', padding: '1px 6px', borderRadius: 4, color: '#e6edf3', fontSize: 11 }}>Ctrl+V</kbd> here to paste into RDP
+          </div>
+          <textarea
+            ref={pasteBoxRef}
+            rows={3}
+            placeholder="Press Ctrl+V to paste…"
+            style={{
+              width: '100%', padding: '8px 10px', borderRadius: 6,
+              border: '1px solid #30363d', background: '#0d1117',
+              color: '#e6edf3', fontSize: 12, fontFamily: 'monospace',
+              resize: 'none', boxSizing: 'border-box', outline: '2px solid #1f6feb',
+            }}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData('text/plain')
+              if (text && clientRef.current) {
+                const stream = (clientRef.current as any).createClipboardStream('text/plain')
+                const writer = new (Guacamole as any).StringWriter(stream)
+                writer.sendText(text)
+                writer.sendEnd()
+              }
+              setShowPasteBox(false)
+              setTimeout(() => canvasRef.current?.focus(), 50)
+              e.preventDefault()
+            }}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setShowPasteBox(false); canvasRef.current?.focus() } }}
+          />
+          <div style={{ fontSize: 10, color: '#6b7280', textAlign: 'center' }}>
+            Then press <kbd style={{ background: '#21262d', padding: '1px 5px', borderRadius: 3, color: '#8b949e', fontSize: 10 }}>Ctrl+V</kbd> inside the remote desktop to paste
+          </div>
         </div>
       )}
 
