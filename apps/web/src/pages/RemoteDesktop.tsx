@@ -140,7 +140,11 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           // Sync local clipboard → remote on canvas focus/click (requires HTTPS)
           const syncClipboardToRemote = () => {
             navigator.clipboard?.readText?.().then(text => {
-              if (text) client.setClipboard(new Blob([text], { type: 'text/plain' }))
+              if (!text) return
+              const stream = client.createClipboardStream('text/plain')
+              const writer = new Guacamole.StringWriter(stream)
+              writer.sendText(text)
+              writer.sendEnd()
             }).catch(() => {})
           }
           canvasRef.current.addEventListener('focus', syncClipboardToRemote)
