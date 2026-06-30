@@ -27,6 +27,7 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
   const canvasRef    = useRef<HTMLDivElement>(null)
   const clientRef    = useRef<Guacamole.Client | null>(null)
   const keyboardRef  = useRef<Guacamole.Keyboard | null>(null)
+  const rdpFocused   = useRef(false)
 
   const [state,         setState]        = useState<ConnState>('idle')
   const [error,         setError]        = useState('')
@@ -127,14 +128,18 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
 
       // Hoisted so both 'connected' and 'disconnected' branches can reference it
       const onDocPaste = (e: ClipboardEvent) => {
-        if (document.activeElement !== canvasRef.current) return
+        if (!rdpFocused.current || !clientRef.current) return
         const text = e.clipboardData?.getData('text/plain') || ''
-        if (!text || !clientRef.current) return
+        if (!text) return
         e.preventDefault()
+        // Reset keyboard to cancel the concurrent Ctrl+V the keyboard handler already sent
+        keyboardRef.current?.reset()
+        // Send text to remote clipboard
         const stream = (clientRef.current as any).createClipboardStream('text/plain')
         const writer = new (Guacamole as any).StringWriter(stream)
         writer.sendText(text)
         writer.sendEnd()
+        // Wait for clipboard to reach remote, then send Ctrl+V
         setTimeout(() => {
           const c = clientRef.current
           if (!c) return
@@ -142,7 +147,8 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           c.sendKeyEvent(1, 0x76)
           c.sendKeyEvent(0, 0x76)
           c.sendKeyEvent(0, 0xFFE3)
-        }, 150)
+          canvasRef.current?.focus()
+        }, 300)
       }
 
       client.onstatechange = (s: number) => {
@@ -159,6 +165,9 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           kb.onkeyup  = (k) => { client.sendKeyEvent(0, k) }
           keyboardRef.current = kb
           canvasRef.current.focus()
+          rdpFocused.current = true
+          canvasRef.current.addEventListener('focus', () => { rdpFocused.current = true })
+          canvasRef.current.addEventListener('blur', () => { rdpFocused.current = false })
 
           // Listen for paste on document (paste event doesn't fire on non-editable divs)
           const guacClient = client as any
@@ -196,6 +205,7 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           keyboardRef.current?.reset()
           keyboardRef.current = null
           clientRef.current = null
+          rdpFocused.current = false
           document.removeEventListener('paste', onDocPaste)
           setShowForm(true)
         }
@@ -418,23 +428,23 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
             onPaste={(e) => {
               e.preventDefault()
               const text = e.clipboardData.getData('text/plain')
+              setShowPasteBox(false)
               if (text && clientRef.current) {
                 const stream = (clientRef.current as any).createClipboardStream('text/plain')
                 const writer = new (Guacamole as any).StringWriter(stream)
                 writer.sendText(text)
                 writer.sendEnd()
-                // After clipboard is set, send Ctrl+V to remote so it pastes automatically
                 setTimeout(() => {
                   const c = clientRef.current
                   if (!c) return
-                  c.sendKeyEvent(1, 0xFFE3) // Ctrl down
-                  c.sendKeyEvent(1, 0x76)   // V down
-                  c.sendKeyEvent(0, 0x76)   // V up
-                  c.sendKeyEvent(0, 0xFFE3) // Ctrl up
-                }, 200)
+                  c.sendKeyEvent(1, 0xFFE3)
+                  c.sendKeyEvent(1, 0x76)
+                  c.sendKeyEvent(0, 0x76)
+                  c.sendKeyEvent(0, 0xFFE3)
+                  rdpFocused.current = true
+                  canvasRef.current?.focus()
+                }, 300)
               }
-              setShowPasteBox(false)
-              setTimeout(() => canvasRef.current?.focus(), 50)
             }}
             onKeyDown={(e) => { if (e.key === 'Escape') { setShowPasteBox(false); canvasRef.current?.focus() } }}
           />
