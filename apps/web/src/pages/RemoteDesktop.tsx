@@ -138,19 +138,21 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           keyboardRef.current = kb
           canvasRef.current.focus()
 
-          // Sync local clipboard → remote on canvas focus/click (requires HTTPS)
+          // Intercept Ctrl+V paste event on canvas — no permission popup
           const guacClient = client as any
-          const syncClipboardToRemote = () => {
-            navigator.clipboard?.readText?.().then(text => {
-              if (!text) return
-              const stream = guacClient.createClipboardStream('text/plain')
-              const writer = new (Guacamole as any).StringWriter(stream)
-              writer.sendText(text)
-              writer.sendEnd()
-            }).catch(() => {})
+          const sendTextToRdp = (text: string) => {
+            if (!text) return
+            const stream = guacClient.createClipboardStream('text/plain')
+            const writer = new (Guacamole as any).StringWriter(stream)
+            writer.sendText(text)
+            writer.sendEnd()
           }
-          canvasRef.current.addEventListener('focus', syncClipboardToRemote)
-          canvasRef.current.addEventListener('click', syncClipboardToRemote)
+          const onPaste = (e: ClipboardEvent) => {
+            const text = e.clipboardData?.getData('text/plain') || ''
+            if (text) sendTextToRdp(text)
+            // Don't preventDefault — let Ctrl+V keystrokes through so remote pastes
+          }
+          canvasRef.current.addEventListener('paste', onPaste)
 
           // Sync remote clipboard → local
           guacClient.onclipboard = (stream: any, mimetype: string) => {
@@ -272,21 +274,25 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           <>
             <button onClick={() => setShowSharePanel(!showSharePanel)} style={btn(showSharePanel ? '#8b5cf6' : '#4c1d95')} title="Show/hide shared files & commands">📦 Share</button>
             <button
-              title="Paste clipboard text into RDP"
+              title="Paste clipboard text into RDP (Ctrl+V)"
               onClick={() => {
                 if (!clientRef.current) return
-                navigator.clipboard.readText().then(text => {
-                  if (!text) return
+                // Use a hidden textarea to capture paste without permission popup
+                const ta = document.createElement('textarea')
+                ta.style.cssText = 'position:fixed;top:-999px;left:-999px;opacity:0'
+                document.body.appendChild(ta)
+                ta.focus()
+                ta.addEventListener('paste', (e) => {
+                  const text = e.clipboardData?.getData('text/plain') || ''
+                  document.body.removeChild(ta)
+                  if (!text || !clientRef.current) return
                   const stream = (clientRef.current as any).createClipboardStream('text/plain')
                   const writer = new (Guacamole as any).StringWriter(stream)
                   writer.sendText(text)
                   writer.sendEnd()
                   canvasRef.current?.focus()
-                }).catch(() => {
-                  // Fallback: open clipboard tab in share panel
-                  setShowSharePanel(true)
-                  setShareTab('clipboard')
-                })
+                }, { once: true })
+                document.execCommand('paste')
               }}
               style={btn('#0f766e')}
             >📋 Paste</button>
