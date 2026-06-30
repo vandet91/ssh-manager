@@ -125,6 +125,26 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
       }
 
 
+      // Hoisted so both 'connected' and 'disconnected' branches can reference it
+      const onDocPaste = (e: ClipboardEvent) => {
+        if (document.activeElement !== canvasRef.current) return
+        const text = e.clipboardData?.getData('text/plain') || ''
+        if (!text || !clientRef.current) return
+        e.preventDefault()
+        const stream = (clientRef.current as any).createClipboardStream('text/plain')
+        const writer = new (Guacamole as any).StringWriter(stream)
+        writer.sendText(text)
+        writer.sendEnd()
+        setTimeout(() => {
+          const c = clientRef.current
+          if (!c) return
+          c.sendKeyEvent(1, 0xFFE3)
+          c.sendKeyEvent(1, 0x76)
+          c.sendKeyEvent(0, 0x76)
+          c.sendKeyEvent(0, 0xFFE3)
+        }, 150)
+      }
+
       client.onstatechange = (s: number) => {
         const mapped = STATE_LABELS[s] ?? 'connecting'
         setState(mapped)
@@ -140,21 +160,9 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           keyboardRef.current = kb
           canvasRef.current.focus()
 
-          // Intercept Ctrl+V paste event on canvas — no permission popup
+          // Listen for paste on document (paste event doesn't fire on non-editable divs)
           const guacClient = client as any
-          const sendTextToRdp = (text: string) => {
-            if (!text) return
-            const stream = guacClient.createClipboardStream('text/plain')
-            const writer = new (Guacamole as any).StringWriter(stream)
-            writer.sendText(text)
-            writer.sendEnd()
-          }
-          const onPaste = (e: ClipboardEvent) => {
-            const text = e.clipboardData?.getData('text/plain') || ''
-            if (text) sendTextToRdp(text)
-            // Don't preventDefault — let Ctrl+V keystrokes through so remote pastes
-          }
-          canvasRef.current.addEventListener('paste', onPaste)
+          document.addEventListener('paste', onDocPaste)
 
           // Sync remote clipboard → local
           guacClient.onclipboard = (stream: any, mimetype: string) => {
@@ -188,6 +196,7 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           keyboardRef.current?.reset()
           keyboardRef.current = null
           clientRef.current = null
+          document.removeEventListener('paste', onDocPaste)
           setShowForm(true)
         }
       }
