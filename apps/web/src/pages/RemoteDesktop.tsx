@@ -155,11 +155,19 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
         const mapped = STATE_LABELS[s] ?? 'connecting'
         setState(mapped)
         if (mapped === 'connected' && canvasRef.current) {
+          // Intercept Ctrl+V BEFORE Guacamole keyboard using capture phase.
+          // Guacamole calls preventDefault() on keydown which suppresses the paste event.
+          // By stopping propagation first, Guacamole never sees Ctrl+V and the browser
+          // fires the paste event naturally on the document.
+          const onCtrlVCapture = (e: KeyboardEvent) => {
+            if (e.ctrlKey && (e.key === 'v' || e.key === 'V')) {
+              e.stopImmediatePropagation() // Guacamole won't see this keydown
+              // Do NOT preventDefault — lets paste event fire naturally
+            }
+          }
+          canvasRef.current.addEventListener('keydown', onCtrlVCapture, { capture: true })
+
           // Attach keyboard ONLY to the canvas div (not document).
-          // The share panel uses onMouseDown preventDefault to keep canvas focus
-          // when buttons/scroll areas are clicked. The search input explicitly
-          // calls .focus() on itself so it can still receive keystrokes.
-          // This way keyboard input NEVER leaks between the two contexts.
           const kb = new Guacamole.Keyboard(canvasRef.current)
           kb.onkeydown = (k) => { client.sendKeyEvent(1, k) }
           kb.onkeyup  = (k) => { client.sendKeyEvent(0, k) }
