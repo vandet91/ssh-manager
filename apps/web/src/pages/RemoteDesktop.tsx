@@ -35,7 +35,7 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
   const [credentials,   setCredentials]  = useState<RdpCredential[]>([])
   const [shareItems,    setShareItems]   = useState<ShareItem[]>([])
   const [showSharePanel, setShowSharePanel] = useState(false)
-  const [shareTab, setShareTab] = useState<'items' | 'commands'>('items')
+  const [shareTab, setShareTab] = useState<'items' | 'commands' | 'clipboard'>('items')
   const [winCmds, setWinCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
   const [cmdCategory, setCmdCategory] = useState('All')
   const [cmdSearch, setCmdSearch] = useState('')
@@ -139,11 +139,12 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           canvasRef.current.focus()
 
           // Sync local clipboard → remote on canvas focus/click (requires HTTPS)
+          const guacClient = client as any
           const syncClipboardToRemote = () => {
             navigator.clipboard?.readText?.().then(text => {
               if (!text) return
-              const stream = client.createClipboardStream('text/plain')
-              const writer = new Guacamole.StringWriter(stream)
+              const stream = guacClient.createClipboardStream('text/plain')
+              const writer = new (Guacamole as any).StringWriter(stream)
               writer.sendText(text)
               writer.sendEnd()
             }).catch(() => {})
@@ -152,9 +153,9 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           canvasRef.current.addEventListener('click', syncClipboardToRemote)
 
           // Sync remote clipboard → local
-          client.onclipboard = (stream: Guacamole.InputStream, mimetype: string) => {
+          guacClient.onclipboard = (stream: any, mimetype: string) => {
             if (!mimetype.startsWith('text/')) return
-            const reader = new Guacamole.StringReader(stream)
+            const reader = new (Guacamole as any).StringReader(stream)
             let text = ''
             reader.ontext = (chunk: string) => { text += chunk }
             reader.onend = () => { navigator.clipboard?.writeText?.(text).catch(() => {}) }
@@ -276,8 +277,8 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
                 if (!clientRef.current) return
                 navigator.clipboard.readText().then(text => {
                   if (!text) return
-                  const stream = clientRef.current!.createClipboardStream('text/plain')
-                  const writer = new Guacamole.StringWriter(stream)
+                  const stream = (clientRef.current as any).createClipboardStream('text/plain')
+                  const writer = new (Guacamole as any).StringWriter(stream)
                   writer.sendText(text)
                   writer.sendEnd()
                   canvasRef.current?.focus()
@@ -475,8 +476,8 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
                   onClick={() => {
                     const text = clipboardText
                     if (!text || !clientRef.current) return
-                    const stream = clientRef.current.createClipboardStream('text/plain')
-                    const writer = new Guacamole.StringWriter(stream)
+                    const stream = (clientRef.current as any).createClipboardStream('text/plain')
+                    const writer = new (Guacamole as any).StringWriter(stream)
                     writer.sendText(text)
                     writer.sendEnd()
                     canvasRef.current?.focus()
