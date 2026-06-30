@@ -270,6 +270,25 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
         {state === 'connected' && (
           <>
             <button onClick={() => setShowSharePanel(!showSharePanel)} style={btn(showSharePanel ? '#8b5cf6' : '#4c1d95')} title="Show/hide shared files & commands">📦 Share</button>
+            <button
+              title="Paste clipboard text into RDP"
+              onClick={() => {
+                if (!clientRef.current) return
+                navigator.clipboard.readText().then(text => {
+                  if (!text) return
+                  const stream = clientRef.current!.createClipboardStream('text/plain')
+                  const writer = new Guacamole.StringWriter(stream)
+                  writer.sendText(text)
+                  writer.sendEnd()
+                  canvasRef.current?.focus()
+                }).catch(() => {
+                  // Fallback: open clipboard tab in share panel
+                  setShowSharePanel(true)
+                  setShareTab('clipboard')
+                })
+              }}
+              style={btn('#0f766e')}
+            >📋 Paste</button>
             <button onClick={disconnect} style={btn('#b91c1c')}>⏹ Disconnect</button>
             <button onClick={toggleFullscreen} style={btn('#374151')}>{isFullscreen ? '⊡ Exit Full' : '⊞ Full'}</button>
           </>
