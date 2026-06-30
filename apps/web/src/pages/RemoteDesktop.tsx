@@ -37,7 +37,8 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
   const [shareItems,    setShareItems]   = useState<ShareItem[]>([])
   const [showSharePanel, setShowSharePanel] = useState(false)
   const [shareTab, setShareTab] = useState<'items' | 'commands'>('items')
-  const [winCmds, setWinCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
+  const [allCmds, setAllCmds] = useState<{id:string,os:string,category:string,label:string,command:string,description:string}[]>([])
+  const [cmdOs, setCmdOs] = useState<'windows'|'linux'>('windows')
   const [cmdCategory, setCmdCategory] = useState('All')
   const [cmdSearch, setCmdSearch] = useState('')
   const [showPasteBox, setShowPasteBox] = useState(false)
@@ -63,10 +64,13 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
       .catch(() => {})
   }, [serverId])
 
-  // Load Windows commands when share panel opens on commands tab
+  // Load all commands when share panel opens on commands tab
   useEffect(() => {
-    if (showSharePanel && shareTab === 'commands' && winCmds.length === 0) {
-      api.get<typeof winCmds>('/commands?os=windows').then(setWinCmds).catch(() => {})
+    if (showSharePanel && shareTab === 'commands' && allCmds.length === 0) {
+      Promise.all([
+        api.get<typeof allCmds>('/commands?os=windows'),
+        api.get<typeof allCmds>('/commands?os=linux'),
+      ]).then(([win, linux]) => setAllCmds([...win, ...linux])).catch(() => {})
     }
   }, [showSharePanel, shareTab])
 
@@ -481,11 +485,12 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
         }}>
           {/* Tabs */}
           <div style={{ display: 'flex', borderBottom: '1px solid #30363d', flexShrink: 0 }}>
-            {([['items','📦 Shared',shareItems.length],['commands','🪟 Commands',winCmds.length]] as const).map(([key, label, count]) => (
+            {([['items','📦 Shared',shareItems.length],['commands','📋 Commands',allCmds.length]] as const).map(([key, label, count]) => (
               <button key={key} onClick={() => {
                 setShareTab(key)
-                if (key === 'commands' && winCmds.length === 0)
-                  api.get<typeof winCmds>('/commands?os=windows').then(setWinCmds).catch(() => {})
+                if (key === 'commands' && allCmds.length === 0)
+                  Promise.all([api.get<typeof allCmds>('/commands?os=windows'), api.get<typeof allCmds>('/commands?os=linux')])
+                    .then(([win, linux]) => setAllCmds([...win, ...linux])).catch(() => {})
               }} style={{
                 flex: 1, padding: '9px 4px', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
                 background: shareTab === key ? '#0d1117' : 'transparent',
@@ -497,15 +502,26 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
             ))}
           </div>
 
-          {/* Commands tab — search + category filter */}
+          {/* Commands tab — OS toggle + search + category filter */}
           {shareTab === 'commands' && (
             <div style={{ padding: '8px 10px', borderBottom: '1px solid #30363d', display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+              {/* OS toggle */}
+              <div style={{ display: 'flex', gap: 4 }}>
+                {(['windows','linux'] as const).map(os => (
+                  <button key={os} onClick={() => { setCmdOs(os); setCmdCategory('All') }} style={{
+                    flex: 1, padding: '4px', borderRadius: 5, border: '1px solid', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                    borderColor: cmdOs === os ? '#1f6feb' : '#30363d',
+                    background: cmdOs === os ? '#1f6feb' : 'transparent',
+                    color: cmdOs === os ? '#fff' : '#8b949e',
+                  }}>{os === 'windows' ? '🪟 Windows' : '🐧 Linux'}</button>
+                ))}
+              </div>
               <input value={cmdSearch} onChange={e => setCmdSearch(e.target.value)} placeholder="Search commands…"
                 onMouseDown={e => e.stopPropagation()}
                 onBlur={() => requestAnimationFrame(() => canvasRef.current?.focus())}
                 style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: '1px solid #30363d', background: '#0d1117', color: '#e6edf3', fontSize: 11, boxSizing: 'border-box' as const }} />
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' as const }}>
-                {['All', ...Array.from(new Set(winCmds.map(c => c.category))).sort()].map(cat => (
+                {['All', ...Array.from(new Set(allCmds.filter(c => c.os === cmdOs).map(c => c.category))).sort()].map(cat => (
                   <button key={cat} onClick={() => setCmdCategory(cat)} style={{
                     padding: '2px 8px', borderRadius: 999, border: '1px solid', fontSize: 10, cursor: 'pointer',
                     borderColor: cmdCategory === cat ? '#1f6feb' : '#30363d',
@@ -522,7 +538,8 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
 
             {/* ── Commands tab ── */}
             {shareTab === 'commands' && (() => {
-              const filtered = winCmds.filter(c =>
+              const filtered = allCmds.filter(c =>
+                c.os === cmdOs &&
                 (cmdCategory === 'All' || c.category === cmdCategory) &&
                 (!cmdSearch || c.label.toLowerCase().includes(cmdSearch.toLowerCase()) || c.command.toLowerCase().includes(cmdSearch.toLowerCase()))
               )
