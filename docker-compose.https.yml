@@ -32,7 +32,7 @@ services:
       timeout: 5s
       retries: 3
 
-  # Remove direct port exposure on the web container —
-  # all traffic must go through nginx-ssl
+  # Keep port 4004 exposed for direct HTTP access even when nginx-ssl is active
   web:
-    ports: !reset []
+    ports:
+      - "4004:4004"
