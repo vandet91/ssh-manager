@@ -407,16 +407,25 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
               resize: 'none', boxSizing: 'border-box', outline: '2px solid #1f6feb',
             }}
             onPaste={(e) => {
+              e.preventDefault()
               const text = e.clipboardData.getData('text/plain')
               if (text && clientRef.current) {
                 const stream = (clientRef.current as any).createClipboardStream('text/plain')
                 const writer = new (Guacamole as any).StringWriter(stream)
                 writer.sendText(text)
                 writer.sendEnd()
+                // After clipboard is set, send Ctrl+V to remote so it pastes automatically
+                setTimeout(() => {
+                  const c = clientRef.current
+                  if (!c) return
+                  c.sendKeyEvent(1, 0xFFE3) // Ctrl down
+                  c.sendKeyEvent(1, 0x76)   // V down
+                  c.sendKeyEvent(0, 0x76)   // V up
+                  c.sendKeyEvent(0, 0xFFE3) // Ctrl up
+                }, 200)
               }
               setShowPasteBox(false)
               setTimeout(() => canvasRef.current?.focus(), 50)
-              e.preventDefault()
             }}
             onKeyDown={(e) => { if (e.key === 'Escape') { setShowPasteBox(false); canvasRef.current?.focus() } }}
           />
