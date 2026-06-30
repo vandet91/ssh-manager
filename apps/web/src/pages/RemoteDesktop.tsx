@@ -39,6 +39,7 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
   const [winCmds, setWinCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
   const [cmdCategory, setCmdCategory] = useState('All')
   const [cmdSearch, setCmdSearch] = useState('')
+  const [clipboardText, setClipboardText] = useState('')
   const [form, setForm] = useState(() => ({
     credential_id: '',
     username: 'Administrator',
@@ -394,7 +395,7 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
         }}>
           {/* Tabs */}
           <div style={{ display: 'flex', borderBottom: '1px solid #30363d', flexShrink: 0 }}>
-            {([['items','📦 Shared',shareItems.length],['commands','🪟 Commands',winCmds.length]] as const).map(([key, label, count]) => (
+            {([['items','📦 Shared',shareItems.length],['commands','🪟 Commands',winCmds.length],['clipboard','📋 Clipboard',0]] as const).map(([key, label, count]) => (
               <button key={key} onClick={() => {
                 setShareTab(key)
                 if (key === 'commands' && winCmds.length === 0)
@@ -431,6 +432,50 @@ export default function RemoteDesktop({ serverId, serverName, hostname, onClose 
           )}
 
           <div style={{ flex: 1, overflow: 'auto', padding: 10 }}>
+
+            {/* ── Clipboard tab ── */}
+            {shareTab === 'clipboard' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <p style={{ fontSize: 11, color: '#8b949e', margin: 0 }}>
+                  Paste text here, then click <strong style={{ color: '#e6edf3' }}>Send to RDP</strong>. Works on HTTP and HTTPS.
+                </p>
+                <textarea
+                  value={clipboardText}
+                  onChange={e => setClipboardText(e.target.value)}
+                  onMouseDown={e => e.stopPropagation()}
+                  placeholder="Paste your text here (Ctrl+V)…"
+                  rows={8}
+                  style={{
+                    width: '100%', padding: '8px 10px', borderRadius: 6,
+                    border: '1px solid #30363d', background: '#0d1117',
+                    color: '#e6edf3', fontSize: 12, fontFamily: 'monospace',
+                    resize: 'vertical', boxSizing: 'border-box',
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    const text = clipboardText
+                    if (!text || !clientRef.current) return
+                    const stream = clientRef.current.createClipboardStream('text/plain')
+                    const writer = new Guacamole.StringWriter(stream)
+                    writer.sendText(text)
+                    writer.sendEnd()
+                    canvasRef.current?.focus()
+                  }}
+                  style={{
+                    padding: '8px', borderRadius: 6, border: 'none',
+                    background: '#1f6feb', color: '#fff', fontSize: 12,
+                    fontWeight: 700, cursor: 'pointer',
+                  }}
+                >
+                  Send to RDP clipboard
+                </button>
+                <p style={{ fontSize: 10, color: '#6b7280', margin: 0 }}>
+                  After sending, press <strong>Ctrl+V</strong> inside the remote desktop to paste.
+                </p>
+              </div>
+            )}
+
             {/* ── Commands tab ── */}
             {shareTab === 'commands' && (() => {
               const filtered = winCmds.filter(c =>
