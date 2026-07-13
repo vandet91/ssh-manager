@@ -931,10 +931,6 @@ export default function Terminal() {
 
       {/* ── Terminal canvases + right panel ─────────────────────────────────── */}
       <div className="flex-1 flex" style={{ overflow: 'hidden', minHeight: 0 }}>
-        {/* Terminal canvas area — supports split view */}
-        <div className="flex-1 flex" style={{ overflow: 'hidden', minHeight: 0 }}>
-
-        {/* Primary pane */}
         <div ref={canvasWrapperRef} className="flex-1 relative" style={{ overflow: 'hidden', minHeight: 0 }}>
         {tabs.map((tab) => (
           <div
@@ -984,9 +980,6 @@ export default function Terminal() {
             />
           </div>
         ))}
-
-        </div>
-
 
         </div>
 
