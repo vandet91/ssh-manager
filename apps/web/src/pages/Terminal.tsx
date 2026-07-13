@@ -286,6 +286,7 @@ export default function Terminal() {
   const [tabs, setTabs] = useState<TabState[]>(() => [makeTab()])
   const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id)
   const [showCmdPanel, setShowCmdPanel] = useState(false)
+  const [showInfoPanel, setShowInfoPanel] = useState(true)
   const [linuxCmds, setLinuxCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
   const [winCmds, setWinCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
   const [cmdCat, setCmdCat] = useState('All')
@@ -836,10 +837,18 @@ export default function Terminal() {
                 <button
                   onClick={() => setShowCmdPanel(p => !p)}
                   className={`px-2.5 py-1 text-xs rounded transition-colors ${showCmdPanel ? 'bg-indigo-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white'}`}
-                  title="Linux command library">
+                  title="Command library">
                   📚 Commands
                 </button>
               </>
+            )}
+            {tab.connected && (
+              <button
+                onClick={() => { setShowInfoPanel(p => !p); setTimeout(() => { fitRefs.current[activeTabId]?.fit() }, 50) }}
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${showInfoPanel ? 'bg-gray-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white'}`}
+                title="Toggle info panel">
+                ▶▌
+              </button>
             )}
 
             {/* Upload destination path (when connected) */}
@@ -967,8 +976,8 @@ export default function Terminal() {
 
         </div>
 
-        {/* ── Right panel (always 300px — terminal never resizes) ── */}
-        {(() => {
+        {/* ── Right panel (collapsible) ── */}
+        {showInfoPanel && (() => {
           const isWin = activeServerOs === 'windows'
           const isConnected = activeTab?.connected
 
@@ -1125,3 +1134,4 @@ export default function Terminal() {
     </div>
   )
 }
+
