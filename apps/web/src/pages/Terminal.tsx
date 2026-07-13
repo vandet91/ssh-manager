@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -350,22 +350,13 @@ export default function Terminal() {
     api.get<typeof linuxNotes>('/share/list').then(all => setLinuxNotes(all.filter((x: any) => x.type === 'text' && x.device_type === (activeServerOs === 'windows' ? 'windows' : 'linux')))).catch(() => {})
   }, [showCmdPanel, activeServerOs])
 
-  // Fit + focus when switching tabs
-  useEffect(() => {
-    const id = activeTabId
-    setTimeout(() => {
-      fitRefs.current[id]?.fit()
-      xtermRefs.current[id]?.focus()
-    }, 50)
-  }, [activeTabId])
-
-  // Refit when the active tab connects — toolbar changes height at that moment
-  useEffect(() => {
-    if (!activeTab?.connected) return
-    const id = activeTabId
-    setTimeout(() => fitRefs.current[id]?.fit(), 100)
-    setTimeout(() => fitRefs.current[id]?.fit(), 300)
-  }, [activeTab?.connected, activeTabId])
+  // Refit synchronously after every render that changes tab or connection state.
+  // useLayoutEffect runs after DOM mutation but before paint, so the toolbar
+  // has already updated its height and canvasWrapperRef has the correct size.
+  useLayoutEffect(() => {
+    fitRefs.current[activeTabId]?.fit()
+    xtermRefs.current[activeTabId]?.focus()
+  }, [activeTabId, activeTab?.connected, activeTab?.connecting])
 
   // Global Ctrl+F for active tab search; Ctrl+W prevention when connected
   useEffect(() => {
@@ -580,8 +571,6 @@ export default function Terminal() {
           term.write(msg.data)
         } else if (msg.type === 'connected') {
           updateTab(tabId, { connected: true, connecting: false, status: `${msg.serverName} — ${msg.linuxUser}`, usedKey: msg.key_name ?? '' })
-          // Refit after connected — ensures correct size on slow Linux browsers
-          setTimeout(() => fitRefs.current[tabId]?.fit(), 100)
           // Start timer
           clearInterval(timerRefs.current[tabId])
           timerRefs.current[tabId] = setInterval(() => updateTab(tabId, (t) => ({ sessionSeconds: t.sessionSeconds + 1 })), 1000)
