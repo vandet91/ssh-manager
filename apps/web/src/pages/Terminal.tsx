@@ -540,12 +540,8 @@ export default function Terminal() {
     fitRefs.current[tabId]    = fitAddon
     searchRefs.current[tabId] = searchAddon
 
-    // Defer open() until after React re-renders the terminal div from display:none
-    // to display:block (triggered by connecting:true state update above).
-    // Without this, xterm initializes against a 0×0 hidden element and stays tiny.
-    setTimeout(() => {
-      const el = termRefs.current[tabId]
-      if (!el) return
+    const el = termRefs.current[tabId]
+    if (el) {
       el.innerHTML = ''
       term.open(el)
       fitAddon.fit()
@@ -554,7 +550,7 @@ export default function Terminal() {
         webgl.onContextLoss(() => webgl.dispose())
         term.loadAddon(webgl)
       } catch { /* canvas fallback */ }
-    }, 0)
+    }
 
     const singleCred = saList.length === 0 && credList.length === 1 ? credList[0] : null
     const linuxUser = tab.selectedUser || (saList.length === 1 ? saList[0].linux_user : '') || (singleCred?.linux_user ?? '')
@@ -956,20 +952,20 @@ export default function Terminal() {
               </div>
             )}
 
-            {/* Empty state */}
+            {/* Empty state — absolute overlay so terminal div stays in layout */}
             {!tab.connected && !tab.connecting && !tab.status && (
-              <div className="flex-1 flex flex-col items-center justify-center text-gray-600 text-sm gap-2">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600 text-sm gap-2 z-10">
                 <div className="text-3xl">⌨️</div>
                 <div>Select a server and click <span className="text-gray-500">Connect</span> to start a session.</div>
                 <div className="text-xs text-gray-700 mt-1">Drag &amp; drop a file onto the terminal to upload it via SFTP</div>
               </div>
             )}
 
-            {/* Terminal div */}
+            {/* Terminal div — always display:block so xterm can measure dimensions */}
             <div
               ref={(el) => { termRefs.current[tab.id] = el }}
               className="flex-1 overflow-hidden p-2"
-              style={{ display: tab.connected || tab.connecting || tab.status ? 'block' : 'none', minHeight: 0 }}
+              style={{ minHeight: 0 }}
               onDragOver={(e) => { e.preventDefault(); if (tab.connected) updateTab(tab.id, { dragOver: true }) }}
               onDragLeave={() => updateTab(tab.id, { dragOver: false })}
               onDrop={(e) => handleDrop(tab.id, e)}
