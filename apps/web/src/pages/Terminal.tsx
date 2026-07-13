@@ -540,9 +540,10 @@ export default function Terminal() {
     if (el) {
       el.innerHTML = ''
       term.open(el)
-      // Deferred fit: the terminal div is display:none until React re-renders
-      // (connecting state), so the immediate fit measures 0×0. Re-fit after paint.
+      // The terminal div is display:none until React re-renders; fit after multiple
+      // frames to handle slow rendering on Linux browsers.
       requestAnimationFrame(() => fitAddon.fit())
+      setTimeout(() => fitAddon.fit(), 150)
       try {
         const webgl = new WebglAddon()
         webgl.onContextLoss(() => webgl.dispose())
@@ -574,6 +575,8 @@ export default function Terminal() {
           term.write(msg.data)
         } else if (msg.type === 'connected') {
           updateTab(tabId, { connected: true, connecting: false, status: `${msg.serverName} — ${msg.linuxUser}`, usedKey: msg.key_name ?? '' })
+          // Refit after connected — ensures correct size on slow Linux browsers
+          setTimeout(() => fitRefs.current[tabId]?.fit(), 100)
           // Start timer
           clearInterval(timerRefs.current[tabId])
           timerRefs.current[tabId] = setInterval(() => updateTab(tabId, (t) => ({ sessionSeconds: t.sessionSeconds + 1 })), 1000)
