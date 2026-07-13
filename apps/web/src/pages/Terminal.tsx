@@ -234,6 +234,32 @@ function AsciiLogo({ distro, osType, customMap = {} }: {
 }
 const DEFAULT_FONT = 14
 
+// Selectable terminal fonts. The first six are loaded as webfonts in index.html;
+// the rest fall back to whatever is installed on the OS (Cascadia/Consolas on
+// Windows, Menlo on macOS).
+const FONT_OPTIONS: { label: string; stack: string }[] = [
+  { label: 'JetBrains Mono', stack: '"JetBrains Mono", monospace' },
+  { label: 'Fira Code',      stack: '"Fira Code", monospace' },
+  { label: 'Source Code Pro', stack: '"Source Code Pro", monospace' },
+  { label: 'IBM Plex Mono',  stack: '"IBM Plex Mono", monospace' },
+  { label: 'Roboto Mono',    stack: '"Roboto Mono", monospace' },
+  { label: 'Ubuntu Mono',    stack: '"Ubuntu Mono", monospace' },
+  { label: 'Cascadia Code',  stack: '"Cascadia Code", "Cascadia Mono", monospace' },
+  { label: 'Consolas',       stack: 'Consolas, monospace' },
+  { label: 'System Mono',    stack: 'monospace' },
+]
+const DEFAULT_FONT_FAMILY = FONT_OPTIONS[0].stack
+
+// Persist the chosen font/size so new tabs and sessions remember the preference.
+const FONT_FAMILY_KEY = 'terminal.fontFamily'
+const FONT_SIZE_KEY = 'terminal.fontSize'
+const loadFontFamily = () => {
+  try { return localStorage.getItem(FONT_FAMILY_KEY) || DEFAULT_FONT_FAMILY } catch { return DEFAULT_FONT_FAMILY }
+}
+const loadFontSize = () => {
+  try { const n = parseInt(localStorage.getItem(FONT_SIZE_KEY) || ''); return Number.isFinite(n) && n > 0 ? n : DEFAULT_FONT } catch { return DEFAULT_FONT }
+}
+
 // ── Per-tab state ────────────────────────────────────────────────────────────
 type TabState = {
   id: string
@@ -250,6 +276,7 @@ type TabState = {
   searchCase: boolean
   searchRegex: boolean
   fontSize: number
+  fontFamily: string
   dragOver: boolean
   uploading: boolean
   uploadMsg: string
@@ -271,7 +298,8 @@ function makeTab(): TabState {
     searchQuery: '',
     searchCase: false,
     searchRegex: false,
-    fontSize: DEFAULT_FONT,
+    fontSize: loadFontSize(),
+    fontFamily: loadFontFamily(),
     dragOver: false,
     uploading: false,
     uploadMsg: '',
@@ -525,7 +553,7 @@ export default function Terminal() {
         brightYellow: '#fde68a', brightBlue: '#93c5fd', brightMagenta: '#d8b4fe',
         brightCyan: '#67e8f9', brightWhite: '#f9fafb',
       },
-      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
+      fontFamily: tab.fontFamily || DEFAULT_FONT_FAMILY,
       fontSize: tab.fontSize,
       fontWeight: '400',
       lineHeight: 1.2,
@@ -695,9 +723,24 @@ export default function Terminal() {
   const applyFontSize = (tabId: string, size: number) => {
     const clamped = Math.max(MIN_FONT, Math.min(MAX_FONT, size))
     updateTab(tabId, { fontSize: clamped })
+    try { localStorage.setItem(FONT_SIZE_KEY, String(clamped)) } catch { /* ignore */ }
     if (xtermRefs.current[tabId]) {
       xtermRefs.current[tabId].options.fontSize = clamped
-      fitRefs.current[tabId]?.fit()
+      fitPushRefs.current[tabId]?.()
+    }
+  }
+
+  const applyFontFamily = (tabId: string, stack: string) => {
+    updateTab(tabId, { fontFamily: stack })
+    try { localStorage.setItem(FONT_FAMILY_KEY, stack) } catch { /* ignore */ }
+    const term = xtermRefs.current[tabId]
+    if (term) {
+      term.options.fontFamily = stack
+      // Wait for the webfont to be ready before re-fitting: the new font changes
+      // the cell size, and fitting with stale metrics would mis-size the PTY.
+      const refit = () => fitPushRefs.current[tabId]?.()
+      document.fonts?.ready.then(refit)
+      refit()
     }
   }
 
@@ -867,6 +910,18 @@ export default function Terminal() {
             )}
 
             <div className="w-px h-5 bg-gray-700 mx-1 hidden sm:block" />
+
+            {/* Font family */}
+            <select
+              value={tab.fontFamily}
+              onChange={(e) => applyFontFamily(tab.id, e.target.value)}
+              title="Terminal font"
+              className="h-6 px-1.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600 focus:outline-none focus:border-indigo-500 cursor-pointer max-w-[130px]"
+            >
+              {FONT_OPTIONS.map((f) => (
+                <option key={f.stack} value={f.stack} style={{ fontFamily: f.stack }}>{f.label}</option>
+              ))}
+            </select>
 
             {/* Font size */}
             <div className="flex items-center gap-1">

@@ -236,7 +236,7 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
     if(prevServerRef.current===serverId)return
     const isMount = prevServerRef.current===''
     prevServerRef.current=serverId
-    if(!serverId){setEntries([]);if(!isMount)setOpenFile(null);return}
+    if(!serverId){setEntries([]);if(!isMount){setCurPath('/');setOpenFile(null);setContent('');setFileMeta(null);setIsBinary(false);setReadError('')}return}
     if(isMount){
       // On mount with a restored serverId: load the saved directory, then restore open file
       loadDir(serverId, curPath).then(()=>{
