@@ -379,8 +379,8 @@ export default function Terminal() {
       }
       if (e.key === 'Escape') updateTab(activeTabId, { showSearch: false })
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [activeTabId, tabs])
 
   // ── Tab helpers ─────────────────────────────────────────────────────────────
@@ -540,7 +540,9 @@ export default function Terminal() {
     if (el) {
       el.innerHTML = ''
       term.open(el)
-      fitAddon.fit()
+      // Deferred fit: the terminal div is display:none until React re-renders
+      // (connecting state), so the immediate fit measures 0×0. Re-fit after paint.
+      requestAnimationFrame(() => fitAddon.fit())
       try {
         const webgl = new WebglAddon()
         webgl.onContextLoss(() => webgl.dispose())
