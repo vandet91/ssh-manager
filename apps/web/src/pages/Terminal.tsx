@@ -305,6 +305,8 @@ export default function Terminal() {
   const searchRefs  = useRef<Record<string, SearchAddon>>({})
   const timerRefs   = useRef<Record<string, ReturnType<typeof setInterval>>>({})
   const searchInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const roRefs      = useRef<Record<string, ResizeObserver>>({})
+  const fitPushRefs = useRef<Record<string, () => void>>({})
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null)
 
 
@@ -354,18 +356,9 @@ export default function Terminal() {
   // useLayoutEffect runs after DOM mutation but before paint, so the toolbar
   // has already updated its height and canvasWrapperRef has the correct size.
   useLayoutEffect(() => {
-    const el = termRefs.current[activeTabId]
     const fit = fitRefs.current[activeTabId]
     const term = xtermRefs.current[activeTabId]
-    console.log('[FIT] useLayoutEffect fired', {
-      tabId: activeTabId,
-      connecting: activeTab?.connecting,
-      connected: activeTab?.connected,
-      elH: el?.getBoundingClientRect().height,
-      elW: el?.getBoundingClientRect().width,
-    })
     fit?.fit()
-    console.log('[FIT] after fit', { rows: term?.rows, cols: term?.cols })
     term?.focus()
   }, [activeTabId, activeTab?.connected, activeTab?.connecting])
 
@@ -411,6 +404,7 @@ export default function Terminal() {
     // Disconnect if connected
     wsRefs.current[id]?.close()
     xtermRefs.current[id]?.dispose()
+    roRefs.current[id]?.disconnect()
     clearInterval(timerRefs.current[id])
     delete termRefs.current[id]
     delete xtermRefs.current[id]
@@ -418,6 +412,8 @@ export default function Terminal() {
     delete fitRefs.current[id]
     delete searchRefs.current[id]
     delete timerRefs.current[id]
+    delete roRefs.current[id]
+    delete fitPushRefs.current[id]
 
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== id)
@@ -554,12 +550,52 @@ export default function Terminal() {
     if (el) {
       el.innerHTML = ''
       term.open(el)
-      fitAddon.fit()
       try {
         const webgl = new WebglAddon()
         webgl.onContextLoss(() => webgl.dispose())
         term.loadAddon(webgl)
       } catch { /* canvas fallback */ }
+      // Fit the terminal AND explicitly push the resulting size to the server's
+      // PTY. We can't rely on term.onResize alone: it only fires when the size
+      // CHANGES, so if the size is already right locally but the server PTY is
+      // still 80x24, the server never learns — and full-screen apps like nano
+      // draw to the server's PTY size, so they render small. Pressing F12 (window
+      // resize) was masking this by forcing a change. Always send explicitly.
+      const fitAndPush = () => {
+        if (el.clientHeight <= 0 || el.clientWidth <= 0) return
+        fitAddon.fit()
+        const ws = wsRefs.current[tabId]
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        }
+      }
+
+      // Observe THIS terminal's own container so genuine later resizes (info-panel
+      // toggle, window resize, font settling) trigger a refit. The div height is
+      // fixed by flex, so fit() can't feed back into another resize.
+      roRefs.current[tabId]?.disconnect()
+      const ro = new ResizeObserver(() => requestAnimationFrame(fitAndPush))
+      ro.observe(el)
+      roRefs.current[tabId] = ro
+
+      // Initial fit is racy: xterm may not have measured its cell size yet, and
+      // the webfont (JetBrains Mono) loads asynchronously — a fit with the fallback
+      // font computes the wrong cell height. Re-fit until the result STABILIZES.
+      let lastCols = -1, lastRows = -1, stable = 0, attempts = 0, everFitted = false
+      const tryFit = () => {
+        const ready = el.clientHeight > 0 && el.clientWidth > 0
+        if (ready) { fitAndPush(); everFitted = true }
+        if (everFitted && term.cols === lastCols && term.rows === lastRows) stable++
+        else { stable = 0; lastCols = term.cols; lastRows = term.rows }
+        if ((everFitted && stable >= 3) || attempts++ >= 60) return
+        setTimeout(tryFit, 50)
+      }
+      requestAnimationFrame(tryFit)
+
+      // Belt-and-suspenders: fit again once fonts finish loading.
+      document.fonts?.ready.then(fitAndPush)
+      // …and once the server confirms the session (latest fully-settled moment).
+      fitPushRefs.current[tabId] = fitAndPush
     }
 
     const singleCred = saList.length === 0 && credList.length === 1 ? credList[0] : null
@@ -582,6 +618,11 @@ export default function Terminal() {
           term.write(msg.data)
         } else if (msg.type === 'connected') {
           updateTab(tabId, { connected: true, connecting: false, status: `${msg.serverName} — ${msg.linuxUser}`, usedKey: msg.key_name ?? '' })
+          // Session is fully up — fit and push the size to the PTY now, plus once
+          // more after the connected-state re-render settles the layout.
+          fitPushRefs.current[tabId]?.()
+          requestAnimationFrame(() => fitPushRefs.current[tabId]?.())
+          setTimeout(() => fitPushRefs.current[tabId]?.(), 100)
           // Start timer
           clearInterval(timerRefs.current[tabId])
           timerRefs.current[tabId] = setInterval(() => updateTab(tabId, (t) => ({ sessionSeconds: t.sessionSeconds + 1 })), 1000)
@@ -645,6 +686,8 @@ export default function Terminal() {
   const disconnect = (tabId: string) => {
     wsRefs.current[tabId]?.close()
     xtermRefs.current[tabId]?.dispose()
+    roRefs.current[tabId]?.disconnect()
+    delete roRefs.current[tabId]
     clearInterval(timerRefs.current[tabId])
     updateTab(tabId, { connected: false, connecting: false, status: '', usedKey: '', showSearch: false, sessionSeconds: 0 })
   }
