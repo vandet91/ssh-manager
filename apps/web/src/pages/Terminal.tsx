@@ -536,24 +536,25 @@ export default function Terminal() {
     term.loadAddon(new WebLinksAddon())
     term.loadAddon(new ClipboardAddon())
 
-    const el = termRefs.current[tabId]
-    if (el) {
+    xtermRefs.current[tabId]  = term
+    fitRefs.current[tabId]    = fitAddon
+    searchRefs.current[tabId] = searchAddon
+
+    // Defer open() until after React re-renders the terminal div from display:none
+    // to display:block (triggered by connecting:true state update above).
+    // Without this, xterm initializes against a 0×0 hidden element and stays tiny.
+    setTimeout(() => {
+      const el = termRefs.current[tabId]
+      if (!el) return
       el.innerHTML = ''
       term.open(el)
-      // The terminal div is display:none until React re-renders; fit after multiple
-      // frames to handle slow rendering on Linux browsers.
-      requestAnimationFrame(() => fitAddon.fit())
-      setTimeout(() => fitAddon.fit(), 150)
+      fitAddon.fit()
       try {
         const webgl = new WebglAddon()
         webgl.onContextLoss(() => webgl.dispose())
         term.loadAddon(webgl)
       } catch { /* canvas fallback */ }
-    }
-
-    xtermRefs.current[tabId]  = term
-    fitRefs.current[tabId]    = fitAddon
-    searchRefs.current[tabId] = searchAddon
+    }, 0)
 
     const singleCred = saList.length === 0 && credList.length === 1 ? credList[0] : null
     const linuxUser = tab.selectedUser || (saList.length === 1 ? saList[0].linux_user : '') || (singleCred?.linux_user ?? '')
