@@ -359,6 +359,14 @@ export default function Terminal() {
     }, 50)
   }, [activeTabId])
 
+  // Refit when the active tab connects — toolbar changes height at that moment
+  useEffect(() => {
+    if (!activeTab?.connected) return
+    const id = activeTabId
+    setTimeout(() => fitRefs.current[id]?.fit(), 100)
+    setTimeout(() => fitRefs.current[id]?.fit(), 300)
+  }, [activeTab?.connected, activeTabId])
+
   // Global Ctrl+F for active tab search; Ctrl+W prevention when connected
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
