@@ -929,7 +929,11 @@ export default function Terminal() {
           <div
             key={tab.id}
             className="absolute inset-0 flex flex-col"
-            style={{ display: tab.id === activeTabId ? 'flex' : 'none' }}
+            style={{
+              visibility: tab.id === activeTabId ? 'visible' : 'hidden',
+              pointerEvents: tab.id === activeTabId ? 'auto' : 'none',
+              zIndex: tab.id === activeTabId ? 1 : 0,
+            }}
           >
             {/* Drag-and-drop overlay */}
             {tab.dragOver && (
