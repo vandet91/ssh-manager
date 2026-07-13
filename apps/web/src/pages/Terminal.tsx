@@ -354,8 +354,19 @@ export default function Terminal() {
   // useLayoutEffect runs after DOM mutation but before paint, so the toolbar
   // has already updated its height and canvasWrapperRef has the correct size.
   useLayoutEffect(() => {
-    fitRefs.current[activeTabId]?.fit()
-    xtermRefs.current[activeTabId]?.focus()
+    const el = termRefs.current[activeTabId]
+    const fit = fitRefs.current[activeTabId]
+    const term = xtermRefs.current[activeTabId]
+    console.log('[FIT] useLayoutEffect fired', {
+      tabId: activeTabId,
+      connecting: activeTab?.connecting,
+      connected: activeTab?.connected,
+      elH: el?.getBoundingClientRect().height,
+      elW: el?.getBoundingClientRect().width,
+    })
+    fit?.fit()
+    console.log('[FIT] after fit', { rows: term?.rows, cols: term?.cols })
+    term?.focus()
   }, [activeTabId, activeTab?.connected, activeTab?.connecting])
 
   // Global Ctrl+F for active tab search; Ctrl+W prevention when connected
