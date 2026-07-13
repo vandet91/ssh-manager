@@ -307,6 +307,7 @@ export default function Terminal() {
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null)
 
 
+
   // ResizeObserver on the wrapper (not the xterm div) — avoids feedback loop
   useEffect(() => {
     const el = canvasWrapperRef.current
@@ -341,9 +342,9 @@ export default function Terminal() {
   useEffect(() => {
     if (!showCmdPanel) return
     if (activeServerOs === 'windows') {
-      if (winCmds.length === 0) api.get<typeof winCmds>('/commands?os=windows').then(setWinCmds).catch(() => {})
+      api.get<typeof winCmds>('/commands?os=windows').then(setWinCmds).catch(() => {})
     } else {
-      if (linuxCmds.length === 0) api.get<typeof linuxCmds>('/commands?os=linux').then(setLinuxCmds).catch(() => {})
+      api.get<typeof linuxCmds>('/commands?os=linux').then(setLinuxCmds).catch(() => {})
     }
     api.get<typeof linuxNotes>('/share/list').then(all => setLinuxNotes(all.filter((x: any) => x.type === 'text' && x.device_type === (activeServerOs === 'windows' ? 'windows' : 'linux')))).catch(() => {})
   }, [showCmdPanel, activeServerOs])
@@ -357,10 +358,15 @@ export default function Terminal() {
     }, 50)
   }, [activeTabId])
 
-  // Global Ctrl+F for active tab search
+  // Global Ctrl+F for active tab search; Ctrl+W prevention when connected
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tab = tabs.find((t) => t.id === activeTabId)
+      // Always block Ctrl+W closing the tab/window when a terminal is connected
+      if ((e.ctrlKey || e.metaKey) && e.key === 'w' && tab?.connected) {
+        e.preventDefault()
+        return
+      }
       if (!tab?.connected) return
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault()
@@ -906,7 +912,10 @@ export default function Terminal() {
 
       {/* ── Terminal canvases + right panel ─────────────────────────────────── */}
       <div className="flex-1 flex" style={{ overflow: 'hidden', minHeight: 0 }}>
-        {/* Terminal canvas — has its own xterm scrollbar */}
+        {/* Terminal canvas area — supports split view */}
+        <div className="flex-1 flex" style={{ overflow: 'hidden', minHeight: 0 }}>
+
+        {/* Primary pane */}
         <div ref={canvasWrapperRef} className="flex-1 relative" style={{ overflow: 'hidden', minHeight: 0 }}>
         {tabs.map((tab) => (
           <div
@@ -952,6 +961,9 @@ export default function Terminal() {
             />
           </div>
         ))}
+
+        </div>
+
 
         </div>
 
@@ -1110,15 +1122,6 @@ export default function Terminal() {
         })()}
       </div>
 
-      {/* ── Hint bar ─────────────────────────────────────────────────────────── */}
-      {activeTab?.connected && (
-        <div className="px-4 py-1 bg-gray-900/60 border-t border-gray-800 text-xs text-gray-700 flex gap-4 shrink-0">
-          <span>Ctrl+F — search</span>
-          <span>Right-click — paste</span>
-          <span>Select — copy</span>
-          <span>Drag file → terminal — upload via SFTP</span>
-        </div>
-      )}
     </div>
   )
 }

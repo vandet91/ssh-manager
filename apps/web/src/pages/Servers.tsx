@@ -1008,7 +1008,7 @@ export default function Servers() {
                 </td>
                 <td className="px-3 py-2 text-gray-300 font-mono text-xs" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.hostname}:{s.ssh_port}</td>
                 <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}><Badge label={({'production':'PROD','staging':'STG','development':'DEV','other':'OTHER'} as Record<string,string>)[s.environment] ?? s.environment} /></td>
-                <td className="px-3 py-2" style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                <td className="px-3 py-2" style={{ whiteSpace: 'nowrap' }}>
                   {s.os_type === 'windows'
                     ? s.windows_rdp_ready
                       ? <Badge label="RDP Ready" variant="ok" />

@@ -63,6 +63,13 @@ const card = {
   padding: '20px',
 } as const
 
+const fixedCard = {
+  ...card,
+  height: 440,
+  display: 'flex',
+  flexDirection: 'column',
+} as const
+
 // ── StatCard ──────────────────────────────────────────────────────────────────
 
 function StatCard({ icon, label, value, sub, color, onClick }: {
@@ -134,6 +141,7 @@ export default function Dashboard() {
   const [logs, setLogs]       = useState<AuditLog[]>([])
   const [certServers, setCertServers] = useState<Array<Server & { days_remaining: number | null }>>([])
   const [loading, setLoading] = useState(true)
+  const [recentPage, setRecentPage] = useState(0)
 
   useEffect(() => {
     if (!permLoaded) return
@@ -242,52 +250,54 @@ export default function Dashboard() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
 
         {/* Server overview */}
-        <div style={card}>
+        <div style={fixedCard}>
           <SectionHeader icon="🖥" title="Server Overview" action="View all" onAction={() => nav('/servers')} />
 
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>By Environment</div>
-            {Object.entries(envCounts).sort((a, b) => b[1] - a[1]).map(([env, cnt]) => (
-              <div key={env} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: ENV_COLOR[env] ?? '#6b7280', flexShrink: 0 }} />
-                <span style={{ fontSize: 12, color: 'var(--text-primary)', flex: 1, textTransform: 'capitalize' }}>{env}</span>
-                <span style={{ fontSize: 12, fontWeight: 700, color: ENV_COLOR[env] ?? '#6b7280', minWidth: 20, textAlign: 'right' }}>{cnt}</span>
-                <div style={{ width: 60, height: 4, background: 'var(--bg-panel-alt)', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', borderRadius: 2, background: ENV_COLOR[env] ?? '#6b7280', width: `${(cnt / activeServers.length) * 100}%` }} />
-                </div>
-              </div>
-            ))}
-            {activeServers.length === 0 && <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>No servers yet.</p>}
-          </div>
-
-          <div style={{ marginBottom: staleServers.length > 0 ? 14 : 0 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>By OS / Type</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {Object.entries(osCounts).map(([os, cnt]) => (
-                <span key={os} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'var(--bg-panel-alt)', color: 'var(--text-primary)', border: '1px solid var(--border-med)' }}>
-                  {OS_ICON[os] ?? '📦'} {os} <span style={{ color: 'var(--text-muted)', marginLeft: 2 }}>{cnt}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-
-          {staleServers.length > 0 && (
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>⚠ Not seen in 7+ days</div>
-              <div className="thin-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 100, overflowY: 'auto', paddingRight: 10 }}>
-                {staleServers.map(s => (
-                  <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                    <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
-                    <span style={{ color: '#f59e0b', flexShrink: 0, marginLeft: 8 }}>{timeAgo(s.last_connected_at)}</span>
+          <div className="thin-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 6 }}>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>By Environment</div>
+              {Object.entries(envCounts).sort((a, b) => b[1] - a[1]).map(([env, cnt]) => (
+                <div key={env} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: ENV_COLOR[env] ?? '#6b7280', flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: 'var(--text-primary)', flex: 1, textTransform: 'capitalize' }}>{env}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: ENV_COLOR[env] ?? '#6b7280', minWidth: 20, textAlign: 'right' }}>{cnt}</span>
+                  <div style={{ width: 60, height: 4, background: 'var(--bg-panel-alt)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', borderRadius: 2, background: ENV_COLOR[env] ?? '#6b7280', width: `${(cnt / activeServers.length) * 100}%` }} />
                   </div>
+                </div>
+              ))}
+              {activeServers.length === 0 && <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>No servers yet.</p>}
+            </div>
+
+            <div style={{ marginBottom: staleServers.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>By OS / Type</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {Object.entries(osCounts).map(([os, cnt]) => (
+                  <span key={os} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'var(--bg-panel-alt)', color: 'var(--text-primary)', border: '1px solid var(--border-med)' }}>
+                    {OS_ICON[os] ?? '📦'} {os} <span style={{ color: 'var(--text-muted)', marginLeft: 2 }}>{cnt}</span>
+                  </span>
                 ))}
               </div>
             </div>
-          )}
+
+            {staleServers.length > 0 && (
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>⚠ Not seen in 7+ days</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {staleServers.map(s => (
+                    <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                      <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                      <span style={{ color: '#f59e0b', flexShrink: 0, marginLeft: 8 }}>{timeAgo(s.last_connected_at)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Key rotation */}
-        <div style={card}>
+        <div style={fixedCard}>
           <SectionHeader icon="♻" title="Key Rotation" action="Manage" onAction={() => nav('/keys')} />
 
           {rotationAlerts > 0 && (
@@ -299,7 +309,7 @@ export default function Dashboard() {
           {activeKeys.length === 0 ? (
             <p style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '20px 0' }}>No SSH keys found.</p>
           ) : (
-            <div className="thin-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto', paddingRight: 10 }}>
+            <div className="thin-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 10 }}>
               {[...activeKeys]
                 .sort((a, b) => {
                   const aOver = a.next_rotation_at && new Date(a.next_rotation_at) < now ? -2 : 0
@@ -332,32 +342,49 @@ export default function Dashboard() {
         </div>
 
         {/* Recently connected */}
-        <div style={card}>
+        <div style={fixedCard}>
           <SectionHeader icon="🕐" title="Recently Connected" action="View all" onAction={() => nav('/servers')} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {[...activeServers]
-              .sort((a, b) => (b.last_connected_at ?? '').localeCompare(a.last_connected_at ?? ''))
-              .slice(0, 8)
-              .map(s => {
-                const stale = !s.last_connected_at || Date.now() - new Date(s.last_connected_at).getTime() > 86400000 * 7
-                return (
-                  <div key={s.id} onClick={() => nav('/servers')} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 7, background: 'var(--bg-panel-alt)', border: '1px solid var(--border-med)', cursor: 'pointer', transition: 'border-color 0.1s' }}
-                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-hex)'}
-                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-med)'}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: stale ? '#6b7280' : '#10b981', flexShrink: 0, boxShadow: stale ? 'none' : '0 0 6px #10b981' }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.hostname}</div>
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{timeAgo(s.last_connected_at)}</div>
-                      <div style={{ fontSize: 10, color: ENV_COLOR[s.environment] ?? '#6b7280', fontWeight: 600, textTransform: 'capitalize' }}>{s.environment}</div>
-                    </div>
+          {(() => {
+            const PAGE = 5
+            const sorted = [...activeServers].sort((a, b) => (b.last_connected_at ?? '').localeCompare(a.last_connected_at ?? ''))
+            const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE))
+            const page = Math.min(recentPage, totalPages - 1)
+            const slice = sorted.slice(page * PAGE, page * PAGE + PAGE)
+            return (
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                  {slice.map(s => {
+                    const stale = !s.last_connected_at || Date.now() - new Date(s.last_connected_at).getTime() > 86400000 * 7
+                    return (
+                      <div key={s.id} onClick={() => nav('/servers')} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 7, background: 'var(--bg-panel-alt)', border: '1px solid var(--border-med)', cursor: 'pointer', transition: 'border-color 0.1s' }}
+                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-hex)'}
+                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-med)'}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: stale ? '#6b7280' : '#10b981', flexShrink: 0, boxShadow: stale ? 'none' : '0 0 6px #10b981' }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.hostname}</div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{timeAgo(s.last_connected_at)}</div>
+                          <div style={{ fontSize: 10, color: ENV_COLOR[s.environment] ?? '#6b7280', fontWeight: 600, textTransform: 'capitalize' }}>{s.environment}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {activeServers.length === 0 && <p style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '20px 0' }}>No servers available.</p>}
+                </div>
+                {totalPages > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border-med)', flexShrink: 0 }}>
+                    <button onClick={() => setRecentPage(p => Math.max(0, p - 1))} disabled={page === 0}
+                      style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-panel-alt)', color: page === 0 ? 'var(--text-muted)' : 'var(--text-primary)', cursor: page === 0 ? 'default' : 'pointer' }}>← Prev</button>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{page + 1} / {totalPages}</span>
+                    <button onClick={() => setRecentPage(p => Math.min(totalPages - 1, p + 1))} disabled={page === totalPages - 1}
+                      style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: '1px solid var(--border-med)', background: 'var(--bg-panel-alt)', color: page === totalPages - 1 ? 'var(--text-muted)' : 'var(--text-primary)', cursor: page === totalPages - 1 ? 'default' : 'pointer' }}>Next →</button>
                   </div>
-                )
-              })}
-            {activeServers.length === 0 && <p style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '20px 0' }}>No servers available.</p>}
-          </div>
+                )}
+              </>
+            )
+          })()}
         </div>
       </div>
 

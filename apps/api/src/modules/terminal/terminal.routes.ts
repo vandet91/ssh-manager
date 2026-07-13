@@ -77,6 +77,8 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
             username: linuxUser,
             password,
             readyTimeout: 15000,
+            keepaliveInterval: 20000,
+            keepaliveCountMax: 5,
           })
         })
 
@@ -132,6 +134,7 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
               const msg: WsMessage = JSON.parse(String(rawMsg))
               if (msg.type === 'input') { resetIdle(); stream.write(msg.data) }
               else if (msg.type === 'resize') { cols = msg.cols; rows = msg.rows; stream.setWindow(rows, cols, 0, 0) }
+              else if (msg.type === 'ping') { resetIdle() }
             } catch { /* ignore */ }
           })
 
@@ -245,6 +248,7 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
               const msg: WsMessage = JSON.parse(String(rawMsg))
               if (msg.type === 'input') { resetIdle(); stream.write(msg.data) }
               else if (msg.type === 'resize') { cols = msg.cols; rows = msg.rows; stream.setWindow(rows, cols, 0, 0) }
+              else if (msg.type === 'ping') { resetIdle() }
             } catch { /* ignore */ }
           })
 
@@ -391,8 +395,9 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
             } else if (msg.type === 'resize') {
               cols = msg.cols; rows = msg.rows
               stream.setWindow(rows, cols, 0, 0)
+            } else if (msg.type === 'ping') {
+              resetIdle()
             }
-            // ping is just a no-op keep-alive
           } catch { /* ignore malformed */ }
         })
 
