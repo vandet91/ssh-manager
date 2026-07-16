@@ -387,7 +387,13 @@ export default function Settings() {
   const [aiError, setAiError] = useState('')
   const [showAiKeys, setShowAiKeys] = useState<Record<string, boolean>>({})
 
+  const [recordingEnabled, setRecordingEnabled] = useState(true)
+  const [recSaving, setRecSaving] = useState(false)
+
   useEffect(() => {
+    api.get<{ enabled: boolean }>('/settings/session-recording')
+      .then(r => setRecordingEnabled(r.enabled))
+      .catch(() => {})
     api.get<PasswordPolicy>('/settings/password-policy')
       .then(p => { setPolicy(p); setLoading(false) })
       .catch(() => setLoading(false))
@@ -404,6 +410,19 @@ export default function Settings() {
       .then(t => { setTotpActions(t.actions); setTotpElevationMinutes(t.elevationMinutes) })
       .catch(() => {})
   }, [])
+
+  const toggleRecording = async (enabled: boolean) => {
+    const prev = recordingEnabled
+    setRecordingEnabled(enabled)   // optimistic
+    setRecSaving(true)
+    try {
+      await api.put('/settings/session-recording', { enabled })
+    } catch {
+      setRecordingEnabled(prev)    // revert on failure
+    } finally {
+      setRecSaving(false)
+    }
+  }
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -553,6 +572,38 @@ export default function Settings() {
           </div>
 
         <form onSubmit={save}>
+          {/* ── Session Recording Card ───────────────────────────────── */}
+          <div style={{
+            background: 'var(--card-bg)',
+            border: '1px solid var(--card-border)',
+            borderRadius: 10,
+            overflow: 'hidden',
+            marginBottom: 24,
+          }}>
+            <div style={{
+              background: 'var(--card-header-bg)',
+              borderBottom: '1px solid var(--card-border)',
+              padding: '14px 20px',
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              <span style={{ fontSize: 16 }}>🎬</span>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-heading)' }}>Session Recording</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                  Record terminal sessions as asciinema casts for later playback
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: '20px' }}>
+              <Toggle
+                label={recSaving ? 'Saving…' : 'Record terminal sessions'}
+                hint="When off, new terminal sessions are not recorded. Existing recordings are kept."
+                checked={recordingEnabled}
+                onChange={toggleRecording}
+              />
+            </div>
+          </div>
+
           {/* ── Password Policy Card ─────────────────────────────────── */}
           <div style={{
             background: 'var(--card-bg)',

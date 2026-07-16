@@ -11,6 +11,7 @@ import { connectWithFallback } from '../../utils/ssh'
 import { withServerSsh } from '../../utils/server-ssh'
 import { config } from '../../config'
 import { writeAuditLog } from '../../utils/audit'
+import { isSessionRecordingEnabled } from '../settings/settings.routes'
 
 type WsMessage =
   | { type: 'input'; data: string }
@@ -22,6 +23,55 @@ type WsMessage =
 const CAST_STRIP_RE = /\x1b\[8;\d+;\d+t/g
 function stripForCast(text: string): string {
   return text.replace(CAST_STRIP_RE, '')
+}
+
+type Recorder = {
+  writeHeader: (cols: number, rows: number) => void
+  writeData: (text: string) => void
+  finish: () => void
+}
+
+// Builds a session recorder, or a no-op recorder when recording is disabled.
+// When disabled nothing is written to disk and no session_recordings row is
+// created, so the SSH stream is untouched.
+async function createRecorder(opts: {
+  enabled: boolean
+  userId: string
+  serverId: string
+  linuxUser: string
+  title: string
+  startTime: number
+}): Promise<Recorder> {
+  if (!opts.enabled) {
+    return { writeHeader: () => {}, writeData: () => {}, finish: () => {} }
+  }
+  const recordingId = crypto.randomUUID()
+  const castPath = path.join(config.RECORDINGS_STORAGE_PATH, `${recordingId}.cast`)
+  fs.mkdirSync(config.RECORDINGS_STORAGE_PATH, { recursive: true })
+  const castStream = fs.createWriteStream(castPath, { flags: 'a' })
+
+  const [recordRow] = await db.insertInto('session_recordings').values({
+    user_id: opts.userId, server_id: opts.serverId, linux_user: opts.linuxUser, cast_file_path: castPath,
+  }).returningAll().execute()
+
+  return {
+    writeHeader: (cols, rows) => {
+      castStream.write(JSON.stringify({ version: 2, width: cols, height: rows, timestamp: Math.floor(opts.startTime / 1000), title: opts.title }) + '\n')
+    },
+    writeData: (text) => {
+      const elapsed = ((Date.now() - opts.startTime) / 1000).toFixed(6)
+      castStream.write(JSON.stringify([Number(elapsed), 'o', stripForCast(text)]) + '\n')
+    },
+    finish: () => {
+      const duration = Math.floor((Date.now() - opts.startTime) / 1000)
+      castStream.end(async () => {
+        try {
+          const size = fs.statSync(castPath).size
+          await db.updateTable('session_recordings').set({ ended_at: new Date(), duration_s: duration, cast_size_bytes: size }).where('id', '=', recordRow.id).execute()
+        } catch { /* ignore */ }
+      })
+    },
+  }
 }
 
 async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
@@ -46,6 +96,7 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
       const { serverId } = z.object({ serverId: z.string().uuid() }).parse(req.params)
       const query = z.object({ linux_user: z.string().optional(), credential_id: z.string().uuid().optional() }).parse(req.query)
       const sessionUser = req.session.user
+      const recordingEnabled = await isSessionRecordingEnabled()
 
       // ── Password-based auth via server_credential ──────────────────────────
       if (query.credential_id) {
@@ -82,26 +133,18 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
           })
         })
 
-        const recordingId = crypto.randomUUID()
-        const castPath = path.join(config.RECORDINGS_STORAGE_PATH, `${recordingId}.cast`)
-        fs.mkdirSync(config.RECORDINGS_STORAGE_PATH, { recursive: true })
         const startTime = Date.now()
-        const castStream = fs.createWriteStream(castPath, { flags: 'a' })
         let cols = 80; let rows = 24
-
-        const writeHeader = () => {
-          castStream.write(JSON.stringify({ version: 2, width: cols, height: rows, timestamp: Math.floor(startTime / 1000), title: `${server.name} - ${linuxUser}` }) + '\n')
-        }
-
-        const [recordRow] = await db.insertInto('session_recordings').values({
-          user_id: sessionUser!.id, server_id: serverId, linux_user: linuxUser, cast_file_path: castPath,
-        }).returningAll().execute()
+        const recorder = await createRecorder({
+          enabled: recordingEnabled, userId: sessionUser!.id, serverId, linuxUser,
+          title: `${server.name} - ${linuxUser}`, startTime,
+        })
 
         await writeAuditLog({ userId: sessionUser!.id, userEmail: sessionUser!.email, action: 'terminal.session.started', serverId, request: req })
 
         sshClient.shell({ term: 'xterm-256color', cols, rows }, (err, stream) => {
           if (err) { send({ type: 'error', message: err.message }); sshClient.end(); return }
-          writeHeader()
+          recorder.writeHeader(cols, rows)
           send({ type: 'connected', serverName: server.name, linuxUser, key_name: 'password' })
 
           let idleTimer: NodeJS.Timeout | null = null
@@ -114,18 +157,13 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
           stream.on('data', (data: Buffer) => {
             const text = data.toString('utf8')
             send({ type: 'output', data: text })
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(6)
-            castStream.write(JSON.stringify([Number(elapsed), 'o', stripForCast(text)]) + '\n')
+            recorder.writeData(text)
           })
 
           stream.on('close', () => {
             if (idleTimer) clearTimeout(idleTimer)
             ws.close(); sshClient.end()
-            const duration = Math.floor((Date.now() - startTime) / 1000)
-            castStream.end(async () => {
-              const size = fs.statSync(castPath).size
-              await db.updateTable('session_recordings').set({ ended_at: new Date(), duration_s: duration, cast_size_bytes: size }).where('id', '=', recordRow.id).execute()
-            })
+            recorder.finish()
             writeAuditLog({ userId: sessionUser!.id, userEmail: sessionUser!.email, action: 'terminal.session.ended', serverId })
           })
 
@@ -196,26 +234,18 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
           send({ type: 'warning', message: `Management key failed — connected using fallback key "${usedKeyName}". Update the server's management key.`, key_name: usedKeyName })
         }
 
-        const recordingId = crypto.randomUUID()
-        const castPath = path.join(config.RECORDINGS_STORAGE_PATH, `${recordingId}.cast`)
-        fs.mkdirSync(config.RECORDINGS_STORAGE_PATH, { recursive: true })
         const startTime = Date.now()
-        const castStream = fs.createWriteStream(castPath, { flags: 'a' })
         let cols = 80; let rows = 24
-
-        const writeHeader = () => {
-          castStream.write(JSON.stringify({ version: 2, width: cols, height: rows, timestamp: Math.floor(startTime / 1000), title: `${server.name} - ${server.management_linux_user} (admin)` }) + '\n')
-        }
-
-        const [recordRow] = await db.insertInto('session_recordings').values({
-          user_id: sessionUser.id, server_id: serverId, linux_user: server.management_linux_user, cast_file_path: castPath,
-        }).returningAll().execute()
+        const recorder = await createRecorder({
+          enabled: recordingEnabled, userId: sessionUser.id, serverId, linuxUser: server.management_linux_user,
+          title: `${server.name} - ${server.management_linux_user} (admin)`, startTime,
+        })
 
         await writeAuditLog({ userId: sessionUser.id, userEmail: sessionUser.email, action: 'terminal.session.started', serverId, request: req })
 
         sshClient.shell({ term: 'xterm-256color', cols, rows }, (err, stream) => {
           if (err) { send({ type: 'error', message: err.message }); sshClient.end(); return }
-          writeHeader()
+          recorder.writeHeader(cols, rows)
           send({ type: 'connected', serverName: server.name, linuxUser: server.management_linux_user, key_name: usedKeyName })
 
           let idleTimer: NodeJS.Timeout | null = null
@@ -228,18 +258,13 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
           stream.on('data', (data: Buffer) => {
             const text = data.toString('utf8')
             send({ type: 'output', data: text })
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(6)
-            castStream.write(JSON.stringify([Number(elapsed), 'o', stripForCast(text)]) + '\n')
+            recorder.writeData(text)
           })
 
           stream.on('close', () => {
             if (idleTimer) clearTimeout(idleTimer)
             ws.close(); sshClient.end()
-            const duration = Math.floor((Date.now() - startTime) / 1000)
-            castStream.end(async () => {
-              const size = fs.statSync(castPath).size
-              await db.updateTable('session_recordings').set({ ended_at: new Date(), duration_s: duration, cast_size_bytes: size }).where('id', '=', recordRow.id).execute()
-            })
+            recorder.finish()
             writeAuditLog({ userId: sessionUser.id, userEmail: sessionUser.email, action: 'terminal.session.ended', serverId })
           })
 
@@ -316,26 +341,13 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
         send({ type: 'warning', message: `Primary key failed — connected using fallback key "${usedKeyName}". Consider rotating or revoking the failed key.`, key_name: usedKeyName })
       }
 
-      // Create recording
-      const recordingId = crypto.randomUUID()
-      const castPath = path.join(config.RECORDINGS_STORAGE_PATH, `${recordingId}.cast`)
-      fs.mkdirSync(config.RECORDINGS_STORAGE_PATH, { recursive: true })
-
+      // Create recording (no-op when session recording is disabled)
       const startTime = Date.now()
-      const castStream = fs.createWriteStream(castPath, { flags: 'a' })
       let cols = 80; let rows = 24
-
-      // Asciinema v2 header written after we know cols/rows (updated on first resize)
-      const writeHeader = () => {
-        castStream.write(JSON.stringify({ version: 2, width: cols, height: rows, timestamp: Math.floor(startTime / 1000), title: `${server.name} - ${linuxUser}` }) + '\n')
-      }
-
-      const [recordRow] = await db.insertInto('session_recordings').values({
-        user_id: sessionUser.id,
-        server_id: serverId,
-        linux_user: linuxUser,
-        cast_file_path: castPath,
-      }).returningAll().execute()
+      const recorder = await createRecorder({
+        enabled: recordingEnabled, userId: sessionUser.id, serverId, linuxUser,
+        title: `${server.name} - ${linuxUser}`, startTime,
+      })
 
       await writeAuditLog({ userId: sessionUser.id, userEmail: sessionUser.email, action: 'terminal.session.started', serverId, request: req })
 
@@ -346,7 +358,7 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
           return
         }
 
-        writeHeader()
+        recorder.writeHeader(cols, rows)
         send({ type: 'connected', serverName: server.name, linuxUser, key_name: usedKeyName })
 
         // Idle timeout
@@ -365,23 +377,14 @@ async function terminalRoutes(fastify: FastifyInstance): Promise<void> {
         stream.on('data', (data: Buffer) => {
           const text = data.toString('utf8')
           send({ type: 'output', data: text })
-          const elapsed = ((Date.now() - startTime) / 1000).toFixed(6)
-          castStream.write(JSON.stringify([Number(elapsed), 'o', stripForCast(text)]) + '\n')
+          recorder.writeData(text)
         })
 
         stream.on('close', () => {
           if (idleTimer) clearTimeout(idleTimer)
           ws.close()
           sshClient.end()
-          const duration = Math.floor((Date.now() - startTime) / 1000)
-          castStream.end(async () => {
-            const size = fs.statSync(castPath).size
-            await db.updateTable('session_recordings').set({
-              ended_at: new Date(),
-              duration_s: duration,
-              cast_size_bytes: size,
-            }).where('id', '=', recordRow.id).execute()
-          })
+          recorder.finish()
           writeAuditLog({ userId: sessionUser.id, userEmail: sessionUser.email, action: 'terminal.session.ended', serverId })
         })
 

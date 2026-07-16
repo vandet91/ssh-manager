@@ -74,6 +74,19 @@ export async function getPasswordPolicy(): Promise<PasswordPolicy> {
   }
 }
 
+// Global toggle for terminal session recording. Defaults to enabled.
+export async function isSessionRecordingEnabled(): Promise<boolean> {
+  try {
+    const row = await (db as any).selectFrom('settings').select('value')
+      .where('key', '=', 'session_recording_enabled').executeTakeFirst()
+    if (!row) return true
+    const v = typeof row.value === 'string' ? JSON.parse(row.value) : row.value
+    return v !== false
+  } catch {
+    return true
+  }
+}
+
 export function validatePassword(password: string, policy: PasswordPolicy): string | null {
   if (password.length < policy.min_length)
     return `Password must be at least ${policy.min_length} characters`
@@ -112,6 +125,27 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
       .execute()
     await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'settings.system_name.updated', resource: 'settings', details: { name: trimmed }, request: req })
     return { system_name: trimmed }
+  })
+
+  // GET /settings/session-recording — is terminal session recording enabled?
+  fastify.get('/settings/session-recording', { preHandler: [requireAuth, requireAdmin] }, async () => {
+    return { enabled: await isSessionRecordingEnabled() }
+  })
+
+  // PUT /settings/session-recording — admin toggle
+  fastify.put('/settings/session-recording', { preHandler: [requireAuth, requireAdmin] }, async (req) => {
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(req.body)
+    await (db as any)
+      .insertInto('settings')
+      .values({ key: 'session_recording_enabled', value: JSON.stringify(enabled), updated_at: new Date() })
+      .onConflict((oc: any) => oc.column('key').doUpdateSet({ value: JSON.stringify(enabled), updated_at: new Date() }))
+      .execute()
+    await writeAuditLog({
+      userId: req.session.user!.id, userEmail: req.session.user!.email,
+      action: 'settings.session_recording.updated', resource: 'settings',
+      details: { enabled }, request: req,
+    })
+    return { enabled }
   })
 
   // GET /settings/password-policy
