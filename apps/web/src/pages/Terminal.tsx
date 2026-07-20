@@ -314,7 +314,13 @@ export default function Terminal() {
   const [tabs, setTabs] = useState<TabState[]>(() => [makeTab()])
   const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id)
   const [showCmdPanel, setShowCmdPanel] = useState(false)
+  const [showAiPanel, setShowAiPanel] = useState(false)
   const [showInfoPanel, setShowInfoPanel] = useState(true)
+  const [assistantEnabled, setAssistantEnabled] = useState(false)
+  type AiMsg = { role: 'user' | 'assistant'; text: string; commands?: string[] }
+  const [aiMessages, setAiMessages] = useState<AiMsg[]>([])
+  const [aiInput, setAiInput] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
   const [linuxCmds, setLinuxCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
   const [winCmds, setWinCmds] = useState<{id:string,category:string,label:string,command:string,description:string}[]>([])
   const [cmdCat, setCmdCat] = useState('All')
@@ -379,6 +385,52 @@ export default function Terminal() {
     }
     api.get<typeof linuxNotes>('/share/list').then(all => setLinuxNotes(all.filter((x: any) => x.type === 'text' && x.device_type === (activeServerOs === 'windows' ? 'windows' : 'linux')))).catch(() => {})
   }, [showCmdPanel, activeServerOs])
+
+  // Is the AI Assistant feature enabled by the admin?
+  useEffect(() => {
+    api.get<{ assistant_enabled: boolean }>('/settings/ai-features')
+      .then(r => setAssistantEnabled(r.assistant_enabled)).catch(() => {})
+  }, [])
+
+  // Grab the last ~40 lines of the active terminal as context for the assistant.
+  const grabTerminalContext = (): string => {
+    const term = xtermRefs.current[activeTabId]
+    if (!term) return ''
+    const buf = term.buffer.active
+    const lines: string[] = []
+    const start = Math.max(0, buf.length - 40)
+    for (let i = start; i < buf.length; i++) {
+      lines.push(buf.getLine(i)?.translateToString(true) ?? '')
+    }
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  }
+
+  const askAssistant = async () => {
+    const q = aiInput.trim()
+    if (!q || aiLoading || !activeTab?.selectedServer) return
+    setAiInput('')
+    setAiMessages(prev => [...prev, { role: 'user', text: q }])
+    setAiLoading(true)
+    try {
+      const res = await api.post<{ answer: string; commands: string[] }>(
+        `/servers/${activeTab.selectedServer}/ai-assist`,
+        { question: q, os_type: activeServerOs || 'linux', context: grabTerminalContext() },
+      )
+      setAiMessages(prev => [...prev, { role: 'assistant', text: res.answer, commands: res.commands }])
+    } catch (err: any) {
+      setAiMessages(prev => [...prev, { role: 'assistant', text: `⚠ ${err?.message || 'AI request failed'}` }])
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const runAiCommand = (cmd: string) => {
+    const ws = wsRefs.current[activeTabId]
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    const hasPlaceholder = /<[^>]+>/.test(cmd)
+    ws.send(JSON.stringify({ type: 'input', data: hasPlaceholder ? cmd : cmd + '\n' }))
+    xtermRefs.current[activeTabId]?.focus()
+  }
 
   // Refit synchronously after every render that changes tab or connection state.
   // useLayoutEffect runs after DOM mutation but before paint, so the toolbar
@@ -943,11 +995,19 @@ export default function Terminal() {
                   🔍 Search
                 </button>
                 <button
-                  onClick={() => setShowCmdPanel(p => !p)}
+                  onClick={() => { setShowCmdPanel(p => !p); setShowAiPanel(false) }}
                   className={`px-2.5 py-1 text-xs rounded transition-colors ${showCmdPanel ? 'bg-indigo-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white'}`}
                   title="Command library">
                   📚 Commands
                 </button>
+                {assistantEnabled && (
+                  <button
+                    onClick={() => { const open = !showAiPanel; setShowAiPanel(open); setShowCmdPanel(false); if (open) setShowInfoPanel(true) }}
+                    className={`px-2.5 py-1 text-xs rounded transition-colors ${showAiPanel ? 'bg-indigo-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white'}`}
+                    title="AI assistant">
+                    🤖 AI
+                  </button>
+                )}
               </>
             )}
             {tab.connected && (
@@ -1086,12 +1146,75 @@ export default function Terminal() {
           const isWin = activeServerOs === 'windows'
           const isConnected = activeTab?.connected
 
+          // AI Assistant view (replaces the command panel — only one shows)
+          if (showAiPanel && isConnected) {
+            return (
+              <div style={{ width: 320, flexShrink: 0, height: '100%', background: '#111827', borderLeft: '1px solid #1f2937', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div style={{ padding: '8px 10px', borderBottom: '1px solid #1f2937', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: '#a5b4fc' }}>🤖 AI Assistant</span>
+                  {aiMessages.length > 0 && (
+                    <button onClick={() => setAiMessages([])} style={{ fontSize: 10, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer' }}>Clear</button>
+                  )}
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {aiMessages.length === 0 && (
+                    <div style={{ fontSize: 11, color: '#6b7280', padding: 8, lineHeight: 1.6 }}>
+                      Ask a question about this server or look up a command.<br/>
+                      <span style={{ color: '#4b5563' }}>e.g. “why is nginx failing to start?” or “command to list listening ports”</span>
+                    </div>
+                  )}
+                  {aiMessages.map((msg, i) => (
+                    <div key={i} style={{
+                      alignSelf: msg.role === 'user' ? 'flex-end' : 'stretch',
+                      maxWidth: msg.role === 'user' ? '85%' : '100%',
+                      background: msg.role === 'user' ? '#4f46e5' : '#1f2937',
+                      border: msg.role === 'user' ? 'none' : '1px solid #374151',
+                      borderRadius: 8, padding: '7px 9px',
+                    }}>
+                      <div style={{ fontSize: 11, color: msg.role === 'user' ? '#fff' : '#e5e7eb', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>{msg.text}</div>
+                      {msg.commands && msg.commands.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                          {msg.commands.map((cmd, j) => (
+                            <div key={j} style={{ background: '#0d1117', border: '1px solid #374151', borderRadius: 5, padding: '5px 7px' }}>
+                              <code style={{ display: 'block', fontSize: 10, color: '#93c5fd', fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 4 }}>{cmd}</code>
+                              <button onClick={() => runAiCommand(cmd)} style={{ width: '100%', padding: '3px', borderRadius: 4, border: 'none', background: '#4f46e5', color: '#fff', fontSize: 10, fontWeight: 600, cursor: 'pointer' }}>▶ Run</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {aiLoading && <div style={{ fontSize: 11, color: '#6b7280', padding: 4 }}>Thinking…</div>}
+                </div>
+                <div style={{ padding: 8, borderTop: '1px solid #1f2937', display: 'flex', gap: 4, flexShrink: 0 }}>
+                  <input
+                    value={aiInput}
+                    onChange={e => setAiInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askAssistant() } }}
+                    placeholder="Ask the AI…"
+                    disabled={aiLoading}
+                    style={{ flex: 1, padding: '6px 8px', borderRadius: 5, border: '1px solid #374151', background: '#1f2937', color: '#e5e7eb', fontSize: 11, boxSizing: 'border-box' as const }} />
+                  <button onClick={askAssistant} disabled={aiLoading || !aiInput.trim()}
+                    style={{ padding: '0 12px', borderRadius: 5, border: 'none', background: aiLoading || !aiInput.trim() ? '#374151' : '#4f46e5', color: '#fff', fontSize: 12, cursor: aiLoading || !aiInput.trim() ? 'default' : 'pointer' }}>➤</button>
+                </div>
+              </div>
+            )
+          }
+
           // Commands list view
           if (showCmdPanel && isConnected) {
             const cmds = isWin ? winCmds : linuxCmds
-            const cats = ['All', ...Array.from(new Set(cmds.map(c => c.category))).sort()]
+            // Normalize categories (trim + case-insensitive) so near-identical
+            // strings like "Network" and "Network " collapse into ONE chip and
+            // all their commands show together. Without this, added commands
+            // whose category differs by case/whitespace get hidden under a
+            // separate look-alike chip (they still appear under "All").
+            const normCat = (s: string) => s.trim().toLowerCase()
+            const cats = ['All', ...Array.from(
+              new Map(cmds.map(c => [normCat(c.category), c.category.trim()])).values()
+            ).sort((a, b) => a.localeCompare(b))]
             const filtered = cmds.filter(c =>
-              (cmdCat === 'All' || c.category === cmdCat) &&
+              (cmdCat === 'All' || normCat(c.category) === normCat(cmdCat)) &&
               (!cmdSearch || c.label.toLowerCase().includes(cmdSearch.toLowerCase()) || c.command.toLowerCase().includes(cmdSearch.toLowerCase()))
             )
             const sendCmd = (cmd: string) => {

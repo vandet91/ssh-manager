@@ -74,17 +74,30 @@ export async function getPasswordPolicy(): Promise<PasswordPolicy> {
   }
 }
 
-// Global toggle for terminal session recording. Defaults to enabled.
-export async function isSessionRecordingEnabled(): Promise<boolean> {
+// Generic boolean setting reader (defaults to true when unset).
+async function readBoolSetting(key: string): Promise<boolean> {
   try {
     const row = await (db as any).selectFrom('settings').select('value')
-      .where('key', '=', 'session_recording_enabled').executeTakeFirst()
+      .where('key', '=', key).executeTakeFirst()
     if (!row) return true
     const v = typeof row.value === 'string' ? JSON.parse(row.value) : row.value
     return v !== false
   } catch {
     return true
   }
+}
+
+// Global toggle for terminal session recording. Defaults to enabled.
+export async function isSessionRecordingEnabled(): Promise<boolean> {
+  return readBoolSetting('session_recording_enabled')
+}
+
+// AI feature toggles. Default enabled to preserve existing behavior.
+export async function isAiAnalystEnabled(): Promise<boolean> {
+  return readBoolSetting('ai_analyst_enabled')
+}
+export async function isAiAssistantEnabled(): Promise<boolean> {
+  return readBoolSetting('ai_assistant_enabled')
 }
 
 export function validatePassword(password: string, policy: PasswordPolicy): string | null {
@@ -146,6 +159,35 @@ async function settingsRoutes(fastify: FastifyInstance): Promise<void> {
       details: { enabled }, request: req,
     })
     return { enabled }
+  })
+
+  // GET /settings/ai-features — which AI features are enabled
+  fastify.get('/settings/ai-features', { preHandler: [requireAuth] }, async () => {
+    return {
+      analyst_enabled:   await isAiAnalystEnabled(),
+      assistant_enabled: await isAiAssistantEnabled(),
+    }
+  })
+
+  // PUT /settings/ai-features — admin toggle
+  fastify.put('/settings/ai-features', { preHandler: [requireAuth, requireAdmin] }, async (req) => {
+    const body = z.object({
+      analyst_enabled:   z.boolean(),
+      assistant_enabled: z.boolean(),
+    }).parse(req.body)
+    const upsert = async (key: string, value: unknown) => {
+      await (db as any).insertInto('settings')
+        .values({ key, value: JSON.stringify(value), updated_at: new Date() })
+        .onConflict((oc: any) => oc.column('key').doUpdateSet({ value: JSON.stringify(value), updated_at: new Date() }))
+        .execute()
+    }
+    await upsert('ai_analyst_enabled', body.analyst_enabled)
+    await upsert('ai_assistant_enabled', body.assistant_enabled)
+    await writeAuditLog({
+      userId: req.session.user!.id, userEmail: req.session.user!.email,
+      action: 'settings.ai_features.updated', resource: 'settings', details: body, request: req,
+    })
+    return body
   })
 
   // GET /settings/password-policy

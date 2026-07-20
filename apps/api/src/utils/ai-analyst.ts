@@ -1,6 +1,85 @@
 export type AnalysisType = 'health' | 'security' | 'performance' | 'errors' | 'custom'
 export type AiProvider = 'claude' | 'openai' | 'gemini' | 'deepseek'
 
+export interface AssistantReply {
+  answer: string       // markdown-ish plain text explanation
+  commands: string[]   // suggested shell commands the user can run
+}
+
+const ASSISTANT_SYSTEM_PROMPT = `You are an expert sysadmin assistant embedded in an SSH terminal tool.
+The user is connected to a server and needs quick help: looking up a command, or diagnosing a problem.
+Respond with ONLY a valid JSON object of this exact shape:
+{
+  "answer": "concise, practical explanation in plain text (may use simple markdown). Keep it short and directly useful.",
+  "commands": ["exact runnable command", "another if helpful"]
+}
+Rules:
+- Return ONLY valid JSON. No markdown code fences, no prose outside JSON.
+- Tailor every command to the given OS (Linux shell vs Windows PowerShell/cmd).
+- "commands" holds ready-to-run commands (use placeholders like <name> only when unavoidable). Empty array if none apply.
+- Be concise. Prefer the safest command that answers the question.`
+
+/**
+ * Free-form terminal assistant: answers a question and suggests commands.
+ * Reuses the same provider plumbing as the analyst but with a chat-style prompt.
+ */
+export async function askAssistant(
+  provider: AiProvider,
+  model: string,
+  apiKey: string,
+  question: string,
+  osType: string,
+  context: string,
+): Promise<AssistantReply> {
+  const os = osType === 'windows' ? 'Windows (PowerShell/cmd)' : 'Linux (bash)'
+  const ctx = context.trim() ? `\n\nRECENT TERMINAL OUTPUT (most recent last):\n${context.slice(-6000)}` : ''
+  const userPrompt = `SERVER OS: ${os}\n\nUSER QUESTION: ${question}${ctx}`
+
+  let rawText = ''
+  if (provider === 'claude') {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model, max_tokens: 1500, system: ASSISTANT_SYSTEM_PROMPT, messages: [{ role: 'user', content: userPrompt }] }),
+    })
+    if (!res.ok) throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`)
+    const data = await res.json() as any
+    rawText = data.content?.[0]?.text ?? ''
+  } else if (provider === 'openai' || provider === 'deepseek') {
+    const baseUrl = provider === 'deepseek' ? 'https://api.deepseek.com' : 'https://api.openai.com'
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, max_tokens: 1500, response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: ASSISTANT_SYSTEM_PROMPT }, { role: 'user', content: userPrompt }] }),
+    })
+    if (!res.ok) throw new Error(`${provider === 'deepseek' ? 'DeepSeek' : 'OpenAI'} API error ${res.status}: ${await res.text()}`)
+    const data = await res.json() as any
+    rawText = data.choices?.[0]?.message?.content ?? ''
+  } else if (provider === 'gemini') {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: `${ASSISTANT_SYSTEM_PROMPT}\n\n${userPrompt}` }] }],
+        generationConfig: { maxOutputTokens: 1500, responseMimeType: 'application/json' } }),
+    })
+    if (!res.ok) throw new Error(`Gemini API error ${res.status}: ${await res.text()}`)
+    const data = await res.json() as any
+    rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  }
+
+  rawText = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  try {
+    const parsed = JSON.parse(rawText)
+    return {
+      answer: typeof parsed.answer === 'string' ? parsed.answer : '',
+      commands: Array.isArray(parsed.commands) ? parsed.commands.filter((c: unknown) => typeof c === 'string') : [],
+    }
+  } catch {
+    // If the model didn't return JSON, treat the whole thing as the answer.
+    return { answer: rawText || 'No response from AI.', commands: [] }
+  }
+}
+
 export interface AnalysisIssue {
   severity: 'critical' | 'warning' | 'info'
   title: string

@@ -159,8 +159,8 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
         // Check size
         const { stdout: sizeOut } = await exec(client, `stat -c%s '${safe}' 2>/dev/null || stat -f%z '${safe}' 2>/dev/null`)
         const size = parseInt(sizeOut.trim()) || 0
-        if (size > 5 * 1024 * 1024) {
-          throw new Error(`File too large to edit (${Math.round(size / 1024 / 1024)}MB, max 5MB)`)
+        if (size > 25 * 1024 * 1024) {
+          throw new Error(`File too large to open (${Math.round(size / 1024 / 1024)}MB, max 25MB). Use Download instead.`)
         }
 
         // Check mime type

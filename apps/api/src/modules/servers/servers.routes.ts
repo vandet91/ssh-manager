@@ -8,7 +8,8 @@ import { getRemoteHostFingerprint, withSsh, connectSsh, connectWithFallback } fr
 import { withServerSsh } from '../../utils/server-ssh'
 import { decryptSecret, encryptSecret, getVaultKey } from '../../utils/vault'
 import { generateKeyPair } from '../../utils/keygen'
-import { callAiProvider, type AiProvider, type AnalysisType } from '../../utils/ai-analyst'
+import { callAiProvider, askAssistant, type AiProvider, type AnalysisType } from '../../utils/ai-analyst'
+import { isAiAnalystEnabled, isAiAssistantEnabled } from '../settings/settings.routes'
 
 const ServerBody = z.object({
   name: z.string().min(1).max(100),
@@ -1053,6 +1054,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
 
   // POST /servers/:id/ai-analyse
   fastify.post('/servers/:id/ai-analyse', { preHandler: requireAuth }, async (req, reply) => {
+    if (!(await isAiAnalystEnabled())) return reply.code(403).send({ error: 'AI Analyst is disabled by the administrator.' })
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       log_source:      z.string().min(1),   // shell command to fetch logs
@@ -1116,6 +1118,51 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
       return result
     } catch (err: unknown) {
       return reply.code(500).send({ error: 'AI analysis failed', details: (err as Error).message })
+    }
+  })
+
+  // POST /servers/:id/ai-assist — terminal AI assistant (quick help / command lookup)
+  fastify.post('/servers/:id/ai-assist', { preHandler: requireAuth }, async (req, reply) => {
+    if (!(await isAiAssistantEnabled())) return reply.code(403).send({ error: 'AI Assistant is disabled by the administrator.' })
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const body = z.object({
+      question: z.string().min(1).max(2000),
+      os_type:  z.string().optional(),
+      context:  z.string().max(8000).optional(),
+    }).parse(req.body)
+
+    // Use the default provider/model configured in Settings → AI Providers.
+    const settingKeys = ['ai_default_provider', 'ai_default_model', 'ai_key_claude', 'ai_key_openai', 'ai_key_gemini', 'ai_key_deepseek']
+    const rows = (await (db as any).selectFrom('settings').selectAll().where('key', 'in', settingKeys).execute()) as Array<{ key: string; value: unknown }>
+    const m = Object.fromEntries(rows.map((r) => [r.key, r.value]))
+    const provider = ((m['ai_default_provider'] as string) || 'claude') as AiProvider
+    const defaultModels: Record<AiProvider, string> = {
+      claude: 'claude-sonnet-5', openai: 'gpt-4o-mini', gemini: 'gemini-1.5-flash', deepseek: 'deepseek-chat',
+    }
+    const model = (m['ai_default_model'] as string) || defaultModels[provider]
+    const keyMap: Record<AiProvider, string> = {
+      claude: 'ai_key_claude', openai: 'ai_key_openai', gemini: 'ai_key_gemini', deepseek: 'ai_key_deepseek',
+    }
+    const apiKey = (m[keyMap[provider]] as string) ?? ''
+    if (!apiKey) return reply.code(400).send({ error: `No API key configured for ${provider}. Add it in Settings → AI Providers.` })
+
+    // Resolve OS type from the server if not supplied by the client.
+    let osType = body.os_type || ''
+    if (!osType) {
+      const srv = await db.selectFrom('servers').select(['os_type']).where('id', '=', id).executeTakeFirst()
+      osType = (srv?.os_type as string) || 'linux'
+    }
+
+    try {
+      const reply2 = await askAssistant(provider, model, apiKey, body.question, osType, body.context ?? '')
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'server.ai_assist', resource: 'server', resourceId: id,
+        details: { provider, model }, request: req,
+      })
+      return reply2
+    } catch (err: unknown) {
+      return reply.code(500).send({ error: 'AI assistant failed', details: (err as Error).message })
     }
   })
 

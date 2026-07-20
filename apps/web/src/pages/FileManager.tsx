@@ -190,6 +190,7 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
   const folderRef = useRef<HTMLInputElement>(null)
   const [uploadPct, setUploadPct] = useState<number|null>(null)
   const [uploadMsg, setUploadMsg] = useState('')
+  const [downloadMsg, setDownloadMsg] = useState('')
 
   const [copyingMsg, setCopyingMsg] = useState('')
 
@@ -236,7 +237,22 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
     if(prevServerRef.current===serverId)return
     const isMount = prevServerRef.current===''
     prevServerRef.current=serverId
-    if(!serverId){setEntries([]);if(!isMount){setCurPath('/');setOpenFile(null);setContent('');setFileMeta(null);setIsBinary(false);setReadError('')}return}
+    if(!serverId){
+      setEntries([])
+      if(!isMount){
+        // Disconnect: clear browsing state AND every transient panel/status so
+        // nothing lingers from the previous server.
+        setCurPath('/');setOpenFile(null);setContent('');setFileMeta(null);setIsBinary(false);setReadError('')
+        setIsDirty(false);setShowDiff(false);setSaveMsg('');setLintResult(null)
+        setShowHistory(false);setVersions([]);setPreviewVer(null);setHistoryDiff(null);setRestoreMsg('')
+        setShowSearch(false);setSearchQuery('');setSearchResults(null)
+        setUploadPct(null);setUploadMsg('');setDownloadMsg('');setCopyingMsg('')
+        setRenameTarget(null);setRenameVal('');setDeleteTgt(null);setActionError('')
+        setShowNewFolder(false);setNewFolderName('');setShowNewFile(false);setNewFileName('')
+        setDropHighlight(false)
+      }
+      return
+    }
     if(isMount){
       // On mount with a restored serverId: load the saved directory, then restore open file
       loadDir(serverId, curPath).then(()=>{
@@ -433,6 +449,18 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
       if(fileRef.current)fileRef.current.value=''
       if(folderRef.current)folderRef.current.value=''
     }
+  }
+
+  const doDownload=(fullPath:string, name:string, isDir:boolean)=>{
+    if(!serverId)return
+    // Trigger a browser download via a hidden anchor (streams from the server,
+    // handled by the browser's own download UI) and show an in-app status.
+    setDownloadMsg(`⬇ Downloading ${name}${isDir?' (.tar.gz)':''}…`)
+    const a=document.createElement('a')
+    a.href=`/api/servers/${serverId}/fs/download?path=${encodeURIComponent(fullPath)}`
+    a.rel='noopener'
+    document.body.appendChild(a);a.click();a.remove()
+    setTimeout(()=>setDownloadMsg(''),4000)
   }
 
   const doRename=async()=>{
@@ -647,6 +675,12 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
               {uploadMsg&&<div style={{fontSize:11,marginTop:2,color:uploadMsg.startsWith('Error')?C.error:C.success}}>{uploadMsg}</div>}
             </div>
           )}
+          {downloadMsg&&(
+            <div style={{padding:'4px 8px',fontSize:11,borderBottom:`1px solid ${C.border}`,
+              color:C.accent,background:C.bg}}>
+              {downloadMsg}
+            </div>
+          )}
           {copyingMsg&&(
             <div style={{padding:'4px 8px',fontSize:11,borderBottom:`1px solid ${C.border}`,
               color:copyingMsg.startsWith('Copy failed')?C.error:C.success,background:C.bg}}>
@@ -789,10 +823,7 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
                   </Btn>
                 </div>
               )}
-              <Btn bg='#0e7490' onClick={()=>{
-                const fp=join(curPath,renameTarget.name)
-                window.location.href=`/api/servers/${serverId}/fs/download?path=${encodeURIComponent(fp)}`
-              }} full>⬇ Download {renameTarget.type==='dir'?'(.tar.gz)':''}</Btn>
+              <Btn bg='#0e7490' onClick={()=>doDownload(join(curPath,renameTarget.name),renameTarget.name,renameTarget.type==='dir')} full>⬇ Download {renameTarget.type==='dir'?'(.tar.gz)':''}</Btn>
               <Btn bg='#b91c1c' onClick={()=>{setDeleteTgt(renameTarget);setRenameTarget(null)}} full>
                 🗑 Delete {renameTarget.type==='dir'?'folder':'file'}
               </Btn>
@@ -842,11 +873,21 @@ function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, i
                 </div>
               )}
               {readLoading&&<div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100%',color:C.muted}}>Loading…</div>}
-              {readError&&<div style={{padding:16,color:C.error,fontSize:13}}>Error: {readError}</div>}
+              {readError&&(
+                <div style={{padding:16,color:C.error,fontSize:13}}>
+                  Error: {readError}
+                  {openFile&&<div style={{marginTop:8}}>
+                    <Btn bg='#0e7490' onClick={()=>doDownload(openFile,openFile.split('/').pop()||'file',false)}>⬇ Download instead</Btn>
+                  </div>}
+                </div>
+              )}
               {isBinary&&!readLoading&&(
                 <div style={{padding:16,color:C.muted,fontSize:13}}>
                   <strong style={{color:C.text}}>Binary file</strong> ({fileMeta?.mime})<br/>
                   <span style={{fontSize:12}}>Size: {fileMeta?fmt(fileMeta.size):'?'}</span>
+                  {openFile&&<div style={{marginTop:8}}>
+                    <Btn bg='#0e7490' onClick={()=>doDownload(openFile,openFile.split('/').pop()||'file',false)}>⬇ Download</Btn>
+                  </div>}
                 </div>
               )}
               {/* Main editor — always mounted when a text file is open so undo stack is preserved */}

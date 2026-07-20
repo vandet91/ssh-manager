@@ -12,6 +12,31 @@ function homeDir(linuxUser: string): string {
   return linuxUser === 'root' ? '/root' : `/home/${linuxUser}`
 }
 
+/**
+ * Build a shell script that installs a public key into a target user's
+ * authorized_keys AND guarantees correct ownership/permissions.
+ *
+ * Ownership matters: when the management user is root, plain mkdir/touch create
+ * root-owned files, and sshd's StrictModes then rejects the target user's key.
+ * So we ALWAYS chown the .ssh tree to the target user at the end — using sudo
+ * only when we're not already root (a plain `sudo` prefix would fail on hosts
+ * without sudo when we're root anyway).
+ */
+function buildInstallKeyScript(linuxUser: string, hd: string, escapedKey: string): string {
+  // Determine privilege prefix first (setup uses `;` so it can't abort the
+  // chain), then run the install steps joined with `&&`.
+  const setup = `SUDO=''; if [ "$(id -u)" != "0" ]; then SUDO='sudo'; fi`
+  const steps = [
+    `$SUDO mkdir -p ${hd}/.ssh`,
+    `$SUDO touch ${hd}/.ssh/authorized_keys`,
+    `( $SUDO grep -qxF '${escapedKey}' ${hd}/.ssh/authorized_keys || echo '${escapedKey}' | $SUDO tee -a ${hd}/.ssh/authorized_keys > /dev/null )`,
+    `$SUDO chmod 700 ${hd}/.ssh`,
+    `$SUDO chmod 600 ${hd}/.ssh/authorized_keys`,
+    `$SUDO chown -R ${linuxUser}:${linuxUser} ${hd}/.ssh`,
+  ].join(' && ')
+  return `${setup}; ${steps}`
+}
+
 /** Append a public key to a server, handling both Linux and Windows. */
 export async function appendKeyToServer(
   server: { id: string; os_type?: string | null },
@@ -22,10 +47,11 @@ export async function appendKeyToServer(
     if (server.os_type === 'windows') {
       await pushKeyToWindowsServer(client, linuxUser, publicKeyLine)
     } else {
-      // Linux
+      // Linux — install and fix ownership so root-created files don't break
+      // the target user's key auth (see buildInstallKeyScript).
       const hd = homeDir(linuxUser)
       const escapedKey = publicKeyLine.replace(/'/g, "'\\''")
-      await sshExec(client, `grep -qxF '${escapedKey}' ${hd}/.ssh/authorized_keys 2>/dev/null || (echo '${escapedKey}' >> ${hd}/.ssh/authorized_keys 2>/dev/null || echo '${escapedKey}' | sudo tee -a ${hd}/.ssh/authorized_keys > /dev/null)`)
+      await sshExec(client, buildInstallKeyScript(linuxUser, hd, escapedKey))
     }
   })
 }
@@ -67,11 +93,11 @@ export async function pushKeyToServer(
       }
 
       const hd = homeDir(linuxUser)
-      // Try direct first (works when management user owns the dir), fall back to sudo (needed for other users)
-      await sshExec(client, `(mkdir -p ${hd}/.ssh && chmod 700 ${hd}/.ssh) 2>/dev/null || (sudo mkdir -p ${hd}/.ssh && sudo chmod 700 ${hd}/.ssh && sudo chown ${linuxUser}:${linuxUser} ${hd}/.ssh)`)
-      await sshExec(client, `(touch ${hd}/.ssh/authorized_keys && chmod 600 ${hd}/.ssh/authorized_keys) 2>/dev/null || (sudo touch ${hd}/.ssh/authorized_keys && sudo chmod 600 ${hd}/.ssh/authorized_keys && sudo chown ${linuxUser}:${linuxUser} ${hd}/.ssh/authorized_keys)`)
       const escapedKey = publicKey.replace(/'/g, "'\\''")
-      await sshExec(client, `grep -qxF '${escapedKey}' ${hd}/.ssh/authorized_keys 2>/dev/null || (echo '${escapedKey}' >> ${hd}/.ssh/authorized_keys 2>/dev/null || echo '${escapedKey}' | sudo tee -a ${hd}/.ssh/authorized_keys > /dev/null)`)
+      // Creates .ssh + authorized_keys, appends the key, and — critically —
+      // chowns the tree to the target user so sshd accepts it even when we
+      // connected as root (see buildInstallKeyScript).
+      await sshExec(client, buildInstallKeyScript(linuxUser, hd, escapedKey))
     }
   })
 }

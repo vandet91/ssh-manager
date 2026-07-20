@@ -302,6 +302,11 @@ export default function Servers() {
   // AI Analyst
   const [aiForm, setAiForm] = useState({ log_source_idx: 0, custom_cmd: '', lines: 300, analysis_type: 'health' as string, custom_question: '', provider: 'claude', model: 'claude-sonnet-4-6' })
   const [aiDefaultsLoaded, setAiDefaultsLoaded] = useState(false)
+  const [aiAnalystEnabled, setAiAnalystEnabled] = useState(true)
+  useEffect(() => {
+    api.get<{ analyst_enabled: boolean }>('/settings/ai-features')
+      .then(r => setAiAnalystEnabled(r.analyst_enabled)).catch(() => {})
+  }, [])
   const [aiRunning, setAiRunning] = useState(false)
   const [aiResult, setAiResult] = useState<AiResult | null>(null)
   const [aiError, setAiError] = useState('')
@@ -1661,7 +1666,7 @@ export default function Servers() {
                 {(infoServer?.os_type === 'windows'
                   ? (['overview', 'credentials', 'users', 'keys'] as const)
                   : (['overview', 'users', 'keys', 'credentials', 'software', 'recommendations', 'benchmark', 'ai', 'cert'] as const)
-                ).map((t) => (
+                ).filter((t) => t !== 'ai' || aiAnalystEnabled).map((t) => (
                   <button key={t}
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}

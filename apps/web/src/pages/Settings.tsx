@@ -390,9 +390,15 @@ export default function Settings() {
   const [recordingEnabled, setRecordingEnabled] = useState(true)
   const [recSaving, setRecSaving] = useState(false)
 
+  const [aiFeatures, setAiFeatures] = useState({ analyst_enabled: true, assistant_enabled: true })
+  const [aiFeatSaving, setAiFeatSaving] = useState(false)
+
   useEffect(() => {
     api.get<{ enabled: boolean }>('/settings/session-recording')
       .then(r => setRecordingEnabled(r.enabled))
+      .catch(() => {})
+    api.get<{ analyst_enabled: boolean; assistant_enabled: boolean }>('/settings/ai-features')
+      .then(setAiFeatures)
       .catch(() => {})
     api.get<PasswordPolicy>('/settings/password-policy')
       .then(p => { setPolicy(p); setLoading(false) })
@@ -421,6 +427,20 @@ export default function Settings() {
       setRecordingEnabled(prev)    // revert on failure
     } finally {
       setRecSaving(false)
+    }
+  }
+
+  const toggleAiFeature = async (key: 'analyst_enabled' | 'assistant_enabled', enabled: boolean) => {
+    const prev = aiFeatures
+    const next = { ...aiFeatures, [key]: enabled }
+    setAiFeatures(next)   // optimistic
+    setAiFeatSaving(true)
+    try {
+      await api.put('/settings/ai-features', next)
+    } catch {
+      setAiFeatures(prev)  // revert on failure
+    } finally {
+      setAiFeatSaving(false)
     }
   }
 
@@ -600,6 +620,44 @@ export default function Settings() {
                 hint="When off, new terminal sessions are not recorded. Existing recordings are kept."
                 checked={recordingEnabled}
                 onChange={toggleRecording}
+              />
+            </div>
+          </div>
+
+          {/* ── AI Features Card ─────────────────────────────────────── */}
+          <div style={{
+            background: 'var(--card-bg)',
+            border: '1px solid var(--card-border)',
+            borderRadius: 10,
+            overflow: 'hidden',
+            marginBottom: 24,
+          }}>
+            <div style={{
+              background: 'var(--card-header-bg)',
+              borderBottom: '1px solid var(--card-border)',
+              padding: '14px 20px',
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              <span style={{ fontSize: 16 }}>🤖</span>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-heading)' }}>AI Features</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                  Uses the provider configured in AI Providers. Disabling hides the feature and blocks its API.
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <Toggle
+                label={aiFeatSaving ? 'Saving…' : 'AI Analyst (server log analysis)'}
+                hint="The AI log/health analysis on the Servers page."
+                checked={aiFeatures.analyst_enabled}
+                onChange={v => toggleAiFeature('analyst_enabled', v)}
+              />
+              <Toggle
+                label={aiFeatSaving ? 'Saving…' : 'AI Assistant (terminal helper)'}
+                hint="The in-terminal assistant panel for quick command lookup and troubleshooting."
+                checked={aiFeatures.assistant_enabled}
+                onChange={v => toggleAiFeature('assistant_enabled', v)}
               />
             </div>
           </div>

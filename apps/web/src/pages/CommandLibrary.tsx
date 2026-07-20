@@ -73,10 +73,13 @@ export default function CommandLibrary() {
     setSeedingMore(false)
   }
 
-  const categories = ['All', ...Array.from(new Set(cmds.map(c => c.category))).sort()]
+  const normCat = (s: string) => s.trim().toLowerCase()
+  const categories = ['All', ...Array.from(
+    new Map(cmds.map(c => [normCat(c.category), c.category.trim()])).values()
+  ).sort((a, b) => a.localeCompare(b))]
 
   const visible = cmds.filter(c => {
-    const matchCat = category === 'All' || c.category === category
+    const matchCat = category === 'All' || normCat(c.category) === normCat(category)
     const q = search.toLowerCase()
     const matchQ = !q || c.label.toLowerCase().includes(q) || c.command.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q)
     return matchCat && matchQ

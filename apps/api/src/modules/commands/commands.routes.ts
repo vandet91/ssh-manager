@@ -263,7 +263,7 @@ async function commandRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/commands', { preHandler: requireAuth }, async (req, reply) => {
     const body = z.object({
       os:          z.enum(['windows', 'linux']),
-      category:    z.string().min(1).max(50),
+      category:    z.string().min(1).max(50).transform(s => s.trim()),
       label:       z.string().min(1).max(200),
       command:     z.string().min(1),
       description: z.string().max(500).optional(),
@@ -278,7 +278,7 @@ async function commandRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
     const body = z.object({
       os:          z.enum(['windows', 'linux']).optional(),
-      category:    z.string().min(1).max(50).optional(),
+      category:    z.string().min(1).max(50).transform(s => s.trim()).optional(),
       label:       z.string().min(1).max(200).optional(),
       command:     z.string().min(1).optional(),
       description: z.string().max(500).optional(),
