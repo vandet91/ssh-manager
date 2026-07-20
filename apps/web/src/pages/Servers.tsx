@@ -1826,6 +1826,36 @@ export default function Servers() {
                       </div>
                     </div>
                   )}
+                  {serverInfo.current_user && serverInfo.current_user.username && (() => {
+                    const cu = serverInfo.current_user!
+                    const sudoBadge = cu.sudo === 'root'
+                      ? { text: 'Root', cls: 'bg-red-900/50 text-red-300 border-red-700' }
+                      : cu.sudo === 'nopasswd'
+                        ? { text: 'Passwordless sudo', cls: 'bg-amber-900/40 text-amber-300 border-amber-700' }
+                        : cu.sudo === 'yes'
+                          ? { text: 'Has sudo', cls: 'bg-emerald-900/40 text-emerald-300 border-emerald-700' }
+                          : { text: 'No sudo', cls: 'bg-gray-700/60 text-gray-300 border-gray-600' }
+                    return (
+                      <div className="bg-gray-800 rounded-lg p-3 space-y-2">
+                        <p className="text-gray-400 text-xs font-medium uppercase tracking-wide">Connected As</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-gray-200 font-mono text-sm">{cu.username}</span>
+                          <span className="text-gray-500 text-xs">uid {cu.uid}</span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded border ${sudoBadge.cls}`}>{sudoBadge.text}</span>
+                        </div>
+                        {cu.groups.length > 0 && (
+                          <div>
+                            <p className="text-gray-500 text-[10px] uppercase tracking-wide mb-1">Groups ({cu.groups.length})</p>
+                            <div className="flex flex-wrap gap-1">
+                              {cu.groups.map((g) => (
+                                <span key={g} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-mono">{g}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
                   {serverInfo.logged_in.length > 0 && (
                     <div className="bg-gray-800 rounded-lg p-3 space-y-2">
                       <p className="text-gray-400 text-xs font-medium uppercase tracking-wide">Currently Logged In</p>
@@ -2224,6 +2254,8 @@ export default function Servers() {
                           <th className="pb-2 pr-3">UID</th>
                           <th className="pb-2 pr-3">Home</th>
                           <th className="pb-2 pr-3">Shell</th>
+                          <th className="pb-2 pr-3">Sudo</th>
+                          <th className="pb-2 pr-3">Groups</th>
                           <th className="pb-2">Actions</th>
                         </tr>
                       </thead>
@@ -2241,6 +2273,18 @@ export default function Servers() {
                               <td className="py-2 pr-3 font-mono text-xs text-gray-500">{u.uid}</td>
                               <td className="py-2 pr-3 font-mono text-xs text-gray-400">{u.home || '—'}</td>
                               <td className="py-2 pr-3 font-mono text-xs text-gray-500">{u.shell.split('/').pop()}</td>
+                              <td className="py-2 pr-3 text-xs">
+                                {u.sudo === 'root'
+                                  ? <span className="text-red-400 font-medium">root</span>
+                                  : u.sudo === 'yes'
+                                    ? <span className="text-emerald-400 font-medium">sudo</span>
+                                    : <span className="text-gray-600">—</span>}
+                              </td>
+                              <td className="py-2 pr-3 font-mono text-[10px] text-gray-400 max-w-[180px]" title={(u.groups || []).join(', ')}>
+                                {(u.groups && u.groups.length)
+                                  ? (u.groups.length > 3 ? `${u.groups.slice(0, 3).join(', ')} +${u.groups.length - 3}` : u.groups.join(', '))
+                                  : '—'}
+                              </td>
                               <td className="py-2">
                                 <div className="flex gap-1.5">
                                   <button

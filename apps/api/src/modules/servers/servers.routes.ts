@@ -394,7 +394,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
           }
 
           // ── Linux path ─────────────────────────────────────────────────────
-          const [virtInfo, osRelease, unameR, passwdOut, whoOut, uptimeOut, memOut, authorizedKeysRoot] = await Promise.all([
+          const [virtInfo, osRelease, unameR, passwdOut, whoOut, uptimeOut, memOut, authorizedKeysRoot, currentUserOut, userGroupsOut] = await Promise.all([
             detectVirtLinux(client, sshExec),
             sshExec(client, 'cat /etc/os-release 2>/dev/null || echo ""'),
             sshExec(client, 'uname -r 2>/dev/null || echo ""'),
@@ -403,6 +403,11 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
             sshExec(client, 'uptime -p 2>/dev/null || uptime 2>/dev/null || echo ""'),
             sshExec(client, 'free -h 2>/dev/null | grep Mem || echo ""'),
             sshExec(client, 'cat /root/.ssh/authorized_keys 2>/dev/null || sudo cat /root/.ssh/authorized_keys 2>/dev/null || echo ""'),
+            // Identity + privileges of the user we're actually connected as.
+            // Emits 4 lines: username, uid, space-separated group names, sudo status.
+            sshExec(client, 'CU=$(id -un); CUID=$(id -u); GRPS=$(id -nG 2>/dev/null); SUDO=no; if [ "$CUID" = "0" ]; then SUDO=root; elif sudo -n true 2>/dev/null; then SUDO=nopasswd; elif echo " $GRPS " | grep -qE " (sudo|wheel|admin) "; then SUDO=yes; fi; printf "%s\\n%s\\n%s\\n%s\\n" "$CU" "$CUID" "$GRPS" "$SUDO"'),
+            // Per-user group membership for every listed user: "username|grp1 grp2 ..."
+            sshExec(client, 'for u in $(getent passwd | awk -F: \'$3==0||$3>=1000{print $1}\'); do echo "$u|$(id -nG "$u" 2>/dev/null)"; done'),
           ])
 
           // Parse /etc/os-release
@@ -412,10 +417,24 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
             if (k && v) osInfo[k.trim()] = v.trim().replace(/^"|"$/g, '')
           }
 
+          // Build a map of username -> group names from the per-user groups probe.
+          const groupsByUser: Record<string, string[]> = {}
+          for (const line of userGroupsOut.stdout.split('\n').filter(Boolean)) {
+            const [uname, grps] = line.split('|')
+            if (uname) groupsByUser[uname.trim()] = (grps || '').trim().split(/\s+/).filter(Boolean)
+          }
+          const hasSudo = (groups: string[]) => groups.some((g) => g === 'sudo' || g === 'wheel' || g === 'admin')
+
           // Parse passwd
           const users = passwdOut.stdout.split('\n').filter(Boolean).map((line) => {
             const [username, uid, gecos, home, shell] = line.split(':')
-            return { username, uid: Number(uid), gecos: gecos || '', home: home || '', shell: shell || '' }
+            const groups = groupsByUser[username] || []
+            return {
+              username, uid: Number(uid), gecos: gecos || '', home: home || '', shell: shell || '',
+              groups,
+              // Group-based heuristic; uid 0 is always privileged.
+              sudo: Number(uid) === 0 ? 'root' : hasSudo(groups) ? 'yes' : 'no',
+            }
           })
 
           // Collect raw authorized key lines per user
@@ -476,6 +495,16 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
             }
           })
 
+          // Parse current-user identity/privileges (4 lines: user, uid, groups, sudo)
+          const cuLines = currentUserOut.stdout.split('\n')
+          const currentUser = {
+            username: (cuLines[0] || '').trim(),
+            uid: Number((cuLines[1] || '').trim()) || 0,
+            groups: (cuLines[2] || '').trim().split(/\s+/).filter(Boolean),
+            // 'root' | 'nopasswd' (passwordless sudo) | 'yes' (in sudo/wheel/admin) | 'no'
+            sudo: (cuLines[3] || 'no').trim(),
+          }
+
           const osName       = osInfo['NAME'] || osInfo['PRETTY_NAME'] || 'Unknown'
           const osPrettyName = osInfo['PRETTY_NAME'] || osName
           const osVersion    = osInfo['VERSION'] || osInfo['VERSION_ID'] || ''
@@ -511,6 +540,7 @@ async function serversRoutes(fastify: FastifyInstance): Promise<void> {
             uptime: uptimeOut.stdout,
             memory: memOut.stdout,
             users,
+            current_user: currentUser,
             logged_in: whoOut.stdout.split('\n').filter(Boolean),
             authorized_keys: authorizedKeys,
             virt: virtInfo,

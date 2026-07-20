@@ -305,7 +305,8 @@ export type ServerInfo = {
   memory: string
   memory_total_mb?: number
   cpu_count?: number
-  users: Array<{ username: string; uid: number; gecos: string; home: string; shell: string }>
+  users: Array<{ username: string; uid: number; gecos: string; home: string; shell: string; groups?: string[]; sudo?: string }>
+  current_user?: { username: string; uid: number; groups: string[]; sudo: string }
   logged_in: string[]
   authorized_keys: AuthorizedKey[]
   hostname?: string
