@@ -6,6 +6,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon } from '@xterm/addon-search'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { api, Server, Assignment, ServerCredential, distroArtApi, DistroArt } from '../api/client'
+import { FileManagerTab } from './FileManager'
 import '@xterm/xterm/css/xterm.css'
 
 const MIN_FONT = 10
@@ -250,6 +251,19 @@ const FONT_OPTIONS: { label: string; stack: string }[] = [
 ]
 const DEFAULT_FONT_FAMILY = FONT_OPTIONS[0].stack
 
+// Minimum container size before we consider it "ready" for fitAddon.fit().
+// During a layout transition (mounting/unmounting a sibling, a view switch,
+// flexbox recalculating) the container can genuinely report a real but tiny
+// width — e.g. 16px — for a single frame, which is NOT zero so a `>0` check
+// lets it through. fitAddon.fit() at that width computes a degenerate size
+// (2 cols) and calls term.resize(2, ...) LOCALLY, reflowing the entire
+// on-screen buffer to 2 columns for that one frame — this happens whether or
+// not that size is ever pushed to the server, so gating only the network
+// push can never prevent it. Requiring a sane minimum pixel size before ever
+// calling fit() stops the bogus local reflow at its source.
+const MIN_FIT_WIDTH = 100
+const MIN_FIT_HEIGHT = 60
+
 // Persist the chosen font/size so new tabs and sessions remember the preference.
 const FONT_FAMILY_KEY = 'terminal.fontFamily'
 const FONT_SIZE_KEY = 'terminal.fontSize'
@@ -259,6 +273,7 @@ const loadFontFamily = () => {
 const loadFontSize = () => {
   try { const n = parseInt(localStorage.getItem(FONT_SIZE_KEY) || ''); return Number.isFinite(n) && n > 0 ? n : DEFAULT_FONT } catch { return DEFAULT_FONT }
 }
+
 
 // ── Per-tab state ────────────────────────────────────────────────────────────
 type TabState = {
@@ -281,6 +296,12 @@ type TabState = {
   uploading: boolean
   uploadMsg: string
   uploadPath: string
+  // Per-tab view switch (Terminal vs File Manager) — each terminal tab gets
+  // its own independent File Manager instance (own server/path/open-file),
+  // same as each tab gets its own terminal.
+  view: 'terminal' | 'files'
+  fmEverOpened: boolean
+  fmInitServerId: string
 }
 
 function makeTab(): TabState {
@@ -304,6 +325,9 @@ function makeTab(): TabState {
     uploading: false,
     uploadMsg: '',
     uploadPath: '/tmp/',
+    view: 'terminal',
+    fmEverOpened: false,
+    fmInitServerId: '',
   }
 }
 
@@ -316,6 +340,23 @@ export default function Terminal() {
   const [showCmdPanel, setShowCmdPanel] = useState(false)
   const [showAiPanel, setShowAiPanel] = useState(false)
   const [showInfoPanel, setShowInfoPanel] = useState(true)
+
+  // Terminal ⟷ File Manager VIEW SWITCH — per terminal tab, not a split. Each
+  // tab shows either its terminal or its own File Manager (own server/path/
+  // open-file), filling the full canvas area, exactly like Electerm's
+  // Terminal/File-manager tab switcher.
+  const switchTabView = (tabId: string, view: 'terminal' | 'files') => {
+    const t = tabs.find((x) => x.id === tabId)
+    if (!t) return
+    if (view === 'files' && !t.fmEverOpened) {
+      // First time this tab opens its File Manager: default to whatever
+      // server THAT tab is on (Linux only — the File Manager needs SFTP).
+      const os = servers.find((s) => s.id === t.selectedServer)?.os_type
+      updateTab(tabId, { view, fmEverOpened: true, fmInitServerId: os === 'linux' ? t.selectedServer : '' })
+    } else {
+      updateTab(tabId, { view })
+    }
+  }
   const [assistantEnabled, setAssistantEnabled] = useState(false)
   type AiMsg = { role: 'user' | 'assistant'; text: string; commands?: string[] }
   const [aiMessages, setAiMessages] = useState<AiMsg[]>([])
@@ -345,15 +386,36 @@ export default function Terminal() {
 
 
 
-  // ResizeObserver on the wrapper (not the xterm div) — avoids feedback loop
+  // ResizeObserver on the wrapper (not the xterm div) — avoids feedback loop.
+  // Guard against a zero-size container (e.g. switching this tab to the File
+  // Manager view collapses canvasWrapperRef to 0 width): fitting there would
+  // resize the terminal down to ~1-2 cols and PUSH that tiny size to the real
+  // SSH PTY, permanently wrapping/corrupting any output the server sends
+  // while the resize is in effect — that garbled text does not undo itself
+  // when the container grows back.
+  //
+  // Also DEBOUNCE: fit() reflows the terminal's ENTIRE buffer (all prior
+  // output, not just what's visible) to the new column count. Switching
+  // between Terminal/Files views (or any other size change happening across
+  // more than one layout pass) can fire this observer more than once in a
+  // burst as things settle — fitting on the FIRST observation risks reflowing
+  // real, already-displayed scrollback at a not-yet-final width, corrupting
+  // it the same way the connect-time race did. Waiting for the burst to go
+  // quiet before fitting means we only ever reflow at the final, real size.
   useEffect(() => {
     const el = canvasWrapperRef.current
     if (!el) return
+    let settleTimer: ReturnType<typeof setTimeout> | null = null
     const ro = new ResizeObserver(() => {
-      requestAnimationFrame(() => fitRefs.current[activeTabId]?.fit())
+      if (settleTimer) clearTimeout(settleTimer)
+      settleTimer = setTimeout(() => {
+        if (el.clientWidth >= MIN_FIT_WIDTH && el.clientHeight >= MIN_FIT_HEIGHT) {
+          fitRefs.current[activeTabId]?.fit()
+        }
+      }, 80)
     })
     ro.observe(el)
-    return () => ro.disconnect()
+    return () => { if (settleTimer) clearTimeout(settleTimer); ro.disconnect() }
   }, [activeTabId])
 
   useEffect(() => {
@@ -436,9 +498,10 @@ export default function Terminal() {
   // useLayoutEffect runs after DOM mutation but before paint, so the toolbar
   // has already updated its height and canvasWrapperRef has the correct size.
   useLayoutEffect(() => {
+    const el = termRefs.current[activeTabId]
     const fit = fitRefs.current[activeTabId]
     const term = xtermRefs.current[activeTabId]
-    fit?.fit()
+    if (el && el.clientWidth >= MIN_FIT_WIDTH && el.clientHeight >= MIN_FIT_HEIGHT) fit?.fit()
     term?.focus()
   }, [activeTabId, activeTab?.connected, activeTab?.connecting])
 
@@ -626,6 +689,60 @@ export default function Terminal() {
     fitRefs.current[tabId]    = fitAddon
     searchRefs.current[tabId] = searchAddon
 
+    // Single gate for EVERY resize message sent to this tab's server PTY.
+    // Two protections, both required after the "MOTD gets shredded" bug:
+    //  1. Dedup — never re-send a size that's identical to the last one we
+    //     sent. Re-sending an unchanged size still makes the server re-apply
+    //     it, which re-fires SIGWINCH and makes the shell redraw its prompt
+    //     again for no reason.
+    //  2. Minimum sane size — during the first render frames right after
+    //     connect, the container can genuinely (if briefly) report a tiny
+    //     nonzero width before CSS/layout settles (e.g. a couple of pixels),
+    //     which xterm happily turns into a degenerate size like 2 cols. That
+    //     reading is "new" (not a dup) so #1 alone doesn't catch it — and
+    //     sending ANY such degenerate size for even one SIGWINCH is enough
+    //     for the shell to redraw its prompt at 2 columns, permanently
+    //     wrapping it into the scrollback. Refusing anything below a sane
+    //     floor (10 cols / 3 rows — smaller than any real usable terminal)
+    //     means a bogus transitional reading is simply dropped instead of
+    //     reaching the server; the next, correctly-sized reading gets sent
+    //     once real layout settles.
+    let lastSentCols = -1
+    let lastSentRows = -1
+    // While true, pushSize is a no-op: the connect-time stabilization loop
+    // below is still settling (fonts/layout), and its OWN fit() calls change
+    // cols/rows several times in a row as it converges. Even though each of
+    // those readings is individually valid (>=10 cols) and different from the
+    // last, PUSHING each one to the server still fires a real SIGWINCH and a
+    // real prompt redraw per push — so the shell ends up redrawing its prompt
+    // multiple times during startup, each redraw landing as its own line in
+    // the scrollback. The fix is to never push mid-settle: let the terminal
+    // reflow locally (cheap, cosmetic, no server round-trip) as many times as
+    // it needs, and push the server exactly ONCE, after it's done settling.
+    let stabilizing = true
+    // Output the server sends while we're still stabilizing must NOT be
+    // written to the terminal yet: writing it in means it's now part of the
+    // xterm buffer, and every LOCAL fit() call during stabilization reflows
+    // that buffer to the new column count — re-wrapping whatever's already
+    // been written (the MOTD banner, the shell's first prompt) at each
+    // intermediate size purely on the client, with no server round-trip
+    // involved at all. That's the actual remaining source of the garbled
+    // prompt: it doesn't require us to have PUSHED a bad size anywhere: our
+    // own local reflow of already-displayed text is enough. Buffering output
+    // until the size is final and flushing it in one shot means there's
+    // nothing written yet for an intermediate reflow to corrupt.
+    let pendingOutput: string[] = []
+    const pushSize = (cols: number, rows: number) => {
+      if (stabilizing) return
+      if (cols < 10 || rows < 3) return
+      if (cols === lastSentCols && rows === lastSentRows) return
+      const ws = wsRefs.current[tabId]
+      if (ws?.readyState !== WebSocket.OPEN) return
+      ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+      lastSentCols = cols
+      lastSentRows = rows
+    }
+
     const el = termRefs.current[tabId]
     if (el) {
       el.innerHTML = ''
@@ -640,41 +757,69 @@ export default function Terminal() {
       // CHANGES, so if the size is already right locally but the server PTY is
       // still 80x24, the server never learns — and full-screen apps like nano
       // draw to the server's PTY size, so they render small. Pressing F12 (window
-      // resize) was masking this by forcing a change. Always send explicitly.
+      // resize) was masking this by forcing a change. Always send explicitly —
+      // through pushSize, so the dedup/minimum-size gate above always applies.
       const fitAndPush = () => {
-        if (el.clientHeight <= 0 || el.clientWidth <= 0) return
+        if (el.clientWidth < MIN_FIT_WIDTH || el.clientHeight < MIN_FIT_HEIGHT) return
         fitAddon.fit()
-        const ws = wsRefs.current[tabId]
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-        }
+        pushSize(term.cols, term.rows)
       }
 
       // Observe THIS terminal's own container so genuine later resizes (info-panel
-      // toggle, window resize, font settling) trigger a refit. The div height is
-      // fixed by flex, so fit() can't feed back into another resize.
+      // toggle, window resize, view switch, font settling) trigger a refit. The
+      // div height is fixed by flex, so fit() can't feed back into another
+      // resize. Debounced for the same reason as the outer canvasWrapperRef
+      // observer above: fit() reflows the WHOLE existing buffer, so acting on
+      // the first observation of a multi-step layout change (e.g. switching
+      // Terminal/Files views) risks reflowing real scrollback at a transient,
+      // not-yet-final size.
       roRefs.current[tabId]?.disconnect()
-      const ro = new ResizeObserver(() => requestAnimationFrame(fitAndPush))
+      let fitSettleTimer: ReturnType<typeof setTimeout> | null = null
+      const ro = new ResizeObserver(() => {
+        if (fitSettleTimer) clearTimeout(fitSettleTimer)
+        fitSettleTimer = setTimeout(fitAndPush, 80)
+      })
       ro.observe(el)
       roRefs.current[tabId] = ro
 
       // Initial fit is racy: xterm may not have measured its cell size yet, and
-      // the webfont (JetBrains Mono) loads asynchronously — a fit with the fallback
-      // font computes the wrong cell height. Re-fit until the result STABILIZES.
+      // the webfont (JetBrains Mono) loads asynchronously — a fit with the
+      // fallback font computes the WRONG cell width, but that wrong reading can
+      // easily stay identical across several 50ms polls (nothing else is
+      // changing yet), satisfying a naive "3 consecutive stable reads" check
+      // long before the real font has actually loaded. That previously let
+      // stabilization finish — and pendingOutput get flushed — using fallback
+      // metrics, so when the real font swapped in moments later, the belt-and-
+      // suspenders refit reflowed already-written real content (the MOTD,
+      // the shell's first prompt) to a genuinely different column count and
+      // corrupted it. Fix: don't even START the "wait for it to settle" loop
+      // until document.fonts.ready has ALREADY resolved, so the metrics used
+      // for every reading in the loop are the real ones from the start — no
+      // later font-driven refit is ever needed once we've flushed.
       let lastCols = -1, lastRows = -1, stable = 0, attempts = 0, everFitted = false
       const tryFit = () => {
-        const ready = el.clientHeight > 0 && el.clientWidth > 0
-        if (ready) { fitAndPush(); everFitted = true }
+        const ready = el.clientHeight >= MIN_FIT_HEIGHT && el.clientWidth >= MIN_FIT_WIDTH
+        if (ready) { fitAddon.fit(); everFitted = true }
         if (everFitted && term.cols === lastCols && term.rows === lastRows) stable++
         else { stable = 0; lastCols = term.cols; lastRows = term.rows }
-        if ((everFitted && stable >= 3) || attempts++ >= 60) return
+        if ((everFitted && stable >= 3) || attempts++ >= 60) {
+          stabilizing = false
+          if (everFitted) pushSize(term.cols, term.rows)
+          // Now that the size is final, flush whatever output arrived while
+          // we were still settling — writing it now means it reflows exactly
+          // once, at the terminal's real final size, never again.
+          if (pendingOutput.length) {
+            term.write(pendingOutput.join(''))
+            pendingOutput = []
+          }
+          return
+        }
         setTimeout(tryFit, 50)
       }
-      requestAnimationFrame(tryFit)
+      const startStabilizing = () => requestAnimationFrame(tryFit)
+      if (document.fonts) document.fonts.ready.then(startStabilizing)
+      else startStabilizing()
 
-      // Belt-and-suspenders: fit again once fonts finish loading.
-      document.fonts?.ready.then(fitAndPush)
-      // …and once the server confirms the session (latest fully-settled moment).
       fitPushRefs.current[tabId] = fitAndPush
     }
 
@@ -686,16 +831,14 @@ export default function Terminal() {
     const ws = new WebSocket(wsUrl)
     wsRefs.current[tabId] = ws
 
-    ws.onopen = () => {
-      const { cols, rows } = term
-      ws.send(JSON.stringify({ type: 'resize', cols, rows }))
-    }
+    ws.onopen = () => pushSize(term.cols, term.rows)
 
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data)
         if (msg.type === 'output') {
-          term.write(msg.data)
+          if (stabilizing) pendingOutput.push(msg.data)
+          else term.write(msg.data)
         } else if (msg.type === 'connected') {
           updateTab(tabId, { connected: true, connecting: false, status: `${msg.serverName} — ${msg.linuxUser}`, usedKey: msg.key_name ?? '' })
           // Session is fully up — fit and push the size to the PTY now, plus once
@@ -729,8 +872,14 @@ export default function Terminal() {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data }))
     })
 
+    // xterm fires this any time term.resize() actually changes cols/rows —
+    // including internally from fitAddon.fit() during the connect-time
+    // stabilization retries. Route through pushSize (not a raw ws.send) so a
+    // stray degenerate reading from an early, not-yet-settled layout frame
+    // can never reach the server (this was the actual bypass: fitAndPush's
+    // own dedup didn't help because THIS independent listener sent first).
     term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+      pushSize(cols, rows)
     })
 
     // Auto-copy selected text to clipboard when selection changes
@@ -751,7 +900,11 @@ export default function Terminal() {
       }
     })
 
-    const onResize = () => fitAddon.fit()
+    // Guard against fitting while this tab's container is collapsed (e.g. the
+    // tab is currently showing its File Manager view, not the terminal) — an
+    // unconditional fit() there would resize the PTY down to ~1-2 cols and
+    // permanently corrupt any output the server sends in the meantime.
+    const onResize = () => { if (el && el.clientWidth >= MIN_FIT_WIDTH && el.clientHeight >= MIN_FIT_HEIGHT) fitAddon.fit() }
     window.addEventListener('resize', onResize)
     ws.addEventListener('close', () => window.removeEventListener('resize', onResize))
 
@@ -922,6 +1075,22 @@ export default function Terminal() {
               })()}
             </select>
 
+            {/* Terminal / File Manager view switcher — per tab, full swap (not a split) */}
+            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg p-0.5 shrink-0">
+              <button
+                onClick={() => switchTabView(tab.id, 'terminal')}
+                className={`px-2 py-1 rounded text-sm transition-colors ${tab.view !== 'files' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                title="Terminal">
+                🖥️
+              </button>
+              <button
+                onClick={() => switchTabView(tab.id, 'files')}
+                className={`px-2 py-1 rounded text-sm transition-colors ${tab.view === 'files' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                title="File Manager">
+                📁
+              </button>
+            </div>
+
             {tab.selectedServer && totalUsers > 0 && (
               <select
                 value={dropdownValue}
@@ -1012,7 +1181,13 @@ export default function Terminal() {
             )}
             {tab.connected && (
               <button
-                onClick={() => { setShowInfoPanel(p => !p); setTimeout(() => { fitRefs.current[activeTabId]?.fit() }, 50) }}
+                onClick={() => {
+                  setShowInfoPanel(p => !p)
+                  setTimeout(() => {
+                    const el = termRefs.current[activeTabId]
+                    if (el && el.clientWidth >= MIN_FIT_WIDTH && el.clientHeight >= MIN_FIT_HEIGHT) fitRefs.current[activeTabId]?.fit()
+                  }, 50)
+                }}
                 className={`px-2.5 py-1 text-xs rounded transition-colors ${showInfoPanel ? 'bg-gray-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white'}`}
                 title="Toggle info panel">
                 ▶▌
@@ -1087,9 +1262,13 @@ export default function Terminal() {
         </div>
       )}
 
-      {/* ── Terminal canvases + right panel ─────────────────────────────────── */}
+      {/* ── Terminal canvas / File Manager view + right panel ───────────────── */}
       <div className="flex-1 flex" style={{ overflow: 'hidden', minHeight: 0 }}>
-        <div ref={canvasWrapperRef} className="flex-1 relative" style={{ overflow: 'hidden', minHeight: 0 }}>
+        <div
+          ref={canvasWrapperRef}
+          className="relative"
+          style={{ flex: activeTab?.view === 'files' ? '0 0 0px' : '1 1 auto', overflow: 'hidden', minHeight: 0 }}
+        >
         {tabs.map((tab) => (
           <div
             key={tab.id}
@@ -1140,6 +1319,48 @@ export default function Terminal() {
         ))}
 
         </div>
+
+        {/* ── File Manager view — one independent instance PER terminal tab,
+             filling the FULL canvas area when that tab's view is 'files' (not
+             a split). Each tab's FileManagerTab mounts once it has ever been
+             opened for that tab, then stays mounted (only hidden) so its own
+             browsing/edit state survives switching tabs or views — the same
+             visibility trick used for the terminal canvases above. ── */}
+        {tabs.some((t) => t.fmEverOpened) && (
+          <div
+            className="relative"
+            style={{
+              flex: activeTab?.view === 'files' ? '1 1 auto' : '0 0 0px',
+              overflow: 'hidden', minHeight: 0,
+            }}
+          >
+            {tabs.filter((t) => t.fmEverOpened).map((t) => (
+              <div
+                key={t.id}
+                className="absolute inset-0 flex flex-col"
+                style={{
+                  visibility: t.id === activeTabId ? 'visible' : 'hidden',
+                  pointerEvents: t.id === activeTabId ? 'auto' : 'none',
+                }}
+              >
+                <FileManagerTab
+                  tabId={`fm-${t.id}`}
+                  isActive={t.id === activeTabId}
+                  servers={servers.filter((s) => s.os_type === 'linux')}
+                  initServerId={t.fmInitServerId}
+                  initCurPath="/"
+                  initOpenFile={null}
+                  onStateChange={() => {}}
+                  onDragStart={() => {}}
+                  dragInfo={null}
+                  onDropped={() => {}}
+                  pendingCopy={null}
+                  onCopyDone={() => {}}
+                />
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* ── Right panel (collapsible) ── */}
         {showInfoPanel && (() => {

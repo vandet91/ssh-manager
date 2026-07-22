@@ -14,14 +14,14 @@ import { api, Server } from '../api/client'
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
-type FsEntry     = { name:string; type:'dir'|'file'|'link'|'other'; permissions:string; owner:string; size:number; modified:string }
+export type FsEntry = { name:string; type:'dir'|'file'|'link'|'other'; permissions:string; owner:string; size:number; modified:string }
 type LsResult    = { path:string; parent:string; entries:FsEntry[] }
 type ReadResult  = { content:string|null; binary:boolean; mime:string; size:number }
 type SearchResult= { mode:string; matches:string[]; grep_lines:string[] }
 type LintResult  = { supported:boolean; output:string; ok:boolean }
 type VersionEntry= { name:string; path:string; size:number; modified:string }
 
-type DragInfo = {
+export type DragInfo = {
   tabId: string
   serverId: string
   serverName: string
@@ -142,7 +142,7 @@ interface TabProps {
   onCopyDone: () => void
 }
 
-function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, initOpenFile, onStateChange, onDragStart, dragInfo, onDropped, pendingCopy, onCopyDone }: TabProps){
+export function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, initOpenFile, onStateChange, onDragStart, dragInfo, onDropped, pendingCopy, onCopyDone }: TabProps){
   const [serverId,   setServerId]   = useState(initServerId)
   const [curPath,    setCurPath]    = useState(initCurPath)
   const [openFile,   setOpenFile]   = useState<string|null>(initOpenFile)
