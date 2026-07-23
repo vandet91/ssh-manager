@@ -24,6 +24,7 @@ export type HostType =
   | 'aws'
   | 'azure'
   | 'gcp'
+  | 'linode'
   | 'physical'
   | 'unknown'
 
@@ -120,19 +121,36 @@ export async function detectVirtLinux(client: Client, sshExec: SshExecFn): Promi
     }
 
     // ── Cloud platforms ──────────────────────────────────────────────────
-
-    if (awsMeta && awsMeta.length < 30 && !awsMeta.includes('<')) {
+    // NOTE: 169.254.169.254 is a SHARED link-local metadata address — AWS,
+    // Azure, and several other providers (including Linode, if its own
+    // metadata service is enabled) all listen on the same IP. Just getting a
+    // short, non-HTML response from the AWS-shaped path is NOT proof it's
+    // actually AWS: a Linode host answering with anything short at that path
+    // was being misidentified as AWS. Require independent confirmation via
+    // the DMI vendor string (which real AWS EC2 instances set to "Amazon
+    // EC2") before trusting the metadata probe.
+    const looksLikeAws = vendor.includes('amazon') || bios.includes('amazon')
+    if (awsMeta && awsMeta.length < 30 && !awsMeta.includes('<') && looksLikeAws) {
       const region = awsAz ? awsAz.replace(/-[a-z]$/, '') : ''
       return mk('aws', 'Amazon Web Services', `${awsMeta}${region ? ' · ' + region : ''}`, '☁️', '#f97316')
     }
 
+    // GCP's metadata host (metadata.google.internal) only resolves inside
+    // GCP, so this probe doesn't share the false-positive risk above.
     if (gcpMeta && gcpMeta.length < 60 && !gcpMeta.includes('<')) {
       const parts = gcpMeta.split('/')
       return mk('gcp', 'Google Cloud Platform', parts[parts.length - 1] ?? null, '☁️', '#3b82f6')
     }
 
-    if (azureMeta && azureMeta.length < 40 && !azureMeta.includes('<')) {
+    // Azure shares the same 169.254.169.254 address — same confirmation need.
+    const looksLikeAzure = vendor.includes('microsoft') || bios.includes('microsoft') || chassis.includes('microsoft')
+    if (azureMeta && azureMeta.length < 40 && !azureMeta.includes('<') && looksLikeAzure) {
       return mk('azure', 'Microsoft Azure', azureMeta, '☁️', '#0ea5e9')
+    }
+
+    // Linode (KVM-based) sets its DMI system/board vendor to "Linode".
+    if (vendor.includes('linode') || product.includes('linode')) {
+      return mk('linode', 'Linode (Akamai)', kv['PRODUCT'] || null, '🟢', '#00b39f')
     }
 
     // ── Hypervisors ─────────────────────────────────────────────────────
@@ -221,11 +239,16 @@ try { $az = (Invoke-WebRequest -Uri "http://169.254.169.254/metadata/instance/co
     const aws   = kv['AWS'] ?? ''
     const azure = kv['Azure'] ?? ''
 
-    if (aws && aws.length < 30 && !aws.includes('<')) {
+    // Same shared-IP caveat as the Linux path: 169.254.169.254 answers for
+    // multiple providers, so require DMI vendor confirmation before trusting it.
+    if (aws && aws.length < 30 && !aws.includes('<') && (mfr.includes('amazon') || bios.includes('amazon'))) {
       return mk('aws', 'Amazon Web Services', aws, '☁️', '#f97316')
     }
-    if (azure && azure.length < 40 && !azure.includes('<')) {
+    if (azure && azure.length < 40 && !azure.includes('<') && mfr.includes('microsoft')) {
       return mk('azure', 'Microsoft Azure', azure, '☁️', '#0ea5e9')
+    }
+    if (mfr.includes('linode') || model.includes('linode')) {
+      return mk('linode', 'Linode (Akamai)', kv['Model'] || null, '🟢', '#00b39f')
     }
     if (kv['VMwareTools'] === 'yes' || mfr.includes('vmware') || model.includes('vmware') || bios.includes('vmware')) {
       return mk('vmware', 'VMware', biosV || null, '🟦', '#1d6fa5')

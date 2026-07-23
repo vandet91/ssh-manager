@@ -24,7 +24,7 @@ type LintResult  = { supported:boolean; output:string; ok:boolean }
 type VersionEntry= { name:string; path:string; size:number; modified:string }
 
 type AclEntry = { default:boolean; qualifier:'user'|'group'|'mask'|'other'; name:string|null; perms:string; effective?:string }
-type AclResult = { owner:string; group:string; entries:AclEntry[]; isDir:boolean }
+type AclResult = { owner:string; group:string; entries:AclEntry[]; isDir:boolean; raw?:string }
 
 export type DragInfo = {
   tabId: string
@@ -220,6 +220,7 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
   const [aclError,   setAclError]   = useState('')
   const [aclSaving,  setAclSaving]  = useState(false)
   const [aclForm,    setAclForm]    = useState({ qualifier:'user' as 'user'|'group', name:'', r:true, w:false, x:false, isDefault:false, recursive:false })
+  const [showRawAcl, setShowRawAcl] = useState(false)
 
   // Re-layout Monaco when tab becomes active (fixes hidden-tab rendering)
   useEffect(() => {
@@ -493,6 +494,7 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
     setRenameTarget(null)
     setAclTarget(target)
     setAclForm({qualifier:'user',name:'',r:true,w:false,x:false,isDefault:false,recursive:false})
+    setShowRawAcl(false)
     loadAcl(target)
   }
 
@@ -1207,6 +1209,23 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
                   {aclSaving?'Applying…':'✓ Apply Entry'}
                 </Btn>
               </div>
+
+              {/* Raw getfacl output — useful when the parsed list looks sparse/wrong */}
+              {aclData.raw&&(
+                <div style={{marginTop:14,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
+                  <button onClick={()=>setShowRawAcl(v=>!v)} style={{
+                    background:'none',border:'none',cursor:'pointer',padding:0,
+                    fontSize:11,color:C.muted,display:'flex',alignItems:'center',gap:4,
+                  }}>
+                    {showRawAcl?'▾':'▸'} Show raw getfacl output
+                  </button>
+                  {showRawAcl&&(
+                    <pre style={{marginTop:6,padding:8,background:'#0d1117',borderRadius:5,
+                      fontFamily:'monospace',fontSize:11,color:C.text,whiteSpace:'pre-wrap',
+                      wordBreak:'break-all',maxHeight:180,overflowY:'auto'}}>{aclData.raw}</pre>
+                  )}
+                </div>
+              )}
             </>
           )}
         </Modal>

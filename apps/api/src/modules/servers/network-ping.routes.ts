@@ -50,11 +50,15 @@ export default async function networkPingRoutes(fastify: FastifyInstance): Promi
       environment: z.string().optional(),
     }).parse(req.body)
 
-    // Build query
+    // Build query. Without an explicit ORDER BY, Postgres doesn't guarantee row
+    // order — successive runs of this same query can come back in a different
+    // sequence, which made devices visibly jump up/down between ping runs even
+    // though nothing was actually sorted or filtered differently.
     let query = db.selectFrom('servers')
       .select(['id', 'name', 'hostname', 'os_type', 'environment', 'ping_enabled', 'in_stock'])
       .where('device_category', '=', 'network')
       .where('is_active', '=', true)
+      .orderBy('name', 'asc')
 
     if (body.device_ids?.length) {
       query = query.where('id', 'in', body.device_ids)

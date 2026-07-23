@@ -461,7 +461,10 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
       const result = await withServerSsh(id, async (client) => {
         const safe = shellEscape(targetPath)
         // -p: don't strip a leading slash from displayed paths (keeps them absolute)
-        const { stdout, code, stderr } = await exec(client, `getfacl -p '${safe}' 2>&1`)
+        // Note: NOT redirecting stderr into stdout here — exec() already captures
+        // them separately, and merging them would make error detection below
+        // blind (stderr always empty) while corrupting stdout with noise.
+        const { stdout, code, stderr } = await exec(client, `getfacl -p '${safe}'`)
         if (code !== 0) {
           if (/command not found/i.test(stderr)) {
             throw new Error('getfacl is not installed on this server (package "acl")')
@@ -470,7 +473,7 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
         }
         const { isDir } = await exec(client, `[ -d '${safe}' ] && echo D || echo F`)
           .then((r) => ({ isDir: r.stdout.trim() === 'D' }))
-        return { ...parseAclOutput(stdout), isDir }
+        return { ...parseAclOutput(stdout), isDir, raw: stdout }
       })
       return result
     } catch (err) {

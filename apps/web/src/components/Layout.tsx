@@ -5,48 +5,68 @@ import { useSystemName } from '../context/SystemNameContext'
 import type { ThemeName, ThemeMode } from '../App'
 import Terminal from '../pages/Terminal'
 import RemoteDesktopPage from '../pages/RemoteDesktopPage'
+import {
+  mdiViewDashboard, mdiConsole, mdiMonitor, mdiFolderOutline, mdiFlashOutline,
+  mdiServer, mdiLanConnect, mdiDomain, mdiKeyVariant, mdiSafe,
+  mdiShieldCheckOutline, mdiClipboardListOutline, mdiDatabaseOutline, mdiMagnify,
+  mdiSitemapOutline, mdiBookOpenPageVariantOutline, mdiCalendarCheckOutline,
+  mdiDatabaseCogOutline, mdiCodeBraces, mdiShareVariantOutline, mdiHarddisk,
+  mdiAccountGroupOutline, mdiTextBoxOutline, mdiSwapHorizontal, mdiCogOutline,
+} from '@mdi/js'
 
+// Every sidebar icon renders through this so they're all identical size/stroke
+// weight/color — mixing raw emoji and Unicode glyphs (the old approach) looks
+// inconsistent because each glyph has its own intrinsic size and rendering
+// style. `currentColor` makes it inherit the link's active/hover text color.
+function NavIcon({ path }: { path: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width={16} height={16} style={{ flexShrink: 0 }}>
+      <path d={path} fill="currentColor" />
+    </svg>
+  )
+}
 
 const PERSISTENT_ROUTES = ['/terminal', '/remote-desktop']
 
 // adminOnly: visible to admin only; operatorOk: visible to both admin and operator
+// icon: an @mdi/js path string, rendered through NavIcon at a fixed size.
 const nav: { to: string; label: string; icon: string; adminOnly?: boolean; group?: string }[] = [
   // ── Overview
-  { to: '/dashboard',       label: 'Dashboard',         icon: '▣',  group: 'Overview' },
+  { to: '/dashboard',       label: 'Dashboard',         icon: mdiViewDashboard,             group: 'Overview' },
 
   // ── Access
-  { to: '/terminal',        label: 'Terminal',          icon: '⌨',  group: 'Access' },
-  { to: '/remote-desktop',  label: 'Remote Desktop',    icon: '🖥',  group: 'Access' },
-  { to: '/filemanager',     label: 'File Manager',      icon: '⊟',  group: 'Access' },
-  { to: '/psexec',          label: 'Remote Exec',       icon: '⚡',  group: 'Access',  adminOnly: true },
+  { to: '/terminal',        label: 'Terminal',          icon: mdiConsole,                   group: 'Access' },
+  { to: '/remote-desktop',  label: 'Remote Desktop',    icon: mdiMonitor,                   group: 'Access' },
+  { to: '/filemanager',     label: 'File Manager',      icon: mdiFolderOutline,             group: 'Access' },
+  { to: '/psexec',          label: 'Remote Exec',       icon: mdiFlashOutline,              group: 'Access',  adminOnly: true },
 
   // ── Infrastructure
-  { to: '/servers',         label: 'Servers',           icon: '◫',  group: 'Infrastructure' },
-  { to: '/network-devices', label: 'Network Devices',   icon: '🌐',  group: 'Infrastructure' },
-  { to: '/domain',          label: 'Domain',            icon: '🏢',  group: 'Infrastructure' },
+  { to: '/servers',         label: 'Servers',           icon: mdiServer,                    group: 'Infrastructure' },
+  { to: '/network-devices', label: 'Network Devices',   icon: mdiLanConnect,                group: 'Infrastructure' },
+  { to: '/domain',          label: 'Domain',            icon: mdiDomain,                    group: 'Infrastructure' },
 
   // ── Security & Keys
-  { to: '/keys',            label: 'Keys',              icon: '⚷',  group: 'Security' },
-  { to: '/vault',           label: 'Vault',             icon: '🔐',  group: 'Security' },
-  { to: '/security',        label: 'Security',          icon: '🛡',  group: 'Security', adminOnly: true },
-  { to: '/assignments',     label: 'Assignments',       icon: '⊞',  group: 'Security', adminOnly: true },
+  { to: '/keys',            label: 'Keys',              icon: mdiKeyVariant,                group: 'Security' },
+  { to: '/vault',           label: 'Vault',             icon: mdiSafe,                      group: 'Security' },
+  { to: '/security',        label: 'Security',          icon: mdiShieldCheckOutline,        group: 'Security', adminOnly: true },
+  { to: '/assignments',     label: 'Assignments',       icon: mdiClipboardListOutline,      group: 'Security', adminOnly: true },
 
   // ── Tools
-  { to: '/db-connector',    label: 'DB Connector',      icon: '🗄',  group: 'Tools' },
-  { to: '/network-scan',    label: 'Network Scanner',   icon: '🔍',  group: 'Tools' },
-  { to: '/diagrams',        label: 'Diagrams',          icon: '📐',  group: 'Tools' },
-  { to: '/docs',            label: 'Documentation',     icon: '📖',  group: 'Tools' },
-  { to: '/tasks',           label: 'Tasks',             icon: '📋',  group: 'Tools' },
-  { to: '/db-manager',     label: 'DB Manager',        icon: '🗄',  group: 'Tools', adminOnly: true },
-  { to: '/commands',        label: 'Commands',          icon: '⌘',   group: 'Tools',   adminOnly: true },
-  { to: '/share',           label: 'Share',             icon: '🔗',  group: 'Tools',   adminOnly: true },
-  { to: '/firmware-repo',   label: 'Firmware & Backup', icon: '💾',  group: 'Tools' },
+  { to: '/db-connector',    label: 'DB Connector',      icon: mdiDatabaseOutline,           group: 'Tools' },
+  { to: '/network-scan',    label: 'Network Scanner',   icon: mdiMagnify,                   group: 'Tools' },
+  { to: '/diagrams',        label: 'Diagrams',          icon: mdiSitemapOutline,            group: 'Tools' },
+  { to: '/docs',            label: 'Documentation',     icon: mdiBookOpenPageVariantOutline,group: 'Tools' },
+  { to: '/tasks',           label: 'Tasks',             icon: mdiCalendarCheckOutline,      group: 'Tools' },
+  { to: '/db-manager',     label: 'DB Manager',        icon: mdiDatabaseCogOutline,         group: 'Tools', adminOnly: true },
+  { to: '/commands',        label: 'Commands',          icon: mdiCodeBraces,                group: 'Tools',   adminOnly: true },
+  { to: '/share',           label: 'Share',             icon: mdiShareVariantOutline,       group: 'Tools',   adminOnly: true },
+  { to: '/firmware-repo',   label: 'Firmware & Backup', icon: mdiHarddisk,                  group: 'Tools' },
 
   // ── Admin
-  { to: '/users',           label: 'Users',             icon: '◉',  group: 'Admin', adminOnly: true },
-  { to: '/logs',            label: 'Logs',              icon: '≡',  group: 'Admin', adminOnly: true },
-  { to: '/migration',       label: 'Migration',         icon: '⇄',  group: 'Admin', adminOnly: true },
-  { to: '/settings',        label: 'Settings',          icon: '⚙',  group: 'Admin', adminOnly: true },
+  { to: '/users',           label: 'Users',             icon: mdiAccountGroupOutline,       group: 'Admin', adminOnly: true },
+  { to: '/logs',            label: 'Logs',              icon: mdiTextBoxOutline,            group: 'Admin', adminOnly: true },
+  { to: '/migration',       label: 'Migration',         icon: mdiSwapHorizontal,            group: 'Admin', adminOnly: true },
+  { to: '/settings',        label: 'Settings',          icon: mdiCogOutline,                group: 'Admin', adminOnly: true },
 ]
 
 interface Props {
@@ -202,7 +222,9 @@ export default function Layout({ user, onLogout, themeName, setThemeName, themeM
                     color: isActive ? 'var(--sidebar-active-text)' : 'var(--sidebar-text)',
                   })}
                 >
-                  <span style={{ width: 16, textAlign: 'center', fontSize: 12, flexShrink: 0 }}>{icon}</span>
+                  <span style={{ width: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <NavIcon path={icon} />
+                  </span>
                   <span>{label}</span>
                 </NavLink>
               )

@@ -48,7 +48,7 @@ export type User = {
   mfa_enabled: boolean; mfa_exempt?: boolean; is_active: boolean; last_login_at: string | null; created_at: string
 }
 
-export type HostType = 'vmware' | 'hyperv' | 'proxmox' | 'kvm' | 'virtualbox' | 'xen' | 'lxc' | 'docker' | 'aws' | 'azure' | 'gcp' | 'physical' | 'unknown'
+export type HostType = 'vmware' | 'hyperv' | 'proxmox' | 'kvm' | 'virtualbox' | 'xen' | 'lxc' | 'docker' | 'aws' | 'azure' | 'gcp' | 'linode' | 'physical' | 'unknown'
 
 export type VirtInfo = {
   host_type: HostType

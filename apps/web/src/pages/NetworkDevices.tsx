@@ -1301,7 +1301,12 @@ function PingMonitorTab({ devices }: { devices: Server[] }) {
   }, [])
 
   const run = async () => {
-    setRunning(true); setResults(null)
+    // Don't clear `results` here — that was swapping the visible table out to
+    // the differently-shaped "Last saved ping results" table for the whole
+    // duration of the request (different columns: Note vs. Last Checked),
+    // then swapping back once results arrived. Keep whatever's on screen and
+    // just dim it (via `running` below) until the new results replace it.
+    setRunning(true)
     try {
       const body: Record<string, unknown> = {}
       if (filterType) body.os_type = filterType
@@ -1361,7 +1366,7 @@ function PingMonitorTab({ devices }: { devices: Server[] }) {
 
       {/* Results table */}
       {results ? (
-        <div style={{ border: '1px solid var(--border-med)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-surface)' }}>
+        <div style={{ border: '1px solid var(--border-med)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-surface)', opacity: running ? 0.55 : 1, transition: 'opacity 0.15s' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-med)' }}>
@@ -1388,7 +1393,7 @@ function PingMonitorTab({ devices }: { devices: Server[] }) {
         pingStatuses.length > 0 && (
           <div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Last saved ping results:</div>
-            <div style={{ border: '1px solid var(--border-med)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-surface)' }}>
+            <div style={{ border: '1px solid var(--border-med)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-surface)', opacity: running ? 0.55 : 1, transition: 'opacity 0.15s' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-table-header)', borderBottom: '1px solid var(--border-med)' }}>

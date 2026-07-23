@@ -611,6 +611,190 @@ function Sep() {
   return <span style={{ width: 1, height: 18, background: 'var(--border-med)', margin: '0 2px', flexShrink: 0 }} />
 }
 
+// ── Text color picker ────────────────────────────────────────────────────────
+// A curated 4-shade ramp (dark → light) across the hue wheel, plus grayscale.
+const TEXT_COLOR_SWATCHES = [
+  '#7f1d1d', '#991b1b', '#dc2626', '#ef4444', '#f87171', '#fca5a5',
+  '#9a3412', '#c2410c', '#ea580c', '#f97316', '#fb923c', '#fdba74',
+  '#854d0e', '#a16207', '#ca8a04', '#eab308', '#facc15', '#fde047',
+  '#14532d', '#166534', '#16a34a', '#22c55e', '#4ade80', '#86efac',
+  '#134e4a', '#0f766e', '#0d9488', '#14b8a6', '#2dd4bf', '#5eead4',
+  '#1e3a8a', '#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd',
+  '#4c1d95', '#6d28d9', '#7c3aed', '#8b5cf6', '#a78bfa', '#c4b5fd',
+  '#831843', '#be185d', '#db2777', '#ec4899', '#f472b6', '#f9a8d4',
+  '#000000', '#374151', '#6b7280', '#9ca3af', '#d1d5db', '#ffffff',
+]
+const HEX_RE = /^#[0-9a-fA-F]{6}$/
+const RECENT_COLORS_KEY = 'doc.recentTextColors'
+
+function TextColorPicker({ editor }: { editor: ReturnType<typeof useEditor> }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const [hex, setHex] = useState('#ef4444')
+  const [recent, setRecent] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(RECENT_COLORS_KEY) ?? '[]') } catch { return [] }
+  })
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+
+  const currentColor = editor?.getAttributes('textStyle').color as string | undefined
+
+  // Anchor the popover to the button, clamped so it never runs off-screen —
+  // this is what was broken before: the old native color input was hidden
+  // (display:none), so browsers had no real box to anchor the dialog to and
+  // fell back to opening it at the top-left of the screen instead of near
+  // the toolbar button that triggered it.
+  const openPicker = () => {
+    const r = btnRef.current?.getBoundingClientRect()
+    const POP_W = 268, POP_H = 340
+    if (r) {
+      let left = r.left
+      let top = r.bottom + 6
+      if (left + POP_W > window.innerWidth - 8) left = Math.max(8, window.innerWidth - POP_W - 8)
+      if (top + POP_H > window.innerHeight - 8) top = Math.max(8, r.top - POP_H - 6)
+      setPos({ top, left })
+    }
+    setHex(HEX_RE.test(currentColor ?? '') ? currentColor! : '#ef4444')
+    setOpen(true)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onDocMouseDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onScrollOrResize = () => setOpen(false)
+    document.addEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onScrollOrResize)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onScrollOrResize)
+    }
+  }, [open])
+
+  const apply = (color: string) => {
+    editor?.chain().focus().setColor(color).run()
+    setRecent((prev) => {
+      const next = [color, ...prev.filter((c) => c !== color)].slice(0, 12)
+      try { localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
+    setOpen(false)
+  }
+
+  const clear = () => { editor?.chain().focus().unsetColor().run(); setOpen(false) }
+
+  const swatchBtn = (c: string, size: number) => (
+    <button
+      key={c} title={c} onMouseDown={(e) => { e.preventDefault(); apply(c) }}
+      style={{
+        width: size, height: size, borderRadius: 5, cursor: 'pointer', padding: 0,
+        background: c,
+        border: currentColor === c ? '2px solid var(--accent-hex)' : '1px solid rgba(127,127,127,0.35)',
+        boxShadow: currentColor === c ? '0 0 0 2px rgba(var(--accent)/0.25)' : 'none',
+      }}
+    />
+  )
+
+  return (
+    <>
+      <button
+        ref={btnRef} type="button" title="Text color"
+        onMouseDown={(e) => { e.preventDefault(); open ? setOpen(false) : openPicker() }}
+        style={{
+          padding: '3px 6px', borderRadius: 5, border: 'none', cursor: 'pointer',
+          fontSize: 12, fontWeight: 600, lineHeight: 1, display: 'flex', alignItems: 'center', gap: 4,
+          background: open ? 'var(--accent-hex)' : 'var(--bg-input)',
+          color: open ? '#fff' : 'var(--text-secondary)',
+        }}
+      >
+        🎨
+        <span style={{
+          width: 12, height: 12, borderRadius: 3, display: 'inline-block',
+          background: currentColor ?? 'transparent',
+          border: `1px solid ${currentColor ? 'rgba(0,0,0,0.25)' : 'var(--border-med)'}`,
+        }} />
+      </button>
+
+      {open && pos && createPortal(
+        <div
+          ref={popRef}
+          style={{
+            position: 'fixed', top: pos.top, left: pos.left, width: 268, zIndex: 10001,
+            background: 'var(--bg-card)', border: '1px solid var(--border-med)', borderRadius: 10,
+            boxShadow: '0 16px 40px rgba(0,0,0,0.5)', padding: 12,
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+            Text Color
+          </div>
+
+          {/* Swatch ramp */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 5, marginBottom: 10 }}>
+            {TEXT_COLOR_SWATCHES.map((c) => swatchBtn(c, 26))}
+          </div>
+
+          {/* Recently used */}
+          {recent.length > 0 && (
+            <>
+              <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 5 }}>Recent</div>
+              <div style={{ display: 'flex', gap: 5, marginBottom: 10, flexWrap: 'wrap' }}>
+                {recent.map((c) => swatchBtn(c, 20))}
+              </div>
+            </>
+          )}
+
+          {/* Hex input + full-spectrum picker */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+            <input
+              type="color" value={HEX_RE.test(hex) ? hex : '#ef4444'} onChange={(e) => setHex(e.target.value)}
+              title="Full-spectrum picker"
+              style={{ width: 28, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0, flexShrink: 0 }}
+            />
+            <input
+              value={hex} onChange={(e) => setHex(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && HEX_RE.test(hex)) apply(hex) }}
+              placeholder="#rrggbb"
+              style={{
+                flex: 1, padding: '5px 8px', borderRadius: 5, fontSize: 12, fontFamily: 'monospace',
+                border: `1px solid ${HEX_RE.test(hex) ? 'var(--border-med)' : 'var(--danger)'}`,
+                background: 'var(--bg-input)', color: 'var(--text-primary)',
+              }}
+            />
+            <button
+              onMouseDown={(e) => { e.preventDefault(); if (HEX_RE.test(hex)) apply(hex) }}
+              disabled={!HEX_RE.test(hex)}
+              style={{
+                padding: '5px 10px', borderRadius: 5, border: 'none', cursor: HEX_RE.test(hex) ? 'pointer' : 'default',
+                background: 'var(--accent-hex)', color: '#fff', fontSize: 11, fontWeight: 600,
+                opacity: HEX_RE.test(hex) ? 1 : 0.5,
+              }}
+            >
+              Apply
+            </button>
+          </div>
+
+          <button
+            onMouseDown={(e) => { e.preventDefault(); clear() }}
+            style={{
+              width: '100%', padding: '6px 0', borderRadius: 5, border: '1px solid var(--border-med)',
+              background: 'transparent', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer',
+            }}
+          >
+            ✕ Remove color
+          </button>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function Documentation() {
@@ -637,7 +821,6 @@ export default function Documentation() {
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
   const imageRef  = useRef<HTMLInputElement>(null)
-  const colorRef  = useRef<HTMLInputElement>(null)
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok })
@@ -1146,8 +1329,6 @@ export default function Documentation() {
         onChange={handleImport} />
       <input ref={imageRef} type="file" style={{ display: 'none' }}
         accept="image/*" onChange={insertImage} />
-      <input ref={colorRef} type="color" style={{ display: 'none' }}
-        onChange={(e) => editor?.chain().focus().setColor(e.target.value).run()} />
 
       {/* ── Sidebar ── */}
       <div style={sidebarStyle}>
@@ -1389,7 +1570,7 @@ export default function Documentation() {
                 editor?.chain().focus().setLink({ href: url }).run()
               }}>🔗</Btn>
               <Btn title="Insert image" onClick={() => imageRef.current?.click()}>🖼</Btn>
-              <Btn title="Text color" onClick={() => colorRef.current?.click()}>🎨</Btn>
+              <TextColorPicker editor={editor} />
               <Sep />
               <Btn title="Find & Replace (Ctrl+F)" active={showFind} onClick={() => {
                 setShowFind(!showFind)

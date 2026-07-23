@@ -21,6 +21,7 @@ const HOST_META: Record<string, { icon: string; label: string; color: string; bg
   aws:         { icon: '☁️', label: 'AWS',          color: '#fb923c', bg: 'rgba(154,52,18,0.2)',  border: 'rgba(249,115,22,0.35)' },
   azure:       { icon: '☁️', label: 'Azure',        color: '#60a5fa', bg: 'rgba(29,78,216,0.2)',  border: 'rgba(96,165,250,0.35)' },
   gcp:         { icon: '☁️', label: 'GCP',          color: '#34d399', bg: 'rgba(6,78,59,0.2)',    border: 'rgba(52,211,153,0.35)' },
+  linode:      { icon: '🟢', label: 'Linode',       color: '#00b39f', bg: 'rgba(0,179,159,0.15)', border: 'rgba(0,179,159,0.35)' },
   physical:    { icon: '🖥️', label: 'Physical',    color: '#9ca3af', bg: 'rgba(55,65,81,0.3)',   border: 'rgba(107,114,128,0.4)' },
   unknown:     { icon: '❓', label: 'Unknown',      color: '#6b7280', bg: 'rgba(55,65,81,0.2)',   border: 'rgba(107,114,128,0.3)' },
 }
