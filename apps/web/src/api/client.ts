@@ -628,6 +628,8 @@ export type DistroArt = {
   key: string
   art_lines: string[]
   color: string
+  art_type: 'ascii' | 'image'
+  has_image: boolean
 }
 
 export const distroArtApi = {
@@ -638,6 +640,14 @@ export const distroArtApi = {
     api.delete(`/distro-art/${encodeURIComponent(key)}`),
   generate: (distro: string, style?: string) =>
     api.post<{ art_lines: string[]; color: string }>('/distro-art/generate', { distro, style }),
+  uploadImage: async (key: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch(`/api/distro-art/${encodeURIComponent(key)}/image`, { method: 'POST', body: form, credentials: 'include' })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'Upload failed')
+    return res.json()
+  },
+  imageUrl: (key: string) => `/api/distro-art/${encodeURIComponent(key)}/image?t=${Date.now()}`,
 }
 
 // ── Documentation ─────────────────────────────────────────────────────────────

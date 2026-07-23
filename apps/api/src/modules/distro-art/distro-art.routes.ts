@@ -1,8 +1,16 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import * as fs from 'fs'
+import * as fsp from 'fs/promises'
+import * as path from 'path'
 import { db } from '../../db/client'
 import { requireAuth, requireAdmin } from '../../middleware/auth'
 import { AiProvider } from '../../utils/ai-analyst'
+
+// Same assets directory used for the login background/logo uploads.
+const ASSETS_PATH = process.env.RECORDINGS_STORAGE_PATH
+  ? path.join(process.env.RECORDINGS_STORAGE_PATH, '..', 'assets')
+  : '/var/lib/ssh-manager/assets'
 
 async function getAiConfig(): Promise<{ provider: AiProvider; model: string; apiKey: string } | null> {
   const keys = ['ai_key_claude', 'ai_key_openai', 'ai_key_gemini', 'ai_key_deepseek', 'ai_default_provider', 'ai_default_model']
@@ -58,10 +66,12 @@ export default async function distroArtRoutes(app: FastifyInstance) {
       key: r.key,
       art_lines: r.art_lines as string[],
       color: r.color,
+      art_type: (r as any).art_type ?? 'ascii',
+      has_image: !!(r as any).image_file,
     }))
   })
 
-  // Admin: upsert a distro logo
+  // Admin: upsert a distro logo as ASCII text (switches this key back to text mode)
   app.put<{ Params: { key: string } }>('/distro-art/:key', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
     const { key } = req.params
     const body = z.object({
@@ -71,23 +81,102 @@ export default async function distroArtRoutes(app: FastifyInstance) {
 
     const userId = req.session.user!.id
 
+    // Switching back to text mode — drop any stored image file for this key.
+    const existing = await db.selectFrom('distro_art').select(['image_file' as any]).where('key', '=', key).executeTakeFirst()
+    const oldImage = (existing as any)?.image_file as string | undefined
+    if (oldImage) { try { fs.unlinkSync(path.join(ASSETS_PATH, oldImage)) } catch { /* ignore */ } }
+
     await db.insertInto('distro_art')
       .values({
         key,
         art_lines: JSON.stringify(body.art_lines) as any,
         color: body.color,
+        art_type: 'ascii' as any,
+        image_file: null as any,
         updated_by: userId,
         updated_at: new Date(),
-      })
+      } as any)
       .onConflict(oc => oc.column('key').doUpdateSet({
         art_lines: JSON.stringify(body.art_lines) as any,
         color: body.color,
+        art_type: 'ascii' as any,
+        image_file: null as any,
         updated_by: userId,
         updated_at: new Date(),
-      }))
+      } as any))
       .execute()
 
     return { ok: true }
+  })
+
+  // Admin: upload a PNG/JPEG/WebP/GIF logo (switches this key to image mode)
+  app.post<{ Params: { key: string } }>('/distro-art/:key/image', { preHandler: [requireAuth, requireAdmin] }, async (req, reply) => {
+    const { key } = req.params
+    if (!/^[a-z0-9_-]+$/.test(key)) return reply.code(400).send({ error: 'Invalid key' })
+
+    await fsp.mkdir(ASSETS_PATH, { recursive: true })
+
+    const parts = req.parts()
+    let fileBuffer: Buffer | null = null
+    let originalFilename = ''
+    for await (const part of parts) {
+      if (part.type === 'file') {
+        originalFilename = part.filename
+        const chunks: Buffer[] = []
+        for await (const chunk of part.file) chunks.push(chunk)
+        fileBuffer = Buffer.concat(chunks)
+      }
+    }
+    if (!fileBuffer || !originalFilename) return reply.code(400).send({ error: 'No file provided' })
+
+    const ext = path.extname(originalFilename).toLowerCase()
+    const allowed = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+    if (!allowed.includes(ext)) return reply.code(400).send({ error: 'Only PNG, JPEG, WebP, GIF allowed' })
+    if (fileBuffer.length > 3 * 1024 * 1024) return reply.code(400).send({ error: 'Max 3 MB' })
+
+    // Remove any prior image for this key (may have a different extension)
+    const existing = await db.selectFrom('distro_art').select(['image_file' as any]).where('key', '=', key).executeTakeFirst()
+    const oldImage = (existing as any)?.image_file as string | undefined
+    if (oldImage) { try { fs.unlinkSync(path.join(ASSETS_PATH, oldImage)) } catch { /* ignore */ } }
+
+    const filename = `distro-art-${key}${ext}`
+    await fsp.writeFile(path.join(ASSETS_PATH, filename), fileBuffer)
+
+    const userId = req.session.user!.id
+    await db.insertInto('distro_art')
+      .values({
+        key,
+        art_lines: JSON.stringify([]) as any,
+        color: '#94a3b8',
+        art_type: 'image' as any,
+        image_file: filename as any,
+        updated_by: userId,
+        updated_at: new Date(),
+      } as any)
+      .onConflict(oc => oc.column('key').doUpdateSet({
+        art_type: 'image' as any,
+        image_file: filename as any,
+        updated_by: userId,
+        updated_at: new Date(),
+      } as any))
+      .execute()
+
+    return { ok: true }
+  })
+
+  // Any authenticated user: fetch the uploaded image (Terminal needs this to render it)
+  app.get<{ Params: { key: string } }>('/distro-art/:key/image', { preHandler: requireAuth }, async (req, reply) => {
+    const { key } = req.params
+    const row = await db.selectFrom('distro_art').select(['image_file' as any]).where('key', '=', key).executeTakeFirst()
+    const filename = (row as any)?.image_file as string | undefined
+    if (!filename) return reply.code(404).send({ error: 'No image set for this key' })
+    const filePath = path.join(ASSETS_PATH, filename)
+    if (!fs.existsSync(filePath)) return reply.code(404).send({ error: 'Image file missing' })
+    const ext = path.extname(filename).toLowerCase()
+    const mime = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+    reply.header('Content-Type', mime)
+    reply.header('Cache-Control', 'private, max-age=300')
+    return reply.send(fs.createReadStream(filePath))
   })
 
   // Admin: generate art via AI
@@ -130,6 +219,9 @@ Rules:
   // Admin: delete a distro logo (reverts to hardcoded default)
   app.delete<{ Params: { key: string } }>('/distro-art/:key', { preHandler: [requireAuth, requireAdmin] }, async (req) => {
     const { key } = req.params
+    const row = await db.selectFrom('distro_art').select(['image_file' as any]).where('key', '=', key).executeTakeFirst()
+    const filename = (row as any)?.image_file as string | undefined
+    if (filename) { try { fs.unlinkSync(path.join(ASSETS_PATH, filename)) } catch { /* ignore */ } }
     await db.deleteFrom('distro_art').where('key', '=', key).execute()
     return { ok: true }
   })

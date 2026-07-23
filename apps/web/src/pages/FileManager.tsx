@@ -10,6 +10,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Editor, { DiffEditor, OnMount } from '@monaco-editor/react'
 import type * as Monaco from 'monaco-editor'
 import { api, Server } from '../api/client'
+import { useTotpElevation } from '../context/TotpElevationContext'
+import Modal from '../components/Modal'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -20,6 +22,9 @@ type ReadResult  = { content:string|null; binary:boolean; mime:string; size:numb
 type SearchResult= { mode:string; matches:string[]; grep_lines:string[] }
 type LintResult  = { supported:boolean; output:string; ok:boolean }
 type VersionEntry= { name:string; path:string; size:number; modified:string }
+
+type AclEntry = { default:boolean; qualifier:'user'|'group'|'mask'|'other'; name:string|null; perms:string; effective?:string }
+type AclResult = { owner:string; group:string; entries:AclEntry[]; isDir:boolean }
 
 export type DragInfo = {
   tabId: string
@@ -206,6 +211,15 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
 
   // Drop highlight
   const [dropHighlight, setDropHighlight] = useState(false)
+
+  // ACL panel
+  const { requestElevation } = useTotpElevation()
+  const [aclTarget,  setAclTarget]  = useState<FsEntry|null>(null)
+  const [aclData,    setAclData]    = useState<AclResult|null>(null)
+  const [aclLoading, setAclLoading] = useState(false)
+  const [aclError,   setAclError]   = useState('')
+  const [aclSaving,  setAclSaving]  = useState(false)
+  const [aclForm,    setAclForm]    = useState({ qualifier:'user' as 'user'|'group', name:'', r:true, w:false, x:false, isDefault:false, recursive:false })
 
   // Re-layout Monaco when tab becomes active (fixes hidden-tab rendering)
   useEffect(() => {
@@ -461,6 +475,62 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
     a.rel='noopener'
     document.body.appendChild(a);a.click();a.remove()
     setTimeout(()=>setDownloadMsg(''),4000)
+  }
+
+  const aclPath = (target:FsEntry)=>join(curPath,target.name)
+
+  const loadAcl=async(target:FsEntry)=>{
+    if(!serverId)return
+    setAclLoading(true);setAclError('')
+    try{
+      const res=await api.get<AclResult>(`/servers/${serverId}/fs/acl?path=${encodeURIComponent(aclPath(target))}`)
+      setAclData(res)
+    }catch(err){setAclError((err as Error).message);setAclData(null)}
+    finally{setAclLoading(false)}
+  }
+
+  const openAcl=(target:FsEntry)=>{
+    setRenameTarget(null)
+    setAclTarget(target)
+    setAclForm({qualifier:'user',name:'',r:true,w:false,x:false,isDefault:false,recursive:false})
+    loadAcl(target)
+  }
+
+  const submitAclEntry=async()=>{
+    if(!aclTarget||!serverId||!aclForm.name.trim())return
+    setAclSaving(true);setAclError('')
+    try{
+      await requestElevation('fs_acl_modify')
+      const perms=`${aclForm.r?'r':'-'}${aclForm.w?'w':'-'}${aclForm.x?'x':'-'}`
+      await api.post(`/servers/${serverId}/fs/acl`,{
+        path:aclPath(aclTarget),qualifier:aclForm.qualifier,name:aclForm.name.trim(),
+        perms,isDefault:aclForm.isDefault,recursive:aclForm.recursive,
+      })
+      setAclForm(f=>({...f,name:'',r:true,w:false,x:false}))
+      await loadAcl(aclTarget)
+    }catch(err){
+      const msg=(err as Error).message
+      if(msg!=='TOTP cancelled')setAclError(msg)
+    }
+    finally{setAclSaving(false)}
+  }
+
+  const removeAclEntry=async(entry:AclEntry)=>{
+    if(!aclTarget||!serverId||!entry.name)return
+    setAclSaving(true);setAclError('')
+    try{
+      await requestElevation('fs_acl_modify')
+      const params=new URLSearchParams({
+        path:aclPath(aclTarget),qualifier:entry.qualifier,name:entry.name,
+        isDefault:String(entry.default),recursive:String(aclForm.recursive),
+      })
+      await api.delete(`/servers/${serverId}/fs/acl?${params.toString()}`)
+      await loadAcl(aclTarget)
+    }catch(err){
+      const msg=(err as Error).message
+      if(msg!=='TOTP cancelled')setAclError(msg)
+    }
+    finally{setAclSaving(false)}
   }
 
   const doRename=async()=>{
@@ -824,6 +894,7 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
                 </div>
               )}
               <Btn bg='#0e7490' onClick={()=>doDownload(join(curPath,renameTarget.name),renameTarget.name,renameTarget.type==='dir')} full>⬇ Download {renameTarget.type==='dir'?'(.tar.gz)':''}</Btn>
+              <Btn bg='#6d28d9' onClick={()=>openAcl(renameTarget)} full>🔒 ACL / Permissions</Btn>
               <Btn bg='#b91c1c' onClick={()=>{setDeleteTgt(renameTarget);setRenameTarget(null)}} full>
                 🗑 Delete {renameTarget.type==='dir'?'folder':'file'}
               </Btn>
@@ -1060,6 +1131,85 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
             </div>
           </div>
         </div>
+      )}
+
+      {/* ACL / Permissions modal */}
+      {aclTarget&&(
+        <Modal title={`ACL — ${aclTarget.name}`} onClose={()=>{setAclTarget(null);setAclData(null);setAclError('')}} size='md'>
+          {aclLoading&&<div style={{fontSize:12,color:C.muted}}>Loading ACL…</div>}
+          {aclError&&<div style={{fontSize:12,color:C.error,marginBottom:10,whiteSpace:'pre-wrap'}}>{aclError}</div>}
+          {aclData&&(
+            <>
+              <div style={{fontSize:11,color:C.muted,marginBottom:12}}>
+                Owner <strong style={{color:C.text}}>{aclData.owner}</strong> · Group <strong style={{color:C.text}}>{aclData.group}</strong> · {aclData.isDir?'Directory':'File'}
+              </div>
+
+              {/* Existing entries, split into regular vs default */}
+              {(['regular','default'] as const).map(section=>{
+                const rows=aclData.entries.filter(e=>section==='default'?e.default:!e.default)
+                if(section==='default'&&rows.length===0)return null
+                return (
+                  <div key={section} style={{marginBottom:14}}>
+                    <div style={{fontSize:10,fontWeight:700,color:C.muted,textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>
+                      {section==='default'?'Default ACL (inherited by new files)':'ACL Entries'}
+                    </div>
+                    <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                      {rows.map((e,i)=>(
+                        <div key={`${section}-${i}`} style={{display:'flex',alignItems:'center',gap:8,
+                          padding:'5px 8px',borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,fontSize:12}}>
+                          <span style={{width:52,flexShrink:0,color:C.muted,fontSize:10,textTransform:'uppercase'}}>{e.qualifier}</span>
+                          <span style={{flex:1,fontFamily:'monospace',color:C.text}}>{e.name??'(owning)'}</span>
+                          <code style={{fontFamily:'monospace',color:C.accent}}>{e.perms}</code>
+                          {e.effective&&<span title='Trimmed by mask' style={{fontSize:10,color:C.warning}}>eff:{e.effective}</span>}
+                          {(e.qualifier==='user'||e.qualifier==='group')&&e.name&&(
+                            <Btn small onClick={()=>removeAclEntry(e)} disabled={aclSaving} title='Remove this entry'>✕</Btn>
+                          )}
+                        </div>
+                      ))}
+                      {rows.length===0&&<div style={{fontSize:11,color:C.muted}}>None</div>}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {/* Add / modify entry form */}
+              <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.muted,textTransform:'uppercase',letterSpacing:0.5,marginBottom:8}}>Add / Modify Entry</div>
+                <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+                  <select value={aclForm.qualifier} onChange={e=>setAclForm(f=>({...f,qualifier:e.target.value as 'user'|'group'}))}
+                    style={{padding:'5px 8px',borderRadius:4,border:`1px solid ${C.inputBdr}`,background:C.inputBg,color:C.inputTxt,fontSize:12}}>
+                    <option value='user'>User</option>
+                    <option value='group'>Group</option>
+                  </select>
+                  <IInput value={aclForm.name} onChange={v=>setAclForm(f=>({...f,name:v}))} placeholder='username or group'/>
+                </div>
+                <div style={{display:'flex',gap:14,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
+                  {(['r','w','x'] as const).map(p=>(
+                    <label key={p} style={{display:'flex',alignItems:'center',gap:4,fontSize:12,color:C.text,cursor:'pointer'}}>
+                      <input type='checkbox' checked={aclForm[p]} onChange={e=>setAclForm(f=>({...f,[p]:e.target.checked}))}/>
+                      {p.toUpperCase()}
+                    </label>
+                  ))}
+                  {aclData.isDir&&(
+                    <label style={{display:'flex',alignItems:'center',gap:4,fontSize:12,color:C.text,cursor:'pointer'}}>
+                      <input type='checkbox' checked={aclForm.isDefault} onChange={e=>setAclForm(f=>({...f,isDefault:e.target.checked}))}/>
+                      Default (inherited)
+                    </label>
+                  )}
+                  {aclData.isDir&&(
+                    <label style={{display:'flex',alignItems:'center',gap:4,fontSize:12,color:C.text,cursor:'pointer'}}>
+                      <input type='checkbox' checked={aclForm.recursive} onChange={e=>setAclForm(f=>({...f,recursive:e.target.checked}))}/>
+                      Apply recursively
+                    </label>
+                  )}
+                </div>
+                <Btn bg='#6d28d9' onClick={submitAclEntry} disabled={aclSaving||!aclForm.name.trim()} full>
+                  {aclSaving?'Applying…':'✓ Apply Entry'}
+                </Btn>
+              </div>
+            </>
+          )}
+        </Modal>
       )}
     </div>
   )

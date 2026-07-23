@@ -224,6 +224,18 @@ function AsciiLogo({ distro, osType, customMap = {} }: {
 
   // ── Lookup: custom DB entry → hardcoded DISTRO_ART → 'default' ───────────
   const custom = customMap[d] ?? customMap['default']
+
+  // Custom entry can be an uploaded image instead of ASCII text.
+  if (custom?.art_type === 'image' && custom.has_image) {
+    return (
+      <img
+        src={distroArtApi.imageUrl(custom.key)}
+        alt={`${d || 'server'} logo`}
+        style={{ maxWidth: 140, maxHeight: 110, display: 'block', margin: '0 auto', objectFit: 'contain' }}
+      />
+    )
+  }
+
   const base = DISTRO_ART[d] ?? DISTRO_ART.default
   const art = custom ? custom.art_lines : base.art
   const color = custom ? custom.color : base.color
@@ -1192,20 +1204,6 @@ export default function Terminal() {
                 title="Toggle info panel">
                 ▶▌
               </button>
-            )}
-
-            {/* Upload destination path (when connected) */}
-            {tab.connected && (
-              <div className="flex items-center gap-1 ml-1">
-                <span className="text-xs text-gray-500">📁</span>
-                <input
-                  value={tab.uploadPath}
-                  onChange={(e) => updateTab(tab.id, { uploadPath: e.target.value })}
-                  title="Drop destination path"
-                  placeholder="/tmp/"
-                  className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36"
-                />
-              </div>
             )}
 
             {/* Status / key */}

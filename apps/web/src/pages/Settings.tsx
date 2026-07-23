@@ -1649,6 +1649,10 @@ function DistroArtSection() {
   const [editKey, setEditKey] = useState('')
   const [editColor, setEditColor] = useState('#94a3b8')
   const [editArt, setEditArt] = useState('')
+  const [formMode, setFormMode] = useState<'ascii' | 'image'>('ascii')
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -1663,11 +1667,37 @@ function DistroArtSection() {
     setEditKey(item.key)
     setEditColor(item.color)
     setEditArt(item.art_lines.join('\n'))
+    setFormMode(item.art_type === 'image' ? 'image' : 'ascii')
+    setImageFile(null)
+    setImagePreviewUrl(item.art_type === 'image' && item.has_image ? distroArtApi.imageUrl(item.key) : null)
     setErr('')
   }
 
 
-  const openNew = () => openEdit({ key: '', art_lines: [], color: '#94a3b8' }, true)
+  const openNew = () => openEdit({ key: '', art_lines: [], color: '#94a3b8', art_type: 'ascii', has_image: false }, true)
+
+  const handleImagePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImageFile(file)
+    setImagePreviewUrl(URL.createObjectURL(file))
+    setErr('')
+  }
+
+  const uploadImage = async () => {
+    if (!imageFile) { setErr('Choose an image file first'); return }
+    if (!editKey.trim()) { setErr('Key is required'); return }
+    setUploading(true); setErr('')
+    try {
+      await distroArtApi.uploadImage(editKey.trim().toLowerCase(), imageFile)
+      setEditing(null)
+      load()
+    } catch (e: any) {
+      setErr(e.message ?? 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const save = async () => {
     const lines = editArt.split('\n')
@@ -1737,10 +1767,13 @@ function DistroArtSection() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ width: 10, height: 10, borderRadius: '50%', background: item.color, flexShrink: 0, display: 'inline-block', boxShadow: `0 0 6px ${item.color}` }} />
                   <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', fontFamily: monoFont }}>{item.key}</span>
+                  {item.art_type === 'image' && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 999, background: 'var(--border-weak)', color: 'var(--text-muted)' }}>IMAGE</span>}
                 </div>
                 {/* Preview */}
                 <div style={{ background: '#0d1117', borderRadius: 6, padding: '8px 4px', minHeight: 80, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <ArtPreview lines={item.art_lines} color={item.color} />
+                  {item.art_type === 'image' && item.has_image
+                    ? <img src={distroArtApi.imageUrl(item.key)} alt={item.key} style={{ maxWidth: '100%', maxHeight: 64, objectFit: 'contain' }} />
+                    : <ArtPreview lines={item.art_lines} color={item.color} />}
                 </div>
                 {/* Actions */}
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -1809,51 +1842,96 @@ function DistroArtSection() {
                   </div>
                 </div>
 
-                {/* Color */}
+                {/* Mode toggle */}
                 <div>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>COLOR</label>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <input type="color" value={editColor} onChange={e => setEditColor(e.target.value)}
-                      style={{ width: 40, height: 32, border: 'none', cursor: 'pointer', borderRadius: 4, padding: 2 }} />
-                    <input value={editColor} onChange={e => setEditColor(e.target.value)}
-                      style={{
-                        flex: 1, padding: '7px 10px', borderRadius: 6, fontSize: 12,
-                        border: '1px solid var(--border-weak)', background: 'var(--input-bg)', color: 'var(--text)', fontFamily: monoFont,
-                      }} />
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>LOGO TYPE</label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {(['ascii', 'image'] as const).map(m => (
+                      <button key={m} onClick={() => setFormMode(m)} style={{
+                        flex: 1, padding: '6px 0', fontSize: 12, borderRadius: 6, cursor: 'pointer',
+                        border: `1px solid ${formMode === m ? 'var(--accent-hex)' : 'var(--border-weak)'}`,
+                        background: formMode === m ? 'rgba(var(--accent)/0.12)' : 'transparent',
+                        color: formMode === m ? 'var(--accent-hex)' : 'var(--text-muted)',
+                      }}>
+                        {m === 'ascii' ? 'ASCII Text' : 'Image (PNG/JPG)'}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                {/* Art textarea */}
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
-                    ASCII ART <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(one line per row)</span>
-                  </label>
-                  <textarea
-                    value={editArt}
-                    onChange={e => setEditArt(e.target.value)}
-                    rows={14}
-                    spellCheck={false}
-                    placeholder={'   ██████   \n  ██    ██  \n ██  ██  ██ \n ...'}
-                    style={{
-                      width: '100%', padding: '8px 10px', borderRadius: 6, fontSize: 12,
-                      border: '1px solid var(--border-weak)', background: '#0d1117',
-                      color: editColor, fontFamily: monoFont, lineHeight: 1.5, resize: 'vertical',
-                      boxSizing: 'border-box', outline: 'none',
-                    }}
-                  />
-                </div>
+                {formMode === 'ascii' ? (
+                  <>
+                    {/* Color */}
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>COLOR</label>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input type="color" value={editColor} onChange={e => setEditColor(e.target.value)}
+                          style={{ width: 40, height: 32, border: 'none', cursor: 'pointer', borderRadius: 4, padding: 2 }} />
+                        <input value={editColor} onChange={e => setEditColor(e.target.value)}
+                          style={{
+                            flex: 1, padding: '7px 10px', borderRadius: 6, fontSize: 12,
+                            border: '1px solid var(--border-weak)', background: 'var(--input-bg)', color: 'var(--text)', fontFamily: monoFont,
+                          }} />
+                      </div>
+                    </div>
 
-                {err && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>}
+                    {/* Art textarea */}
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                        ASCII ART <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(one line per row)</span>
+                      </label>
+                      <textarea
+                        value={editArt}
+                        onChange={e => setEditArt(e.target.value)}
+                        rows={14}
+                        spellCheck={false}
+                        placeholder={'   ██████   \n  ██    ██  \n ██  ██  ██ \n ...'}
+                        style={{
+                          width: '100%', padding: '8px 10px', borderRadius: 6, fontSize: 12,
+                          border: '1px solid var(--border-weak)', background: '#0d1117',
+                          color: editColor, fontFamily: monoFont, lineHeight: 1.5, resize: 'vertical',
+                          boxSizing: 'border-box', outline: 'none',
+                        }}
+                      />
+                    </div>
 
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={save} disabled={saving} className="btn-primary" style={{ padding: '8px 20px' }}>
-                    {saving ? 'Saving…' : 'Save'}
-                  </button>
-                  <button onClick={() => setEditing(null)} style={{
-                    padding: '8px 16px', borderRadius: 6, border: '1px solid var(--border-weak)',
-                    background: 'transparent', color: 'var(--text)', cursor: 'pointer', fontSize: 13,
-                  }}>Cancel</button>
-                </div>
+                    {err && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>}
+
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={save} disabled={saving} className="btn-primary" style={{ padding: '8px 20px' }}>
+                        {saving ? 'Saving…' : 'Save'}
+                      </button>
+                      <button onClick={() => setEditing(null)} style={{
+                        padding: '8px 16px', borderRadius: 6, border: '1px solid var(--border-weak)',
+                        background: 'transparent', color: 'var(--text)', cursor: 'pointer', fontSize: 13,
+                      }}>Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Image upload */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', display: 'block' }}>IMAGE FILE</label>
+                      <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleImagePick}
+                        style={{ fontSize: 12, color: 'var(--text)' }} />
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                        PNG, JPEG, WebP, or GIF — max 3 MB. Shown at up to 140×110px in the Terminal panel.
+                      </div>
+                    </div>
+
+                    {err && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>}
+
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={uploadImage} disabled={uploading || !imageFile} className="btn-primary" style={{ padding: '8px 20px' }}>
+                        {uploading ? 'Uploading…' : 'Upload & Save'}
+                      </button>
+                      <button onClick={() => setEditing(null)} style={{
+                        padding: '8px 16px', borderRadius: 6, border: '1px solid var(--border-weak)',
+                        background: 'transparent', color: 'var(--text)', cursor: 'pointer', fontSize: 13,
+                      }}>Cancel</button>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Right: live preview */}
@@ -1862,8 +1940,13 @@ function DistroArtSection() {
                 <div style={{
                   background: '#0d1117', borderRadius: 8, border: '1px solid var(--border-weak)',
                   flex: 1, minHeight: 200, padding: 16, overflow: 'auto',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}>
-                  <ArtPreview lines={previewLines} color={editColor} scroll />
+                  {formMode === 'image'
+                    ? (imagePreviewUrl
+                        ? <img src={imagePreviewUrl} alt="preview" style={{ maxWidth: 140, maxHeight: 110, objectFit: 'contain' }} />
+                        : <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Choose an image to preview</span>)
+                    : <ArtPreview lines={previewLines} color={editColor} scroll />}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
                   This is how the logo will appear in the Terminal panel when connected to a server with distro = <code style={{ fontFamily: monoFont }}>{editKey || '…'}</code>.

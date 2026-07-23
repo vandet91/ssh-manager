@@ -5,6 +5,7 @@ import * as path from 'path'
 import { requireAuth } from '../../middleware/auth'
 import { withServerSsh } from '../../utils/server-ssh'
 import { writeAuditLog } from '../../utils/audit'
+import { requireTotpElevation } from '../../utils/totp-guard'
 
 function normalizeSshPath(input: string): string {
   return path.posix.normalize('/' + input).replace(/\/+$/, '') || '/'
@@ -92,6 +93,59 @@ function exec(client: Client, cmd: string): Promise<{ stdout: string; code: numb
     })
   })
 }
+
+// ── POSIX ACL helpers ──────────────────────────────────────────────────────
+
+type AclEntry = {
+  default: boolean
+  qualifier: 'user' | 'group' | 'mask' | 'other'
+  name: string | null   // null for the owning-user/owning-group/mask/other entries
+  perms: string          // e.g. "rwx", "r-x"
+  effective?: string     // getfacl appends "#effective:r-x" when the mask trims perms
+}
+
+// getfacl output looks like:
+//   # file: home/bob
+//   # owner: bob
+//   # group: bob
+//   user::rwx
+//   user:alice:r-x
+//   group::r-x
+//   group:devs:rwx                 #effective:r-x
+//   mask::r-x
+//   other::---
+//   default:user::rwx
+function parseAclOutput(stdout: string): { owner: string; group: string; entries: AclEntry[] } {
+  let owner = '', group = ''
+  const entries: AclEntry[] = []
+  for (const raw of stdout.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('# owner:')) { owner = line.slice(8).trim(); continue }
+    if (line.startsWith('# group:')) { group = line.slice(8).trim(); continue }
+    if (line.startsWith('#')) continue
+
+    const isDefault = line.startsWith('default:')
+    const rest = isDefault ? line.slice('default:'.length) : line
+    const [effPart, effectiveNote] = rest.split('#effective:')
+    const parts = effPart.split(':')
+    if (parts.length < 3) continue
+    const [qualifier, name, perms] = parts
+    if (!['user', 'group', 'mask', 'other'].includes(qualifier)) continue
+    entries.push({
+      default: isDefault,
+      qualifier: qualifier as AclEntry['qualifier'],
+      name: name ? name.trim() : null,
+      perms: perms.trim(),
+      effective: effectiveNote?.trim(),
+    })
+  }
+  return { owner, group, entries }
+}
+
+const PERMS_RE = /^[r-][w-][x-]$/
+// Linux usernames/groups: start with letter/underscore, then letters/digits/underscore/hyphen, optional trailing $
+const NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_-]{0,31}\$?$/
 
 async function fsRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('preHandler', requireAuth)
@@ -388,6 +442,108 @@ async function fsRoutes(fastify: FastifyInstance): Promise<void> {
         userId: req.session.user!.id, userEmail: req.session.user!.email,
         action: 'filemanager.delete', resource: 'file', serverId: id,
         details: { path: targetPath }, request: req,
+      })
+      return { ok: true }
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message })
+    }
+  })
+
+  // ── POSIX ACLs ─────────────────────────────────────────────────────────────
+
+  // GET /servers/:id/fs/acl?path= — read the ACL for a file or directory.
+  // Read-only, no TOTP gate — matches fs/ls (browsing is not privileged).
+  fastify.get('/servers/:id/fs/acl', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const { path: targetPath } = z.object({ path: z.string() }).parse(req.query)
+
+    try {
+      const result = await withServerSsh(id, async (client) => {
+        const safe = shellEscape(targetPath)
+        // -p: don't strip a leading slash from displayed paths (keeps them absolute)
+        const { stdout, code, stderr } = await exec(client, `getfacl -p '${safe}' 2>&1`)
+        if (code !== 0) {
+          if (/command not found/i.test(stderr)) {
+            throw new Error('getfacl is not installed on this server (package "acl")')
+          }
+          throw new Error(stderr.trim() || 'Failed to read ACL')
+        }
+        const { isDir } = await exec(client, `[ -d '${safe}' ] && echo D || echo F`)
+          .then((r) => ({ isDir: r.stdout.trim() === 'D' }))
+        return { ...parseAclOutput(stdout), isDir }
+      })
+      return result
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message })
+    }
+  })
+
+  // POST /servers/:id/fs/acl — add or modify one ACL entry.
+  // Body: { path, qualifier: 'user'|'group', name, perms: 'rwx', default?, recursive? }
+  fastify.post('/servers/:id/fs/acl', {
+    preHandler: [requireAuth, requireTotpElevation('fs_acl_modify')],
+  }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const body = z.object({
+      path: z.string().min(1),
+      qualifier: z.enum(['user', 'group']),
+      name: z.string().regex(NAME_RE, 'Invalid username/group name'),
+      perms: z.string().regex(PERMS_RE, 'Perms must be 3 chars, each r/w/x or -'),
+      isDefault: z.boolean().optional().default(false),
+      recursive: z.boolean().optional().default(false),
+    }).parse(req.body)
+
+    try {
+      await withServerSsh(id, async (client) => {
+        const safe = shellEscape(body.path)
+        const q = body.qualifier === 'user' ? 'u' : 'g'
+        const spec = `${body.isDefault ? 'd:' : ''}${q}:${body.name}:${body.perms}`
+        const recFlag = body.recursive ? '-R ' : ''
+        const { code, stderr } = await exec(client, `setfacl ${recFlag}-m '${spec}' '${safe}' 2>&1`)
+        if (code !== 0) throw new Error(stderr.trim() || 'setfacl failed')
+      })
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'filemanager.acl_set', resource: 'file', serverId: id,
+        details: { path: body.path, qualifier: body.qualifier, name: body.name, perms: body.perms, isDefault: body.isDefault, recursive: body.recursive },
+        request: req,
+      })
+      return { ok: true }
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message })
+    }
+  })
+
+  // DELETE /servers/:id/fs/acl — remove one ACL entry.
+  // Query: path, qualifier, name, default?, recursive?
+  fastify.delete('/servers/:id/fs/acl', {
+    preHandler: [requireAuth, requireTotpElevation('fs_acl_modify')],
+  }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
+    const q = z.object({
+      path: z.string().min(1),
+      qualifier: z.enum(['user', 'group']),
+      name: z.string().regex(NAME_RE, 'Invalid username/group name'),
+      isDefault: z.coerce.boolean().optional().default(false),
+      recursive: z.coerce.boolean().optional().default(false),
+    }).parse(req.query)
+
+    try {
+      await withServerSsh(id, async (client) => {
+        const safe = shellEscape(q.path)
+        const qual = q.qualifier === 'user' ? 'u' : 'g'
+        const spec = `${q.isDefault ? 'd:' : ''}${qual}:${q.name}`
+        const recFlag = q.recursive ? '-R ' : ''
+        const { code, stderr } = await exec(client, `setfacl ${recFlag}-x '${spec}' '${safe}' 2>&1`)
+        if (code !== 0) throw new Error(stderr.trim() || 'setfacl failed')
+      })
+
+      await writeAuditLog({
+        userId: req.session.user!.id, userEmail: req.session.user!.email,
+        action: 'filemanager.acl_remove', resource: 'file', serverId: id,
+        details: { path: q.path, qualifier: q.qualifier, name: q.name, isDefault: q.isDefault, recursive: q.recursive },
+        request: req,
       })
       return { ok: true }
     } catch (err) {
