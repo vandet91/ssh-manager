@@ -29,6 +29,10 @@ async function finalizeLogin(req: FastifyRequest, reply: FastifyReply, dbUser: {
   reply.redirect(`${config.FRONTEND_URL}/dashboard`)
 }
 
+// Accounts are provisioned by an admin (Users page → Create User) beforehand.
+// SSO login only ever links to and updates an existing row by provider+providerId
+// or by email — it never creates a new user. Returns null when no matching
+// account exists, which the caller treats as a login failure.
 async function upsertSsoUser(data: {
   email: string; displayName: string; provider: 'google' | 'microsoft'; providerId: string
 }) {
@@ -43,7 +47,9 @@ async function upsertSsoUser(data: {
     return { ...existing, display_name: data.displayName }
   }
 
-  // Also check by email (user might have been bootstrapped or created as local)
+  // Also check by email — this is how an admin-provisioned account (created
+  // with just email/role, provider left null) gets linked to its SSO identity
+  // on first login.
   const byEmail = await db.selectFrom('users').selectAll().where('email', '=', data.email).executeTakeFirst()
   if (byEmail) {
     // Only set provider/provider_id if account has no password (pure SSO bootstrap)
@@ -56,13 +62,7 @@ async function upsertSsoUser(data: {
     return { ...byEmail, ...updates }
   }
 
-  const role = data.email === config.BOOTSTRAP_ADMIN_EMAIL.toLowerCase() ? 'admin' : 'operator'
-  const [inserted] = await db.insertInto('users').values({
-    email: data.email, display_name: data.displayName,
-    provider: data.provider, provider_id: data.providerId,
-    role, last_login_at: new Date(),
-  }).returningAll().execute()
-  return inserted
+  return null
 }
 
 // ── Google OAuth2 (direct, no passport) ──────────────────────────────────────
@@ -140,6 +140,12 @@ async function googleRoutes(fastify: FastifyInstance): Promise<void> {
         provider: 'google',
         providerId: profile.sub,
       })
+
+      if (!dbUser) {
+        await writeAuditLog({ action: 'auth.login.failed', details: { provider: 'google', reason: 'no_account', email: profile.email }, request: req })
+        reply.redirect(`${config.FRONTEND_URL}/login?error=no_account`)
+        return
+      }
 
       await finalizeLogin(req, reply, dbUser as any)
     } catch (err: any) {

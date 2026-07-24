@@ -1186,7 +1186,7 @@ export default function Servers() {
                 <select value={addForm.os_type} onChange={(e) => setAddForm((f) => ({ ...f, os_type: e.target.value as typeof f.os_type }))}
                   className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
                   <option value="linux">🐧 Linux Server</option>
-                  <option value="windows">🪟 Windows Server</option>
+                  <option value="windows">🪟 Windows</option>
                 </select>
               </label>
               <label className="block">
@@ -1280,7 +1280,7 @@ export default function Servers() {
                 <select value={editForm.os_type} onChange={(e) => setEditForm((f) => ({ ...f, os_type: e.target.value as typeof f.os_type }))}
                   className="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
                   <option value="linux">🐧 Linux Server</option>
-                  <option value="windows">🪟 Windows Server</option>
+                  <option value="windows">🪟 Windows</option>
                 </select>
               </label>
               <label className="block">
@@ -4533,7 +4533,7 @@ export default function Servers() {
           ) : (
             <div className="space-y-4">
               <div className="text-xs text-gray-400 bg-gray-800/60 rounded-lg p-3 space-y-1">
-                <p>🪟 This is a <strong className="text-gray-200">Windows Server</strong>. Enter the RDP credentials to save them to the vault.</p>
+                <p>🪟 This is a <strong className="text-gray-200">Windows machine</strong>. Enter the RDP credentials to save them to the vault.</p>
                 <p>These will be used when you click <strong className="text-gray-200">🖥 RDP</strong> to connect via browser.</p>
               </div>
 

@@ -38,6 +38,30 @@ async function usersRoutes(fastify: FastifyInstance): Promise<void> {
     return user
   })
 
+  // POST /users — admin provisions an account ahead of first SSO login.
+  // provider/provider_id are left null; the SSO callback links them by
+  // matching email on the user's first successful sign-in.
+  fastify.post('/users', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = z.object({
+      email: z.string().email(),
+      display_name: z.string().min(1).max(255).optional(),
+      role: z.enum(['admin', 'operator', 'developer', 'viewer']).default('operator'),
+    }).parse(req.body)
+
+    const email = body.email.toLowerCase()
+    const existing = await db.selectFrom('users').select('id').where('email', '=', email).executeTakeFirst()
+    if (existing) return reply.code(409).send({ error: 'A user with this email already exists' })
+
+    const user = await db.insertInto('users').values({
+      email,
+      display_name: body.display_name ?? email,
+      role: body.role,
+    }).returningAll().executeTakeFirst()
+
+    await writeAuditLog({ userId: req.session.user!.id, userEmail: req.session.user!.email, action: 'user.created', resource: 'user', resourceId: user!.id, details: { email, role: body.role }, request: req })
+    return reply.code(201).send(user)
+  })
+
   // PATCH /users/:id — change status or password
   fastify.patch('/users/:id', async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params)

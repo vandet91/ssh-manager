@@ -17,7 +17,8 @@ export default function Users() {
   const [editForm, setEditForm]   = useState({ is_active: true })
   const [editError, setEditError] = useState('')
   const [showCreate, setShowCreate]   = useState(false)
-  const [createForm, setCreateForm]   = useState({ email: '', display_name: '', password: '' })
+  const [createType, setCreateType]   = useState<'local' | 'sso'>('local')
+  const [createForm, setCreateForm]   = useState({ email: '', display_name: '', password: '', role: 'operator' })
   const [createError, setCreateError] = useState('')
   const [showPwd, setShowPwd]   = useState<User | null>(null)
   const [newPwd, setNewPwd]     = useState('')
@@ -101,8 +102,15 @@ export default function Users() {
   const create = async (e: React.FormEvent) => {
     e.preventDefault(); setCreateError('')
     try {
-      await api.post('/auth/register', { email: createForm.email, displayName: createForm.display_name, password: createForm.password })
-      setShowCreate(false); setCreateForm({ email: '', display_name: '', password: '' }); load()
+      if (createType === 'sso') {
+        // No password — provider/provider_id stay null and get linked
+        // automatically (matched by email) the first time this person
+        // signs in via SSO.
+        await api.post('/users', { email: createForm.email, display_name: createForm.display_name || undefined, role: createForm.role })
+      } else {
+        await api.post('/auth/register', { email: createForm.email, displayName: createForm.display_name, password: createForm.password })
+      }
+      setShowCreate(false); setCreateForm({ email: '', display_name: '', password: '', role: 'operator' }); load()
     } catch (err: unknown) { setCreateError((err as Error).message) }
   }
 
@@ -338,12 +346,36 @@ export default function Users() {
         <Modal title="Add User" onClose={() => setShowCreate(false)}>
           <form onSubmit={create} className="space-y-3">
             {createError && <p className="text-red-400 text-sm">{createError}</p>}
+            <div className="flex gap-1 p-0.5 bg-gray-800 border border-gray-700 rounded-lg">
+              <button type="button" onClick={() => setCreateType('local')}
+                className={`flex-1 py-1.5 rounded text-sm transition-colors ${createType === 'local' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+                Local (password)
+              </button>
+              <button type="button" onClick={() => setCreateType('sso')}
+                className={`flex-1 py-1.5 rounded text-sm transition-colors ${createType === 'sso' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+                SSO (no password)
+              </button>
+            </div>
             <label className="block"><span className="text-sm text-gray-400">Email</span>
               <input type="email" value={createForm.email} onChange={e => setCreateForm(f => ({ ...f, email: e.target.value }))} required className={inp} /></label>
             <label className="block"><span className="text-sm text-gray-400">Display Name (optional)</span>
               <input value={createForm.display_name} onChange={e => setCreateForm(f => ({ ...f, display_name: e.target.value }))} className={inp} /></label>
-            <label className="block"><span className="text-sm text-gray-400">Password</span>
-              <input type="password" value={createForm.password} onChange={e => setCreateForm(f => ({ ...f, password: e.target.value }))} required className={inp} /></label>
+            {createType === 'local' ? (
+              <label className="block"><span className="text-sm text-gray-400">Password</span>
+                <input type="password" value={createForm.password} onChange={e => setCreateForm(f => ({ ...f, password: e.target.value }))} required className={inp} /></label>
+            ) : (
+              <>
+                <label className="block"><span className="text-sm text-gray-400">Role</span>
+                  <select value={createForm.role} onChange={e => setCreateForm(f => ({ ...f, role: e.target.value }))} className={inp}>
+                    <option value="admin">Admin</option>
+                    <option value="operator">Operator</option>
+                    <option value="developer">Developer</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                </label>
+                <p className="text-xs text-gray-500">No password is set. This account activates the first time this person signs in with Google/Microsoft SSO using this exact email — SSO no longer creates accounts on its own.</p>
+              </>
+            )}
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setShowCreate(false)} className="flex-1 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white text-sm transition-colors">Cancel</button>
               <button type="submit" className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors">Create</button>

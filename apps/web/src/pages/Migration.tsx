@@ -1246,7 +1246,7 @@ export default function Migration() {
                 </div>
 
                 {/* Section content */}
-                <div style={{ padding: 16, minHeight: 300, maxHeight: 480, overflowY: 'auto' }}>
+                <div style={{ padding: 16, maxHeight: 'calc(100vh - 250px)', overflowY: 'auto' }}>
                   {renderDetail()}
                 </div>
               </>

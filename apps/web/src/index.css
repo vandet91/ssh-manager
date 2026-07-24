@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Lock the app to exactly the viewport. Without this, a single element that's
+   even a few px taller than expected (e.g. the Terminal page's tab bar/output
+   growing during a live SSH session) makes the whole <body> grow past 100vh
+   instead of being clipped by Layout.tsx's own overflow:hidden — the excess
+   then renders below the fold, hidden behind the OS taskbar on a maximized
+   window instead of being scrollable or clipped in-app. */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    DESIGN TOKENS  —  two themes only
 

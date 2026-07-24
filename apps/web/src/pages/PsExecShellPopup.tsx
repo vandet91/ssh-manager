@@ -54,8 +54,16 @@ export default function PsExecShellPopup() {
     const onResize = () => fit.fit()
     window.addEventListener('resize', onResize)
 
+    // Keep the socket active during idle periods (no typing) so intermediate
+    // proxies/networks with their own idle timeout don't silently drop the
+    // session — same pattern used for the SSH terminal's WebSocket.
+    const ping = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
+    }, 30000)
+
     return () => {
       window.removeEventListener('resize', onResize)
+      clearInterval(ping)
       ws.close()
       xterm.dispose()
     }

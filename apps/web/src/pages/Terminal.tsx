@@ -3,7 +3,6 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { SearchAddon } from '@xterm/addon-search'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { api, Server, Assignment, ServerCredential, distroArtApi, DistroArt } from '../api/client'
 import { FileManagerTab } from './FileManager'
@@ -286,6 +285,13 @@ const loadFontSize = () => {
   try { const n = parseInt(localStorage.getItem(FONT_SIZE_KEY) || ''); return Number.isFinite(n) && n > 0 ? n : DEFAULT_FONT } catch { return DEFAULT_FONT }
 }
 
+// Editor-key row visibility — persisted since it's a matter of taste (useful
+// for nano, irrelevant/in-the-way for vim/vi users).
+const EDITOR_KEYS_VISIBLE_KEY = 'terminal.editorKeysVisible'
+const loadEditorKeysVisible = () => {
+  try { return localStorage.getItem(EDITOR_KEYS_VISIBLE_KEY) !== '0' } catch { return true }
+}
+
 
 // ── Per-tab state ────────────────────────────────────────────────────────────
 type TabState = {
@@ -298,10 +304,6 @@ type TabState = {
   status: string
   usedKey: string
   sessionSeconds: number
-  showSearch: boolean
-  searchQuery: string
-  searchCase: boolean
-  searchRegex: boolean
   fontSize: number
   fontFamily: string
   dragOver: boolean
@@ -314,6 +316,11 @@ type TabState = {
   view: 'terminal' | 'files'
   fmEverOpened: boolean
   fmInitServerId: string
+  // The server File Manager is currently browsing in this tab (kept in sync
+  // via its onStateChange callback) — used to warn before closing a tab that
+  // still has an active File Manager session, and normally equals
+  // selectedServer once locked while Terminal is connected.
+  fmServerId: string
 }
 
 function makeTab(): TabState {
@@ -327,10 +334,6 @@ function makeTab(): TabState {
     status: '',
     usedKey: '',
     sessionSeconds: 0,
-    showSearch: false,
-    searchQuery: '',
-    searchCase: false,
-    searchRegex: false,
     fontSize: loadFontSize(),
     fontFamily: loadFontFamily(),
     dragOver: false,
@@ -340,6 +343,7 @@ function makeTab(): TabState {
     view: 'terminal',
     fmEverOpened: false,
     fmInitServerId: '',
+    fmServerId: '',
   }
 }
 
@@ -352,6 +356,7 @@ export default function Terminal() {
   const [showCmdPanel, setShowCmdPanel] = useState(false)
   const [showAiPanel, setShowAiPanel] = useState(false)
   const [showInfoPanel, setShowInfoPanel] = useState(true)
+  const [showEditorKeys, setShowEditorKeys] = useState(loadEditorKeysVisible)
 
   // Terminal ⟷ File Manager VIEW SWITCH — per terminal tab, not a split. Each
   // tab shows either its terminal or its own File Manager (own server/path/
@@ -389,9 +394,7 @@ export default function Terminal() {
   const xtermRefs   = useRef<Record<string, XTerm>>({})
   const wsRefs      = useRef<Record<string, WebSocket>>({})
   const fitRefs     = useRef<Record<string, FitAddon>>({})
-  const searchRefs  = useRef<Record<string, SearchAddon>>({})
   const timerRefs   = useRef<Record<string, ReturnType<typeof setInterval>>>({})
-  const searchInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const roRefs      = useRef<Record<string, ResizeObserver>>({})
   const fitPushRefs = useRef<Record<string, () => void>>({})
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null)
@@ -515,7 +518,7 @@ export default function Terminal() {
     const term = xtermRefs.current[activeTabId]
     if (el && el.clientWidth >= MIN_FIT_WIDTH && el.clientHeight >= MIN_FIT_HEIGHT) fit?.fit()
     term?.focus()
-  }, [activeTabId, activeTab?.connected, activeTab?.connecting])
+  }, [activeTabId, activeTab?.connected, activeTab?.connecting, showEditorKeys])
 
   // Global Ctrl+F for active tab search; Ctrl+W prevention when connected
   useEffect(() => {
@@ -526,16 +529,6 @@ export default function Terminal() {
         e.preventDefault()
         return
       }
-      if (!tab?.connected) return
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-        e.preventDefault()
-        updateTab(activeTabId, (t) => {
-          const next = !t.showSearch
-          setTimeout(() => searchInputRefs.current[activeTabId]?.focus(), 50)
-          return { showSearch: next }
-        })
-      }
-      if (e.key === 'Escape') updateTab(activeTabId, { showSearch: false })
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -556,6 +549,18 @@ export default function Terminal() {
   }
 
   function closeTab(id: string) {
+    // Warn before tearing down a tab that still has something live in it —
+    // an active Terminal connection and/or a File Manager session browsing a
+    // server. Closing without asking would silently drop both.
+    const t = tabs.find((x) => x.id === id)
+    if (t && (t.connected || t.fmServerId)) {
+      const parts: string[] = []
+      if (t.connected) parts.push(`Terminal connected to ${servers.find((s) => s.id === t.selectedServer)?.name || t.selectedServer}`)
+      if (t.fmServerId) parts.push(`File Manager open on ${servers.find((s) => s.id === t.fmServerId)?.name || t.fmServerId}`)
+      const ok = window.confirm(`This tab still has an active session:\n\n${parts.map((p) => `• ${p}`).join('\n')}\n\nClose the tab and disconnect everything?`)
+      if (!ok) return
+    }
+
     // Disconnect if connected
     wsRefs.current[id]?.close()
     xtermRefs.current[id]?.dispose()
@@ -565,7 +570,6 @@ export default function Terminal() {
     delete xtermRefs.current[id]
     delete wsRefs.current[id]
     delete fitRefs.current[id]
-    delete searchRefs.current[id]
     delete timerRefs.current[id]
     delete roRefs.current[id]
     delete fitPushRefs.current[id]
@@ -583,6 +587,32 @@ export default function Terminal() {
       return next
     })
   }
+
+  // Sends a Ctrl+<letter> byte straight to the PTY, bypassing the keyboard.
+  // Ctrl+W/T/N/Tab etc. are reserved by the browser itself (tab close/new/switch)
+  // and can never be caught by page JS via preventDefault — so editors like nano
+  // that use those combos (Ctrl+W = search) need an on-screen button instead.
+  function sendCtrlKey(tabId: string, letter: string) {
+    const ws = wsRefs.current[tabId]
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    const byte = String.fromCharCode(letter.toUpperCase().charCodeAt(0) - 64)
+    ws.send(JSON.stringify({ type: 'input', data: byte }))
+    xtermRefs.current[tabId]?.focus()
+  }
+
+  const NANO_KEYS: { label: string; letter: string; title: string }[] = [
+    { label: '^O', letter: 'O', title: 'Write Out (save)' },
+    { label: '^X', letter: 'X', title: 'Exit' },
+    { label: '^W', letter: 'W', title: 'Where Is (search) — blocked by browser as a raw keystroke' },
+    { label: '^K', letter: 'K', title: 'Cut line' },
+    { label: '^U', letter: 'U', title: 'Paste (uncut)' },
+    { label: '^_', letter: '_', title: 'Go To Line' },
+    { label: '^\\', letter: '\\', title: 'Replace' },
+    { label: '^^', letter: '^', title: 'Mark text (start selection)' },
+    { label: '^R', letter: 'R', title: 'Insert file' },
+    { label: '^G', letter: 'G', title: 'Help' },
+    { label: '^C', letter: 'C', title: 'Cancel / interrupt' },
+  ]
 
   // ── Per-tab helpers ─────────────────────────────────────────────────────────
   function serverAssignmentsFor(tab: TabState) {
@@ -691,15 +721,12 @@ export default function Terminal() {
     })
 
     const fitAddon    = new FitAddon()
-    const searchAddon = new SearchAddon()
     term.loadAddon(fitAddon)
-    term.loadAddon(searchAddon)
     term.loadAddon(new WebLinksAddon())
     term.loadAddon(new ClipboardAddon())
 
     xtermRefs.current[tabId]  = term
     fitRefs.current[tabId]    = fitAddon
-    searchRefs.current[tabId] = searchAddon
 
     // Single gate for EVERY resize message sent to this tab's server PTY.
     // Two protections, both required after the "MOTD gets shredded" bug:
@@ -934,7 +961,7 @@ export default function Terminal() {
     roRefs.current[tabId]?.disconnect()
     delete roRefs.current[tabId]
     clearInterval(timerRefs.current[tabId])
-    updateTab(tabId, { connected: false, connecting: false, status: '', usedKey: '', showSearch: false, sessionSeconds: 0 })
+    updateTab(tabId, { connected: false, connecting: false, status: '', usedKey: '', sessionSeconds: 0 })
   }
 
   const applyFontSize = (tabId: string, size: number) => {
@@ -959,14 +986,6 @@ export default function Terminal() {
       document.fonts?.ready.then(refit)
       refit()
     }
-  }
-
-  const doSearch = (tabId: string, dir: 'next' | 'prev') => {
-    const tab = tabs.find((t) => t.id === tabId)
-    if (!tab || !tab.searchQuery || !searchRefs.current[tabId]) return
-    const opts = { caseSensitive: tab.searchCase, regex: tab.searchRegex, incremental: false }
-    if (dir === 'next') searchRefs.current[tabId].findNext(tab.searchQuery, opts)
-    else searchRefs.current[tabId].findPrevious(tab.searchQuery, opts)
   }
 
   // ── File upload via drag-and-drop ───────────────────────────────────────────
@@ -1065,7 +1084,8 @@ export default function Terminal() {
               value={tab.selectedServer}
               onChange={(e) => updateTab(tab.id, { selectedServer: e.target.value, selectedUser: '', selectedCredentialId: '', usedKey: '', status: '' })}
               disabled={tab.connected || tab.connecting}
-              className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+              className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 shrink-0"
+              style={{ width: 180 }}
             >
               <option value="">— server —</option>
               {(() => {
@@ -1170,12 +1190,6 @@ export default function Terminal() {
                 <button onClick={() => { xtermRefs.current[tab.id]?.clear(); xtermRefs.current[tab.id]?.focus() }}
                   className="px-2.5 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white transition-colors">Clear</button>
                 <button
-                  onClick={() => { updateTab(tab.id, (t) => ({ showSearch: !t.showSearch })); setTimeout(() => searchInputRefs.current[tab.id]?.focus(), 50) }}
-                  className={`px-2.5 py-1 text-xs rounded transition-colors ${tab.showSearch ? 'bg-indigo-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white'}`}
-                  title="Search (Ctrl+F)">
-                  🔍 Search
-                </button>
-                <button
                   onClick={() => { setShowCmdPanel(p => !p); setShowAiPanel(false) }}
                   className={`px-2.5 py-1 text-xs rounded transition-colors ${showCmdPanel ? 'bg-indigo-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white'}`}
                   title="Command library">
@@ -1205,6 +1219,22 @@ export default function Terminal() {
                 ▶▌
               </button>
             )}
+            {tab.connected && (
+              <button
+                onClick={() => {
+                  // Re-fit happens in the useLayoutEffect keyed on showEditorKeys
+                  // (runs synchronously before paint — no scrollbar flash).
+                  setShowEditorKeys(v => {
+                    const next = !v
+                    try { localStorage.setItem(EDITOR_KEYS_VISIBLE_KEY, next ? '1' : '0') } catch { /* ignore */ }
+                    return next
+                  })
+                }}
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${showEditorKeys ? 'bg-indigo-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white'}`}
+                title="Show/hide the nano-style control-key row (only useful for nano — hide it if you're using vim/vi)">
+                ⌨ Keys
+              </button>
+            )}
 
             {/* Status / key */}
             <div className="ml-auto flex items-center gap-3 text-xs">
@@ -1229,34 +1259,21 @@ export default function Terminal() {
         )
       })()}
 
-      {/* ── Search bar (active tab) ──────────────────────────────────────────── */}
-      {activeTab?.showSearch && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-gray-900/80 border-b border-gray-800 flex-wrap shrink-0">
-          <input
-            ref={(el) => { searchInputRefs.current[activeTab.id] = el }}
-            value={activeTab.searchQuery}
-            onChange={(e) => {
-              updateTab(activeTab.id, { searchQuery: e.target.value })
-              if (searchRefs.current[activeTab.id] && e.target.value)
-                searchRefs.current[activeTab.id].findNext(e.target.value, { caseSensitive: activeTab.searchCase, regex: activeTab.searchRegex, incremental: true })
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') doSearch(activeTab.id, e.shiftKey ? 'prev' : 'next')
-              if (e.key === 'Escape') { updateTab(activeTab.id, { showSearch: false }); xtermRefs.current[activeTab.id]?.focus() }
-            }}
-            placeholder="Search terminal… (Enter = next, Shift+Enter = prev)"
-            className="flex-1 max-w-xs bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-          <button onClick={() => doSearch(activeTab.id, 'prev')} className="px-2.5 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">↑ Prev</button>
-          <button onClick={() => doSearch(activeTab.id, 'next')} className="px-2.5 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white transition-colors">↓ Next</button>
-          <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
-            <input type="checkbox" checked={activeTab.searchCase} onChange={(e) => updateTab(activeTab.id, { searchCase: e.target.checked })} className="rounded" />Aa
-          </label>
-          <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
-            <input type="checkbox" checked={activeTab.searchRegex} onChange={(e) => updateTab(activeTab.id, { searchRegex: e.target.checked })} className="rounded" />.*
-          </label>
-          <button onClick={() => { updateTab(activeTab.id, { showSearch: false }); xtermRefs.current[activeTab.id]?.focus() }}
-            className="px-2.5 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white transition-colors">✕</button>
+      {/* ── nano/editor control-key toolbar — browser reserves Ctrl+W/T/N/Tab and
+          never delivers them to page JS, so editors that rely on those combos
+          (nano's Ctrl+W search, in particular) need clickable equivalents. ──── */}
+      {activeTab?.connected && activeTab.view !== 'files' && showEditorKeys && (
+        <div className="flex items-center gap-1.5 px-4 py-1.5 bg-gray-900/60 border-b border-gray-800 flex-wrap shrink-0">
+          <span className="text-xs text-gray-500 mr-1">nano keys:</span>
+          {NANO_KEYS.map((k) => (
+            <button
+              key={k.letter}
+              onClick={() => sendCtrlKey(activeTab.id, k.letter)}
+              title={k.title}
+              className="px-2 py-0.5 text-xs font-mono rounded bg-gray-700 hover:bg-indigo-600 text-gray-200 hover:text-white transition-colors">
+              {k.label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -1304,15 +1321,26 @@ export default function Terminal() {
               </div>
             )}
 
-            {/* Terminal div — always display:block so xterm can measure dimensions */}
+            {/* Padding wrapper — kept separate from the xterm mount element below.
+                xterm-addon-fit measures its container's clientHeight/clientWidth
+                to compute row/col count, but doesn't account for that box's own
+                padding when laying out rows — so padding directly on the mount
+                element makes FitAddon compute one row too many, and the last
+                line renders a few px past the clipped content area. Padding
+                here (on the non-mount wrapper) keeps the same visual inset
+                without confusing the fit calculation. */}
             <div
-              ref={(el) => { termRefs.current[tab.id] = el }}
               className="flex-1 overflow-hidden p-2"
               style={{ minHeight: 0 }}
               onDragOver={(e) => { e.preventDefault(); if (tab.connected) updateTab(tab.id, { dragOver: true }) }}
               onDragLeave={() => updateTab(tab.id, { dragOver: false })}
               onDrop={(e) => handleDrop(tab.id, e)}
-            />
+            >
+              <div
+                ref={(el) => { termRefs.current[tab.id] = el }}
+                style={{ width: '100%', height: '100%' }}
+              />
+            </div>
           </div>
         ))}
 
@@ -1348,12 +1376,13 @@ export default function Terminal() {
                   initServerId={t.fmInitServerId}
                   initCurPath="/"
                   initOpenFile={null}
-                  onStateChange={() => {}}
+                  onStateChange={(serverId) => updateTab(t.id, { fmServerId: serverId })}
                   onDragStart={() => {}}
                   dragInfo={null}
                   onDropped={() => {}}
                   pendingCopy={null}
                   onCopyDone={() => {}}
+                  lockedServerId={t.connected ? t.selectedServer : undefined}
                 />
               </div>
             ))}

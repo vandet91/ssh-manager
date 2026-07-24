@@ -4,7 +4,7 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { api } from '../api/client'
+import { api, Server } from '../api/client'
 
 type Cred = {
   id: string
@@ -49,7 +49,7 @@ function PsExecShell({ target, credId, method, onClose }: { target: string; cred
     el.innerHTML = ''
     const xterm = new XTerm({
       theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' },
-      fontFamily: 'Consolas, "Courier New", monospace',
+      fontFamily: 'Consolas, "Courier New", "Leelawadee UI", "Khmer UI", "Noto Sans Khmer", monospace',
       fontSize: 13, cursorBlink: true, scrollback: 5000, convertEol: true, disableStdin: true,
     })
     const fit = new FitAddon()
@@ -126,23 +126,33 @@ function PsExecShell({ target, credId, method, onClose }: { target: string; cred
     error:        { dot: 'bg-red-500',    text: 'text-red-400',   label: 'Error' },
   }[status]
 
+  // This whole panel is deliberately a fixed-dark terminal surface (matching
+  // the xterm output above it, which is always #0d1117/#c9d1d9 regardless of
+  // app theme) — so every color here uses a literal hex value, NOT the
+  // Tailwind gray-* classes. Those are remapped through CSS variables that
+  // flip per light/dark app theme (see tailwind.config.js), and in light
+  // mode "gray-200" resolves to a color meant for text on a WHITE
+  // background (~#3c3c3c) — nearly invisible against this panel's
+  // permanently-dark background. Using literal hex here keeps text/bg
+  // contrast correct no matter what theme the rest of the app is in.
   return (
-    <div className="flex flex-col rounded-xl border border-gray-700 overflow-hidden bg-[#0d1117]">
+    <div className="flex flex-col rounded-xl overflow-hidden" style={{ border: '1px solid #30363d', background: '#0d1117' }}>
       {/* Shell header */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-700 bg-gray-900">
-        <span className="text-sm font-semibold text-gray-200">🖥 Shell — <span className="font-mono text-indigo-300">{target}</span></span>
+      <div className="flex items-center gap-3 px-4 py-2.5" style={{ borderBottom: '1px solid #30363d', background: '#161b22' }}>
+        <span className="text-sm font-semibold" style={{ color: '#e5e7eb' }}>🖥 Shell — <span className="font-mono text-indigo-300">{target}</span></span>
         <div className="flex items-center gap-1.5">
           <span className={`w-2 h-2 rounded-full shrink-0 ${statusConfig.dot}`} />
           <span className={`text-xs font-medium ${statusConfig.text}`}>{statusConfig.label}</span>
         </div>
-        {statusMsg && <span className="text-xs text-gray-500 truncate">{statusMsg}</span>}
+        {statusMsg && <span className="text-xs truncate" style={{ color: '#8b949e' }}>{statusMsg}</span>}
         <div className="ml-auto flex gap-2">
           <button onClick={() => sendSignal('SIGKILL')} disabled={status !== 'connected'}
             className="px-2.5 py-1 text-xs rounded border border-red-900 bg-red-950/40 text-red-400 hover:bg-red-900/60 transition-colors disabled:opacity-30 font-mono cursor-pointer">
             Force Kill
           </button>
           <button onClick={disconnect}
-            className="px-2.5 py-1 text-xs rounded border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors cursor-pointer">
+            className="px-2.5 py-1 text-xs rounded transition-colors cursor-pointer"
+            style={{ border: '1px solid #30363d', background: '#161b22', color: '#c9d1d9' }}>
             ✕ Disconnect
           </button>
         </div>
@@ -152,7 +162,7 @@ function PsExecShell({ target, credId, method, onClose }: { target: string; cred
       <div ref={termDivRef} style={{ height: 420 }} />
 
       {/* Command input */}
-      <div className="flex items-center border-t border-gray-700 bg-[#0d1117] px-3">
+      <div className="flex items-center px-3" style={{ borderTop: '1px solid #30363d', background: '#0d1117' }}>
         <span className="font-mono text-sm text-blue-400 mr-2 select-none shrink-0">❯</span>
         <input
           ref={inputRef}
@@ -161,7 +171,8 @@ function PsExecShell({ target, credId, method, onClose }: { target: string; cred
           onKeyDown={onKeyDown}
           disabled={status !== 'connected'}
           placeholder={status === 'connecting' ? 'Connecting…' : status !== 'connected' ? 'Session closed' : 'Type a command…'}
-          className="flex-1 bg-transparent border-none outline-none font-mono text-sm text-gray-200 py-3 caret-blue-400 placeholder-gray-600 disabled:opacity-40"
+          className="flex-1 bg-transparent border-none outline-none font-mono text-sm py-3 caret-blue-400 disabled:opacity-40"
+          style={{ color: '#e5e7eb' }}
           autoComplete="off"
           spellCheck={false}
         />
@@ -193,6 +204,25 @@ export default function PsExec() {
   const [mainTab, setMainTab]     = useState<'run' | 'shell'>('run')
   const [sessionOpen, setSessionOpen] = useState(false)
   const [sessionKey, setSessionKey]   = useState(0)
+
+  // Live search over Windows servers so target/hostname can be found by
+  // typing instead of remembering the exact IP/hostname.
+  const [winServers, setWinServers] = useState<Server[]>([])
+  const [showTargetDropdown, setShowTargetDropdown] = useState(false)
+  const targetBoxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    api.get<Server[]>('/servers').then(rows => setWinServers(rows.filter(s => s.os_type === 'windows'))).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!showTargetDropdown) return
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (!targetBoxRef.current?.contains(e.target as Node)) setShowTargetDropdown(false)
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [showTargetDropdown])
 
   useEffect(() => {
     api.get<{ credentials: Cred[] }>('/psexec/credentials')
@@ -244,6 +274,22 @@ export default function PsExec() {
   const canRun       = !!target.trim() && !!credId
   const canExec      = canRun && !!command.trim()
 
+  // Live search: match typed text against name or hostname; show a short
+  // list of Windows servers instead of the whole inventory.
+  const q = target.trim().toLowerCase()
+  const targetMatches = q
+    ? winServers.filter(s => s.name.toLowerCase().includes(q) || s.hostname.toLowerCase().includes(q)).slice(0, 8)
+    : winServers.slice(0, 8)
+
+  const pickServer = (s: Server) => {
+    setTarget(s.hostname)
+    setPingStatus('unknown')
+    setShowTargetDropdown(false)
+    // Auto-select the matching credential if there's exactly one for this server.
+    const matches = creds.filter(c => c.server_name === s.name)
+    if (matches.length === 1) setCredId(matches[0].id)
+  }
+
   const QUICK_COMMANDS = [
     { label: 'Who am I',          cmd: 'whoami' },
     { label: 'Hostname',          cmd: 'hostname' },
@@ -270,7 +316,7 @@ export default function PsExec() {
 
   const TIPS: Record<string, string[]> = {
     psexec:  ['Port 445 (SMB) must be open', 'May trigger Windows Defender (VirTool detection)', 'Commands run as SYSTEM on the remote machine', 'Use WMIExec or WinRM to avoid AV issues'],
-    wmiexec: ['Port 135 + dynamic RPC ports must be open', 'Uses WMI over DCOM — no service binary deployed', 'Much less likely to trigger Windows Defender', 'Slower than PsExec but stealth-friendly'],
+    wmiexec: ['Port 135 (RPC) AND port 445 (SMB) must both be open', 'Executes via WMI/DCOM, but reads command output back over SMB — 445 blocked = "Connection refused" even though WMI itself would work', 'Enable target-side: Set-NetFirewallRule -DisplayGroup "File and Printer Sharing" -Enabled True', 'Uses WMI over DCOM — no service binary deployed, much less likely to trigger Windows Defender'],
     winrm:   ['Run on target: winrm quickconfig -y', 'Port 5985 (HTTP) or 5986 (HTTPS) must be open', 'Built-in Windows — no AV issues', 'Ideal for AD environments with GPO-enabled WinRM'],
   }
 
@@ -281,7 +327,7 @@ export default function PsExec() {
   ]
 
   return (
-    <div className="p-6 max-w-[1200px]">
+    <div className="p-6">
 
       {/* Page header */}
       <div className="mb-5">
@@ -316,13 +362,39 @@ export default function PsExec() {
 
             {/* Target row */}
             <div className="flex gap-2 items-center mb-3">
-              <div className="relative flex-1">
+              <div className="relative flex-1" ref={targetBoxRef}>
                 <input
-                  value={target} onChange={e => { setTarget(e.target.value); setPingStatus('unknown') }}
-                  placeholder="192.168.1.10 or PC-NAME"
+                  value={target}
+                  onChange={e => { setTarget(e.target.value); setPingStatus('unknown'); setShowTargetDropdown(true) }}
+                  onFocus={() => setShowTargetDropdown(true)}
+                  placeholder="192.168.1.10 or PC-NAME — type to search…"
                   className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
-                  onKeyDown={e => e.key === 'Enter' && ping()}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { setShowTargetDropdown(false); ping() }
+                    else if (e.key === 'Escape') setShowTargetDropdown(false)
+                  }}
+                  autoComplete="off"
                 />
+                {showTargetDropdown && targetMatches.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-gray-900 border border-gray-700 rounded-lg shadow-xl max-h-64 overflow-y-auto">
+                    {targetMatches.map(s => (
+                      <button
+                        key={s.id}
+                        onMouseDown={e => { e.preventDefault(); pickServer(s) }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 transition-colors flex items-center gap-2 cursor-pointer"
+                      >
+                        <span className="text-gray-500 shrink-0">🖥</span>
+                        <span className="text-gray-200 font-medium truncate">{s.name}</span>
+                        <span className="ml-auto text-xs text-gray-500 font-mono truncate">{s.hostname}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {showTargetDropdown && q && targetMatches.length === 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-gray-900 border border-gray-700 rounded-lg shadow-xl px-3 py-2 text-xs text-gray-500">
+                    No matching Windows server — will use "{target.trim()}" directly.
+                  </div>
+                )}
               </div>
               <button onClick={ping} disabled={pinging || !target.trim()}
                 className="shrink-0 px-3 py-2 text-xs font-medium rounded-lg border border-gray-600 bg-gray-900 text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-40 cursor-pointer">

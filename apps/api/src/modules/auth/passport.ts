@@ -34,7 +34,7 @@ export function setupPassport(): void {
               provider: 'microsoft',
               providerId: profile.id,
             })
-            done(null, user)
+            done(null, user ?? false)
           } catch (err) {
             done(err as Error)
           }
@@ -73,7 +73,7 @@ export function setupPassport(): void {
               provider: 'google',
               providerId: profile.id,
             })
-            done(null, user)
+            done(null, user ?? false)
           } catch (err) {
             done(err as Error)
           }
@@ -83,6 +83,11 @@ export function setupPassport(): void {
   }
 }
 
+// Accounts are provisioned by an admin (Users page → Create User) beforehand.
+// SSO login only ever links to and updates an existing row by provider+providerId
+// or by email — it never creates a new user. Returns null when no matching
+// account exists, which the caller (passport verify callback) treats as a
+// failed login via done(null, false).
 async function upsertUser(data: {
   email: string
   displayName: string
@@ -109,23 +114,20 @@ async function upsertUser(data: {
     return { ...existing, display_name: data.displayName }
   }
 
-  // Check bootstrap admin
-  const bootstrapRole = data.email === config.BOOTSTRAP_ADMIN_EMAIL.toLowerCase() ? 'admin' : 'operator'
+  // Also check by email — links an admin-provisioned account (created with
+  // just email/role, provider left null) to its SSO identity on first login.
+  const byEmail = await db.selectFrom('users').selectAll().where('email', '=', data.email).executeTakeFirst()
+  if (byEmail) {
+    const updates: Record<string, unknown> = { display_name: data.displayName, last_login_at: new Date(), updated_at: new Date() }
+    if (!byEmail.password_hash) {
+      updates.provider = data.provider
+      updates.provider_id = data.providerId
+    }
+    await db.updateTable('users').set(updates as any).where('id', '=', byEmail.id).execute()
+    return { ...byEmail, ...updates }
+  }
 
-  const [inserted] = await db
-    .insertInto('users')
-    .values({
-      email: data.email,
-      display_name: data.displayName,
-      provider: data.provider,
-      provider_id: data.providerId,
-      role: bootstrapRole,
-      last_login_at: new Date(),
-    })
-    .returningAll()
-    .execute()
-
-  return inserted
+  return null
 }
 
 export { passport }

@@ -145,9 +145,14 @@ interface TabProps {
   // External copy trigger
   pendingCopy: { drag:DragInfo; destDir:string; destName?:string } | null
   onCopyDone: () => void
+  // When set, this tab's server is pinned to this id and the server
+  // switcher/disconnect controls are hidden — used by the Terminal page to
+  // keep File Manager on the SAME server its Terminal view is connected to,
+  // instead of letting the two drift to different servers within one tab.
+  lockedServerId?: string
 }
 
-export function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, initOpenFile, onStateChange, onDragStart, dragInfo, onDropped, pendingCopy, onCopyDone }: TabProps){
+export function FileManagerTab({ tabId, isActive, servers, initServerId, initCurPath, initOpenFile, onStateChange, onDragStart, dragInfo, onDropped, pendingCopy, onCopyDone, lockedServerId }: TabProps){
   const [serverId,   setServerId]   = useState(initServerId)
   const [curPath,    setCurPath]    = useState(initCurPath)
   const [openFile,   setOpenFile]   = useState<string|null>(initOpenFile)
@@ -246,6 +251,14 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
 
   // Bubble state up so the container can persist it in the tabs array
   useEffect(()=>{ onStateChange(serverId, curPath, openFile) },[serverId, curPath, openFile])
+
+  // Pin serverId to lockedServerId whenever it's set (Terminal page: keep
+  // File Manager on the same server as the connected Terminal in this tab).
+  // Setting serverId here reuses the normal transition effect below (loads
+  // the new server's directory, clears state from the old one).
+  useEffect(()=>{
+    if(lockedServerId && lockedServerId!==serverId) setServerId(lockedServerId)
+  },[lockedServerId, serverId])
 
   const prevServerRef = useRef('')
   useEffect(()=>{
@@ -673,17 +686,28 @@ export function FileManagerTab({ tabId, isActive, servers, initServerId, initCur
                   {srv?.name??'Server'} <span style={{color:C.muted,fontSize:11}}>({srv?.hostname})</span>
                 </span>
               </div>
-              <Btn onClick={()=>setServerId('')} title='Disconnect from server'>✕ Disconnect</Btn>
-              <select value={serverId} onChange={e=>setServerId(e.target.value)}
-                style={{...selStyle,fontSize:11,padding:'2px 6px',flexShrink:0}}
-                title='Switch server'>
-                {servers.filter(s=>s.is_active).map(s=>(
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+              {lockedServerId ? (
+                <span title="This tab's File Manager stays on the same server as its connected Terminal. Disconnect the Terminal to browse a different server."
+                  style={{fontSize:11,color:C.muted,padding:'3px 6px',flexShrink:0,whiteSpace:'nowrap'}}>
+                  🔒 Locked to Terminal
+                </span>
+              ) : (
+                <>
+                  <Btn onClick={()=>setServerId('')} title='Disconnect from server'>✕ Disconnect</Btn>
+                  <select value={serverId} onChange={e=>setServerId(e.target.value)}
+                    style={{...selStyle,fontSize:11,padding:'2px 6px',flexShrink:0}}
+                    title='Switch server'>
+                    {servers.filter(s=>s.is_active).map(s=>(
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </>
+              )}
             </div>
           )
-        })() : (
+        })() : lockedServerId ? (
+          <span style={{fontSize:12,color:C.muted,padding:'4px 8px'}}>🔒 Loading Terminal's server…</span>
+        ) : (
           <select value='' onChange={e=>setServerId(e.target.value)} style={{...selStyle,width:220,flexShrink:0}}>
             <option value=''>— Select server —</option>
             {servers.filter(s=>s.is_active).map(s=>(

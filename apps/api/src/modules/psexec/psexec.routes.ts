@@ -249,6 +249,13 @@ export default async function psexecRoutes(fastify: FastifyInstance): Promise<vo
         stdio: ['pipe', 'pipe', 'pipe'],
       })
 
+      // Attempting to detect evil-winrm's real prompt before announcing
+      // "connected" (and killing the session on a timeout if it never
+      // appeared) caused more harm than good in practice — the exact prompt
+      // text/timing wasn't reliable enough to detect from this end, and it
+      // ended up tearing down sessions that had actually connected fine.
+      // Reverted to the simple, previously-working behavior: announce
+      // connected as soon as the local process spawns, for every method.
       send({ type: 'connected', target: query.target, username, method: query.method })
 
       await writeAuditLog({
@@ -257,8 +264,19 @@ export default async function psexecRoutes(fastify: FastifyInstance): Promise<vo
         details: { target: query.target, cred_id: query.cred_id, method: query.method }, request: req,
       })
 
-      proc.stdout.on('data', (d: Buffer) => send({ type: 'output', data: d.toString('utf8') }))
-      proc.stderr.on('data', (d: Buffer) => send({ type: 'output', data: d.toString('utf8') }))
+      // Ruby prints this cosmetic (harmless) warning on every evil-winrm start —
+      // it tells the user nothing useful, so strip it before forwarding output.
+      // This part is safe: it only ever removes a fixed, known-noise string
+      // and never affects whether/when the session is considered connected.
+      const RUBY_NOISE_RE = /^.*warning: redefining 'object_id' may cause serious problems.*$\n?/gm
+
+      const handleData = (d: Buffer) => {
+        let text = d.toString('utf8')
+        if (query.method === 'winrm') text = text.replace(RUBY_NOISE_RE, '')
+        if (text) send({ type: 'output', data: text })
+      }
+      proc.stdout.on('data', handleData)
+      proc.stderr.on('data', handleData)
 
       proc.on('close', (code) => {
         send({ type: 'disconnected', code })

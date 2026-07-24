@@ -171,7 +171,11 @@ export default function Login({ onLogin }: Props) {
               background: 'rgba(242,73,92,0.15)', border: '1px solid rgba(242,73,92,0.4)',
               color: '#f2495c', fontSize: 13,
             }}>
-              Authentication failed. Please try again.
+              {authError === 'no_account'
+                ? 'No account found for that sign-in. Ask an admin to create your account first, then try again.'
+                : authError === 'wrong_domain'
+                ? 'That account is not part of the allowed organization for this app.'
+                : 'Authentication failed. Please try again.'}
             </div>
           )}
 
